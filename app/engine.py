@@ -1,22 +1,69 @@
 """InsightFace-Wrapper: SCRFD-Detection + ArcFace-Embeddings (buffalo_l — dieselben Modelle wie Immich)."""
 import threading
+import logging
+import time
 
 import cv2
 import numpy as np
 
+log = logging.getLogger("faceid.engine")
+
 
 class FaceEngine:
-    def __init__(self, det_size: int = 640, providers=None):
+    def __init__(self, det_size: int = 640, providers=None, backend: str = "auto"):
         from insightface.app import FaceAnalysis
+        import onnxruntime as ort
+
+        available = ort.get_available_providers()
+        providers = providers or self.providers_for_backend(backend, available)
+        self.backend = backend
+        self.providers = providers
+        self.available_providers = available
 
         self.app = FaceAnalysis(
             name="buffalo_l",
-            providers=providers or ["CPUExecutionProvider"],
+            providers=providers,
             allowed_modules=["detection", "recognition"],
         )
+        started = time.perf_counter()
         self.app.prepare(ctx_id=0, det_size=(det_size, det_size))
+        self.startup_seconds = time.perf_counter() - started
+        log.info(
+            "recognition backend %s, providers=%s, available=%s, startup=%.2fs",
+            backend, providers, available, self.startup_seconds,
+        )
         # onnxruntime-Sessions sind nicht garantiert threadsafe bei parallelem run()
         self._lock = threading.Lock()
+
+    @staticmethod
+    def providers_for_backend(backend: str, available: list[str]):
+        backend = str(backend or "auto").lower()
+        choices = {
+            "cpu": ["CPUExecutionProvider"],
+            "cuda": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+            "openvino": ["OpenVINOExecutionProvider", "CPUExecutionProvider"],
+        }
+        if backend == "auto":
+            for name in ("CUDAExecutionProvider", "OpenVINOExecutionProvider"):
+                if name in available:
+                    return [name, "CPUExecutionProvider"]
+            return ["CPUExecutionProvider"]
+        requested = choices.get(backend)
+        if requested is None:
+            raise ValueError("backend must be auto, cpu, cuda or openvino")
+        if requested[0] not in available:
+            raise RuntimeError(
+                f"requested backend {backend} is unavailable; providers: {available}"
+            )
+        return requested
+
+    def health(self):
+        return {
+            "backend": self.backend,
+            "providers": self.providers,
+            "available_providers": self.available_providers,
+            "startup_seconds": round(self.startup_seconds, 3),
+        }
 
     def faces(self, bgr: np.ndarray):
         with self._lock:

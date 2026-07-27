@@ -13,6 +13,11 @@ from .gallery import Gallery
 from .mqtt_listener import EventProcessor
 from .webui import build_app
 from .backup_util import start_auto_backup
+from .audit import AuditStore
+from .scenarios import ScenarioManager
+from .reid import AppearanceReID
+from .integrations import IntegrationDispatcher
+from .ai_context import AIContextService
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -34,14 +39,51 @@ def main():
         except (json.JSONDecodeError, OSError):
             log.warning("settings.json unreadable — ignoring it")
     log.info("loading InsightFace (buffalo_l) …")
-    engine = FaceEngine(det_size=int(cfg["faceid"].get("det_size", 640)))
+    engine = FaceEngine(
+        det_size=int(cfg["faceid"].get("det_size", 640)),
+        backend=str(cfg["faceid"].get("backend", "auto")),
+    )
     gallery = Gallery(data_dir,
                       top_k=int(cfg["faceid"].get("match_top_k", 3)),
                       max_per_person=int(cfg["faceid"].get("max_faces_per_person", 40)))
     gallery.trimmed_keep = int(cfg["faceid"].get("trimmed_keep", 10))
     gallery.dedupe_threshold = float(cfg["faceid"].get("dedupe_threshold", 0.65))
     frigate = FrigateAPI(cfg["frigate"]["url"])
-    processor = EventProcessor(cfg, engine, gallery, frigate)
+    audit = AuditStore(
+        data_dir / "audit.db",
+        retention_days=int(cfg["faceid"].get("audit_retention_days", 90)),
+    )
+    f = cfg["faceid"]
+    camera_graph = f.get("camera_graph") or {}
+    scenario_manager = ScenarioManager(
+        audit,
+        window_seconds=float(f.get("scenario_window", 90)),
+        camera_graph=camera_graph,
+    )
+    reid = None
+    if bool(f.get("reid_enabled", True)):
+        reid = AppearanceReID(
+            ttl_seconds=float(f.get("reid_ttl", 180)),
+            threshold=float(f.get("reid_threshold", 0.90)),
+            camera_graph=camera_graph,
+        )
+    dispatcher = IntegrationDispatcher(
+        webhook_urls=f.get("webhook_urls") or [],
+        cooldown_seconds=float(f.get("automation_cooldown", 60)),
+    )
+    ai_context = AIContextService(
+        audit,
+        enabled=bool(f.get("ai_enabled", False)),
+        url=str(f.get("ai_url", "http://localhost:11434")),
+        vision_model=str(f.get("ai_vision_model", "gemma3:4b")),
+        embedding_model=str(f.get("ai_embedding_model", "embeddinggemma")),
+        timeout=float(f.get("ai_timeout", 45)),
+    )
+    processor = EventProcessor(
+        cfg, engine, gallery, frigate, audit=audit,
+        scenario_manager=scenario_manager, reid=reid,
+        dispatcher=dispatcher, ai_context=ai_context,
+    )
     processor.start()
     start_auto_backup(cfg["faceid"], data_dir)
     app = build_app(cfg, engine, gallery, processor, data_dir, BASE / "static")

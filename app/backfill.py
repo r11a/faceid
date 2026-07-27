@@ -22,7 +22,10 @@ def run_backfill(engine, gallery, frigate, frigate_url: str, days: int = 14,
                  min_px: int = 64, min_det: float = 0.65, dedupe: float = 0.82,
                  tag: bool = True, match_thr: float = 0.5, progress=None,
                  hires: bool = True, rescue: bool = False,
-                 rescue_min_px: int = 90, rescue_min_det: float = 0.85) -> dict:
+                 rescue_min_px: int = 90, rescue_min_det: float = 0.85,
+                 match_margin: float = 0.08, min_confirmations: int = 2,
+                 ignore_thr: float = 0.5, ignore_margin: float = 0.12,
+                 unknown_thr: float = 0.35) -> dict:
     """Person-Events der letzten `days` Tage verarbeiten. Threadsafe zur Live-Pipeline
     (Engine und Galerie sind intern gelockt). progress(i, total) wird pro Event gerufen.
 
@@ -80,11 +83,26 @@ def run_backfill(engine, gallery, frigate, frigate_url: str, days: int = 14,
             upgraded = True
             stats["rescued"] = stats.get("rescued", 0) + 1
         emb = face.normed_embedding
-        slug, name, score = gallery.match(emb)
-        if gallery.match_ignored(emb) >= max(match_thr, score):
+        candidates = gallery.match_candidates(emb, limit=2)
+        slug, name, score = candidates[0] if candidates else (None, None, 0.0)
+        _, runner_up, runner_up_score = (
+            candidates[1] if len(candidates) > 1 else (None, None, 0.0)
+        )
+        margin = score - runner_up_score
+        ignore_score = gallery.match_ignored(emb)
+        if (
+            min_confirmations <= 1
+            and ignore_score >= ignore_thr
+            and ignore_score - score >= ignore_margin
+        ):
             stats["ignored"] += 1
             continue
-        if slug and score >= match_thr:
+        if (
+            min_confirmations <= 1
+            and slug
+            and score >= match_thr
+            and margin >= match_margin
+        ):
             stats["known"] += 1  # schon eingelernte Person -> kein Review nötig
             if tag:
                 frigate.set_sub_label(ev["id"], name, score)  # Clip rückwirkend taggen
@@ -105,7 +123,10 @@ def run_backfill(engine, gallery, frigate, frigate_url: str, days: int = 14,
             crop, save_emb,
             {"camera": ev["camera"], "event_id": ev["id"], "backfill": True,
              "event_ts": ev.get("start_time"),  # wann es passierte, nicht wann wir es fanden
-             "guess": name, "guess_score": round(float(score), 3)},
+             "guess": name, "guess_score": round(float(score), 3),
+             "decision": "unknown" if score < unknown_thr else "ambiguous",
+             "runner_up": runner_up, "runner_up_score": round(float(runner_up_score), 3),
+             "margin": round(float(margin), 3)},
             dedupe_sim=dedupe, full_bgr=full,
         )
         stats["dupe" if uid is None else "faces"] += 1
@@ -136,8 +157,14 @@ def main():
 
     stats = run_backfill(engine, gallery, frigate, cfg["frigate"]["url"], days=args.days,
                          min_px=args.min_px, min_det=args.min_det, dedupe=args.dedupe,
-                         tag=not args.no_tag,
+                         tag=bool(cfg["faceid"].get("set_sub_label", False)) and not args.no_tag,
                          match_thr=float(cfg["faceid"].get("match_threshold", 0.5)),
+                         unknown_thr=float(cfg["faceid"].get("unknown_threshold", 0.35)),
+                         match_margin=float(cfg["faceid"].get("match_margin", 0.08)),
+                         min_confirmations=int(cfg["faceid"].get("min_confirmations", 2)),
+                         ignore_thr=float(cfg["faceid"].get(
+                             "ignore_threshold", cfg["faceid"].get("match_threshold", 0.5))),
+                         ignore_margin=float(cfg["faceid"].get("ignore_margin", 0.12)),
                          progress=progress, rescue=args.rescue,
                          rescue_min_det=args.rescue_min_det)
     print(f"Fertig: {stats['faces']} Gesichter in der Review-Queue, {stats['dupe']} Dubletten, "

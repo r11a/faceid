@@ -4,14 +4,48 @@ Matching per Cosine-Similarity (Embeddings sind L2-normiert -> Dot-Product).
 Kein Training, kein Overfitting: jedes Bild ist ein eigener Vergleichspunkt.
 """
 import json
+import os
 import re
 import shutil
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+
+def _atomic_write_bytes(path: Path, data: bytes):
+    """Write a file in-place atomically so a crash cannot leave a partial file."""
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _atomic_write_json(path: Path, payload, *, indent=None):
+    _atomic_write_bytes(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=indent).encode("utf-8"),
+    )
+
+
+def _atomic_save_npy(path: Path, value: np.ndarray):
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("wb") as fh:
+            np.save(fh, value)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def slugify(name: str) -> str:
@@ -65,10 +99,10 @@ class Gallery:
                     "sources": dict(meta.get("sources", {})),
                 }
                 if changed:
-                    meta_f.write_text(json.dumps(
+                    _atomic_write_json(meta_f,
                         {"name": meta.get("name", pdir.name), "files": files,
                          "favorite": bool(meta.get("favorite", False))},
-                        ensure_ascii=False, indent=1))
+                        indent=1)
             embs, ids, groups = [], [], []
             for jf in sorted(self.ignored_dir.glob("*.json")):
                 try:
@@ -147,7 +181,7 @@ class Gallery:
         for old in log[keep:]:
             (td / old["file"]).unlink(missing_ok=True)
         log = log[:keep]
-        log_f.write_text(json.dumps(log, ensure_ascii=False))
+        _atomic_write_json(log_f, log)
 
     def trimmed(self, slug: str):
         td = self.persons_dir / slug / "_trimmed"
@@ -206,7 +240,7 @@ class Gallery:
             entry["emb"] = np.vstack([entry["emb"], np.array(rec["embedding"], dtype=np.float32)[None, :]])
             entry["files"].append(fname)
             log = [e for e in log if e["file"] != fname]
-            log_f.write_text(json.dumps(log, ensure_ascii=False))
+            _atomic_write_json(log_f, log)
             self._persist(slug)
             return True
 
@@ -217,7 +251,7 @@ class Gallery:
         if log_f.exists():
             try:
                 log = [e for e in json.loads(log_f.read_text()) if e["file"] != fname]
-                log_f.write_text(json.dumps(log, ensure_ascii=False))
+                _atomic_write_json(log_f, log)
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -234,12 +268,13 @@ class Gallery:
     def _persist(self, slug: str):
         pdir = self.persons_dir / slug
         entry = self._cache[slug]
-        np.save(pdir / "embeddings.npy", entry["emb"])
-        (pdir / "meta.json").write_text(
-            json.dumps({"name": entry["name"], "files": entry["files"],
-                        "favorite": bool(entry.get("favorite", False)),
-                        "sources": entry.get("sources", {})},
-                       ensure_ascii=False, indent=1)
+        _atomic_save_npy(pdir / "embeddings.npy", entry["emb"])
+        _atomic_write_json(
+            pdir / "meta.json",
+            {"name": entry["name"], "files": entry["files"],
+             "favorite": bool(entry.get("favorite", False)),
+             "sources": entry.get("sources", {})},
+            indent=1,
         )
 
     # ---------- Personen ----------
@@ -457,9 +492,11 @@ class Gallery:
             emb = entry["emb"][idx]
             uid = f"u{int(time.time() * 1000)}"
             (self.persons_dir / slug / fname).rename(self.unknown_dir / f"{uid}.jpg")
-            (self.unknown_dir / f"{uid}.json").write_text(json.dumps(
-                {"camera": "", "event_id": "", "removed_from": entry["name"], "ts": time.time(),
-                 "embedding": [round(float(v), 6) for v in emb]}, ensure_ascii=False))
+            _atomic_write_json(
+                self.unknown_dir / f"{uid}.json",
+                {"camera": "", "event_id": "", "removed_from": entry["name"],
+                 "ts": time.time(), "embedding": [round(float(v), 6) for v in emb]},
+            )
             entry["files"].pop(idx)
             entry["emb"] = np.delete(entry["emb"], idx, axis=0)
             self._persist(slug)
@@ -471,9 +508,7 @@ class Gallery:
             if entry is None:
                 return
             pdir = self.persons_dir / slug
-            for f in pdir.iterdir():
-                f.unlink()
-            pdir.rmdir()
+            shutil.rmtree(pdir)
 
     # ---------- Matching ----------
 
@@ -481,17 +516,22 @@ class Gallery:
         """-> (slug, name, score) der besten Person oder (None, None, best_score).
         Score = Mittel der Top-k Ähnlichkeiten pro Person (statt Max) — eine Person
         mit vielen Referenzbildern gewinnt Grenzfälle nicht mehr per Einzel-Ausreißer."""
+        candidates = self.match_candidates(embedding, limit=1)
+        return candidates[0] if candidates else (None, None, 0.0)
+
+    def match_candidates(self, embedding: np.ndarray, limit: int = 2):
+        """Return the best people in score order so callers can enforce a margin."""
         with self._lock:
-            best = (None, None, 0.0)
+            candidates = []
             for slug, e in self._cache.items():
                 if len(e["files"]) == 0:
                     continue
                 sims = e["emb"] @ embedding
                 k = min(self.top_k, len(sims))
                 score = float(np.sort(sims)[-k:].mean())
-                if score > best[2]:
-                    best = (slug, e["name"], score)
-            return best
+                candidates.append((slug, e["name"], score))
+            candidates.sort(key=lambda item: item[2], reverse=True)
+            return candidates[:max(1, int(limit))]
 
     # ---------- Ignore-Liste (Negativ-Anker) ----------
 
@@ -502,7 +542,7 @@ class Gallery:
         except (json.JSONDecodeError, OSError):
             return
         m.update(updates)
-        jf.write_text(json.dumps(m, ensure_ascii=False))
+        _atomic_write_json(jf, m)
 
     def set_ignored_group(self, ids: list, group: str) -> int:
         """Anker in eine andere Gruppe verschieben / Gruppen zusammenlegen."""
@@ -536,10 +576,16 @@ class Gallery:
 
     def match_ignored(self, embedding: np.ndarray) -> float:
         """Höchste Ähnlichkeit zu einem ignorierten Gesicht (0.0 wenn Liste leer)."""
+        return self.match_ignored_detail(embedding)[0]
+
+    def match_ignored_detail(self, embedding: np.ndarray):
+        """Return score, anchor id and persistent group for the best ignore match."""
         with self._lock:
             if len(self._ign_ids) == 0:
-                return 0.0
-            return float(np.max(self._ign_emb @ embedding))
+                return 0.0, None, None
+            sims = self._ign_emb @ embedding
+            idx = int(np.argmax(sims))
+            return float(sims[idx]), self._ign_ids[idx], self._ign_groups[idx]
 
     def ignore_unknown(self, uid: str, group: str | None = None) -> bool:
         """Unknown in die Ignore-Liste verschieben: nie mehr melden/zuordnen/vorlegen."""
@@ -554,7 +600,7 @@ class Gallery:
             grp = group or f"g{iid}"
             payload = {k: v for k, v in meta.items() if k in ("camera", "ts", "embedding")}
             payload["group"] = grp
-            (self.ignored_dir / f"{iid}.json").write_text(json.dumps(payload, ensure_ascii=False))
+            _atomic_write_json(self.ignored_dir / f"{iid}.json", payload)
             jf.unlink()
             (self.unknown_dir / f"{uid}_full.jpg").unlink(missing_ok=True)
             self._ign_emb = np.vstack([self._ign_emb, np.array(meta["embedding"], dtype=np.float32)[None, :]])
@@ -576,16 +622,16 @@ class Gallery:
                 if not src.exists():
                     continue
                 src.rename(self.ignored_dir / f"{iid}.jpg")
-                (self.ignored_dir / f"{iid}.json").write_text(json.dumps(
-                    {"camera": "", "ts": time.time(), "from_person": entry["name"], "group": grp,
-                     "embedding": [round(float(v), 6) for v in emb]}, ensure_ascii=False))
+                _atomic_write_json(
+                    self.ignored_dir / f"{iid}.json",
+                    {"camera": "", "ts": time.time(), "from_person": entry["name"],
+                     "group": grp, "embedding": [round(float(v), 6) for v in emb]},
+                )
                 self._ign_emb = np.vstack([self._ign_emb, np.array(emb, dtype=np.float32)[None, :]])
                 self._ign_ids.append(iid)
                 self._ign_groups.append(grp)
                 n += 1
-            for f in (self.persons_dir / slug).iterdir():
-                f.unlink()
-            (self.persons_dir / slug).rmdir()
+            shutil.rmtree(self.persons_dir / slug)
             return n
 
     def add_ignore_anchor(self, crop_bgr: np.ndarray, embedding: np.ndarray, novelty_max: float = 0.8):
@@ -600,9 +646,11 @@ class Gallery:
             grp = self._ign_groups[int(np.argmax(sims))]  # lernt in die Gruppe des besten Ankers
             iid = f"i{int(time.time() * 1000)}_{len(self._ign_ids)}"
             cv2.imwrite(str(self.ignored_dir / f"{iid}.jpg"), crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
-            (self.ignored_dir / f"{iid}.json").write_text(json.dumps(
+            _atomic_write_json(
+                self.ignored_dir / f"{iid}.json",
                 {"camera": "", "ts": time.time(), "auto": True, "group": grp,
-                 "embedding": [round(float(v), 6) for v in embedding]}, ensure_ascii=False))
+                 "embedding": [round(float(v), 6) for v in embedding]},
+            )
             self._ign_emb = np.vstack([self._ign_emb, embedding.astype(np.float32)[None, :]])
             self._ign_ids.append(iid)
             self._ign_groups.append(grp)
@@ -645,7 +693,7 @@ class Gallery:
             uid = f"u{int(time.time() * 1000)}"
             img.rename(self.unknown_dir / f"{uid}.jpg")
             meta.update(ts=time.time(), event_id="", restored=True)
-            (self.unknown_dir / f"{uid}.json").write_text(json.dumps(meta, ensure_ascii=False))
+            _atomic_write_json(self.unknown_dir / f"{uid}.json", meta)
             jf.unlink()
             self._drop_ignored(iid)
             return True
@@ -684,7 +732,7 @@ class Gallery:
             if full_bgr is not None:
                 cv2.imwrite(str(self.unknown_dir / f"{uid}_full.jpg"), full_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
             meta = dict(meta, ts=now, embedding=[round(float(v), 6) for v in embedding])
-            (self.unknown_dir / f"{uid}.json").write_text(json.dumps(meta, ensure_ascii=False))
+            _atomic_write_json(self.unknown_dir / f"{uid}.json", meta)
             return uid
 
     def unknowns(self):
@@ -738,7 +786,7 @@ class Gallery:
                 continue
             _, name, score = self.match(np.array(m["embedding"], dtype=np.float32))
             m["guess"], m["guess_score"] = name, round(float(score), 3)
-            jf.write_text(json.dumps(m, ensure_ascii=False))
+            _atomic_write_json(jf, m)
 
     def discard_unknown(self, uid: str):
         (self.unknown_dir / f"{uid}.json").unlink(missing_ok=True)

@@ -44,6 +44,7 @@ fi
 
 CAMERAS=$(cfg '.cameras | join(", ")')
 DISCOVERY=$(cfg '.discovery_cameras | join(", ")')
+WEBHOOKS=$(jq -c '.webhook_urls // []' "${OPT}")
 
 cat > /opt/faceid/config.yaml << EOF
 frigate:
@@ -56,20 +57,41 @@ mqtt:
 faceid:
   port: 8600
   mqtt_prefix: $(cfg '.mqtt_prefix')
+  backend: $(cfg '.backend')
   match_threshold: $(cfg '.match_threshold')
   unknown_threshold: $(cfg '.unknown_threshold')
+  match_margin: $(cfg '.match_margin')
+  min_confirmations: $(cfg '.min_confirmations')
+  min_face_quality: $(cfg '.min_face_quality')
+  clip_analysis: $(cfg '.clip_analysis')
+  clip_max_frames: $(cfg '.clip_max_frames')
+  clip_max_samples: $(cfg '.clip_max_samples')
   cluster_eps: $(cfg '.cluster_eps')
   suggest_threshold: $(cfg '.suggest_threshold')
   max_faces_per_person: $(cfg '.max_faces_per_person')
   trimmed_keep: $(cfg '.trimmed_keep')
   dedupe_threshold: $(cfg '.dedupe_threshold')
+  ignore_margin: $(cfg '.ignore_margin')
   hires_enroll: $(cfg '.hires_enroll')
   frigate_topic_prefix: $(cfg '.frigate_topic_prefix')
   poll_interval: $(cfg '.poll_interval')
   backup_enabled: $(cfg '.backup_enabled')
   backup_hour: $(cfg '.backup_hour')
   backup_keep: $(cfg '.backup_keep')
+  audit_retention_days: $(cfg '.audit_retention_days')
   presence_window: $(cfg '.presence_window')
+  calibration_target_far: $(cfg '.calibration_target_far')
+  scenario_window: $(cfg '.scenario_window')
+  camera_graph: $(cfg '.camera_graph_json')
+  reid_enabled: $(cfg '.reid_enabled')
+  reid_ttl: $(cfg '.reid_ttl')
+  reid_threshold: $(cfg '.reid_threshold')
+  automation_cooldown: $(cfg '.automation_cooldown')
+  webhook_urls: ${WEBHOOKS}
+  ai_enabled: $(cfg '.ai_enabled')
+  ai_url: $(cfg '.ai_url')
+  ai_vision_model: $(cfg '.ai_vision_model')
+  ai_embedding_model: $(cfg '.ai_embedding_model')
   set_sub_label: $(cfg '.set_sub_label')
   min_face_px: 48
   det_size: 640

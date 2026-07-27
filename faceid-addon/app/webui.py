@@ -13,12 +13,13 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import logbuffer
 from .engine import FaceEngine, crop_face, find_face_padded
+from .gallery import _atomic_write_json
 from .backup_util import build_backup_gz, write_backup_file, prune_backups
+from .calibration import UNKNOWN_LABEL, build_calibration_report
 from pathlib import Path as _P
 
 log = logging.getLogger("faceid.web")
@@ -50,7 +51,18 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 return await call_next(request)
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="FaceID"'})
 
-    app.mount("/data", StaticFiles(directory=data_dir), name="data")
+    @app.get("/media/{kind}/{item_path:path}")
+    def media(kind: str, item_path: str):
+        """Serve only gallery JPEGs; never expose embeddings, settings or backups."""
+        if kind not in {"persons", "unknowns", "ignored"}:
+            raise HTTPException(404, "Unknown media collection")
+        base = (data_dir / kind).resolve()
+        target = (base / item_path).resolve()
+        if target.suffix.lower() not in {".jpg", ".jpeg"} or base not in target.parents:
+            raise HTTPException(404, "Unknown media")
+        if not target.is_file():
+            raise HTTPException(404, "Unknown media")
+        return FileResponse(target)
 
     @app.get("/")
     def index():
@@ -151,7 +163,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         for c in clusters:
             for u in c:
                 if u.pop("has_full", False):
-                    u["full_url"] = f"data/unknowns/{u['id']}_full.jpg"
+                    u["full_url"] = f"media/unknowns/{u['id']}_full.jpg"
                 elif u.get("event_id"):
                     # Backfill-Bestand: Vollbild live aus Frigate (solange Event-Retention reicht)
                     u["full_url"] = f"{frigate_url}/api/events/{u['event_id']}/snapshot.jpg"
@@ -174,7 +186,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             if gallery.assign_unknown(uid, slug):
                 n += 1
                 # Zuordnung ans Original-Event zurückspielen (Mensch bestätigt -> Score 1.0)
-                if meta.get("event_id"):
+                if processor.set_sub_label and meta.get("event_id"):
                     processor.frigate.set_sub_label(meta["event_id"], name, 1.0)
         gallery.refresh_guesses()
         return {"assigned": n, "slug": slug}
@@ -188,7 +200,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             slug, name, score = gallery.match(it["embedding"])
             if slug and score >= thr and gallery.assign_unknown(it["id"], slug):
                 assigned[name] = assigned.get(name, 0) + 1
-                if it.get("event_id"):
+                if processor.set_sub_label and it.get("event_id"):
                     processor.frigate.set_sub_label(it["event_id"], name, score)
         gallery.refresh_guesses()
         return {"assigned": assigned, "total": sum(assigned.values())}
@@ -263,8 +275,14 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             try:
                 stats = run_backfill(
                     engine, gallery, processor.frigate, cfg["frigate"]["url"], days=days,
-                    tag=bool(cfg["faceid"].get("set_sub_label", True)),
+                    tag=bool(cfg["faceid"].get("set_sub_label", False)),
                     match_thr=float(cfg["faceid"].get("match_threshold", 0.5)),
+                    unknown_thr=float(cfg["faceid"].get("unknown_threshold", 0.35)),
+                    match_margin=float(cfg["faceid"].get("match_margin", 0.08)),
+                    min_confirmations=int(cfg["faceid"].get("min_confirmations", 2)),
+                    ignore_thr=float(cfg["faceid"].get(
+                        "ignore_threshold", cfg["faceid"].get("match_threshold", 0.5))),
+                    ignore_margin=float(cfg["faceid"].get("ignore_margin", 0.12)),
                     progress=progress,
                     hires=bool(cfg["faceid"].get("hires_enroll", True)))
                 backfill_state["result"] = stats
@@ -285,23 +303,31 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     SETTINGS_SPEC = {
         "match_threshold": (0.2, 0.9),
         "unknown_threshold": (0.1, 0.8),
+        "match_margin": (0.0, 0.5),
         "suggest_threshold": (0.1, 0.9),
         "cluster_eps": (0.3, 0.8),
         "ignore_threshold": (0.1, 0.9),
+        "ignore_margin": (0.0, 0.5),
         "dedupe_threshold": (0.50, 0.95),
     }
     BACKUP_SPEC = {"hires_enroll": bool, "backup_enabled": bool, "backup_hour": (0, 23), "backup_keep": (1, 90), "backup_dir": str}
     INT_SPEC = {"max_faces_per_person": (5, 100), "trimmed_keep": (0, 100),
-                "match_top_k": (1, 10)}
+                "match_top_k": (1, 10), "min_confirmations": (1, 6)}
     settings_file = data_dir / "settings.json"
 
     def _apply_settings(updates: dict):
         f = cfg["faceid"]
         f.update(updates)
         # in processor/gallery gecachte Werte live nachziehen
-        if "match_threshold" in updates: processor.match_thr = float(updates["match_threshold"])
-        if "unknown_threshold" in updates: processor.unknown_thr = float(updates["unknown_threshold"])
-        if "ignore_threshold" in updates: processor.ignore_thr = float(updates["ignore_threshold"])
+        policy_updates = {}
+        if "match_threshold" in updates: policy_updates["match_thr"] = float(updates["match_threshold"])
+        if "unknown_threshold" in updates: policy_updates["unknown_thr"] = float(updates["unknown_threshold"])
+        if "match_margin" in updates: policy_updates["match_margin"] = float(updates["match_margin"])
+        if "ignore_threshold" in updates: policy_updates["ignore_thr"] = float(updates["ignore_threshold"])
+        if "ignore_margin" in updates: policy_updates["ignore_margin"] = float(updates["ignore_margin"])
+        if "min_confirmations" in updates: policy_updates["min_confirmations"] = int(updates["min_confirmations"])
+        if policy_updates:
+            processor.update_decision_policy(**policy_updates)
         trimmed = 0
         if "max_faces_per_person" in updates:
             gallery.max_per_person = int(updates["max_faces_per_person"])
@@ -321,7 +347,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             try: overlay = json.loads(settings_file.read_text())
             except (json.JSONDecodeError, OSError): overlay = {}
         overlay.update({k: v for k, v in updates.items() if k in keys})
-        settings_file.write_text(json.dumps(overlay, ensure_ascii=False, indent=1))
+        _atomic_write_json(settings_file, overlay, indent=1)
         return trimmed
 
     @app.get("/api/settings")
@@ -329,7 +355,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         f = cfg["faceid"]
         return {
             "thresholds": {k: float(f.get(k, {"match_threshold":0.5,"unknown_threshold":0.35,
-                "suggest_threshold":0.40,"cluster_eps":0.55,"ignore_threshold":0.5,"dedupe_threshold":0.65}[k]))
+                "match_margin":0.08,"suggest_threshold":0.40,"cluster_eps":0.55,
+                "ignore_threshold":0.5,"ignore_margin":0.12,"dedupe_threshold":0.65}[k]))
                 for k in SETTINGS_SPEC},
             "ranges": {k: v for k, v in SETTINGS_SPEC.items()},
             "backup": {"enabled": bool(f.get("backup_enabled", False)),
@@ -339,6 +366,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             "max_faces_per_person": int(f.get("max_faces_per_person", 40)),
             "trimmed_keep": int(f.get("trimmed_keep", 10)),
             "match_top_k": int(f.get("match_top_k", 3)),
+            "min_confirmations": int(f.get("min_confirmations", 2)),
             "hires_enroll": bool(f.get("hires_enroll", True)),
         }
 
@@ -361,6 +389,12 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             if k in body:
                 try: updates[k] = min(max(int(body[k]), lo), hi)
                 except (TypeError, ValueError): raise HTTPException(400, f"{k} not an int")
+        effective_match = float(updates.get("match_threshold", cfg["faceid"].get("match_threshold", 0.5)))
+        effective_unknown = float(updates.get("unknown_threshold", cfg["faceid"].get("unknown_threshold", 0.35)))
+        if effective_unknown >= effective_match:
+            raise HTTPException(400, "unknown_threshold must be lower than match_threshold")
+        if int(updates.get("min_confirmations", processor.min_confirmations)) > processor.max_attempts:
+            raise HTTPException(400, "min_confirmations cannot exceed max_attempts")
         trimmed = _apply_settings(updates)
         return {"ok": True, "applied": updates, "trimmed": trimmed}
 
@@ -430,14 +464,81 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             return {"lines": [], "note": "Log-Puffer nicht aktiv"}
         return {"lines": buf.tail(max(1, min(limit, 500)), level)}
 
+    @app.get("/api/audit")
+    def audit(limit: int = 100, status: str | None = None):
+        if processor.audit is None:
+            return {"events": []}
+        return {"events": processor.audit.recent(limit=limit, status=status)}
+
+    @app.get("/api/activity")
+    def activity(limit: int = 100, status: str | None = None):
+        if processor.audit is None:
+            return {"events": [], "scenarios": []}
+        return {
+            "events": processor.audit.recent(limit=limit, status=status),
+            "scenarios": processor.audit.recent_scenarios(limit=limit),
+        }
+
+    @app.get("/api/search")
+    def search(q: str = "", limit: int = 50):
+        if processor.audit is None:
+            return {"events": []}
+        service = getattr(processor, "ai_context", None)
+        if service is None:
+            rows = processor.audit.context_events(limit=limit)
+            for row in rows:
+                row.pop("_embedding", None)
+            return {"events": rows}
+        return {"events": service.search(q, limit=max(1, min(limit, 200)))}
+
+    @app.get("/api/audit/{event_id}")
+    def audit_detail(event_id: str):
+        if processor.audit is None:
+            raise HTTPException(404, "Audit is not available")
+        detail = processor.audit.event_detail(event_id)
+        if detail is None:
+            raise HTTPException(404, "Unknown event")
+        return detail
+
+    class GroundTruthBody(BaseModel):
+        label: str
+
+    @app.post("/api/audit/{event_id}/ground-truth")
+    def ground_truth(event_id: str, body: GroundTruthBody):
+        labels = {person["name"] for person in gallery.persons().values()}
+        if body.label != UNKNOWN_LABEL and body.label not in labels:
+            raise HTTPException(400, "Ground truth must be a known person or __unknown__")
+        if processor.audit is None or not processor.audit.set_ground_truth(event_id, body.label):
+            raise HTTPException(404, "Unknown event")
+        return {"ok": True, "event_id": event_id, "label": body.label}
+
+    @app.get("/api/calibration")
+    def calibration():
+        if processor.audit is None:
+            return {"ready": False, "sample_warning": "Audit is not available"}
+        return build_calibration_report(
+            processor.audit.labeled_events(),
+            current_threshold=processor.match_thr,
+            current_margin=processor.match_margin,
+            confirmations=processor.min_confirmations,
+            target_far=float(cfg["faceid"].get("calibration_target_far", 0.01)),
+        )
+
     @app.get("/api/health")
     def health():
         # "queue" ist die Review-Queue — das ist es, was der Header zeigt. Die interne
         # Verarbeitungs-Warteschlange steht separat unter "processing".
+        jobs = processor.audit.pending_jobs() if processor.audit else []
         return {"status": "ok", "persons": len(gallery.persons()),
                 "queue": len(list((data_dir / "unknowns").glob("*.json"))),
                 "processing": processor.queue.qsize(),
                 "open_events": len(processor.events),
+                "pending_jobs": len(jobs),
+                "engine": engine.health() if hasattr(engine, "health") else {},
+                "ai": (processor.ai_context.health()
+                       if getattr(processor, "ai_context", None) else {"enabled": False}),
+                "integrations": (processor.dispatcher.health()
+                                 if getattr(processor, "dispatcher", None) else {}),
                 "suggest_threshold": float(cfg["faceid"].get("suggest_threshold", 0.40))}
 
     return app
