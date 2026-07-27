@@ -129,8 +129,22 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 .step-num{flex:0 0 28px;height:28px;display:grid;place-items:center;border-radius:9px;background:var(--acc);color:#132018;font-weight:800}
 .friendly-empty{padding:28px;border:1px dashed var(--line);border-radius:16px;color:var(--dim);text-align:center}
 .status-recognized{color:var(--good)}.status-review{color:var(--warn)}.status-no-face{color:var(--dim)}.status-processing{color:var(--accent2)}
+.filters{display:grid;grid-template-columns:2fr repeat(4,minmax(130px,1fr)) auto;gap:9px;
+  background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:13px;margin:14px 0}
+.event-dialog{border:1px solid var(--line);border-radius:22px;background:#17191b;color:var(--fg);
+  width:min(1050px,95vw);max-height:92vh;padding:0;box-shadow:0 30px 90px #000c}
+.event-dialog::backdrop{background:#090a0bd9;backdrop-filter:blur(7px)}
+.event-dialog-content{padding:20px}.event-media{display:grid;grid-template-columns:1.2fr 1fr;gap:14px}
+.event-media img,.event-media video{width:100%;max-height:420px;object-fit:contain;background:#0c0d0e;border-radius:14px}
+.reference-strip{display:flex;gap:8px;margin:10px 0}.reference-strip img{width:84px;height:84px;object-fit:cover;border-radius:12px}
+.verify-actions{display:flex;gap:9px;flex-wrap:wrap;padding-top:14px;border-top:1px solid var(--line)}
+.bar-list{display:grid;gap:9px}.bar-row{display:grid;grid-template-columns:120px 1fr 50px;gap:10px;align-items:center}
+.bar-track{height:10px;border-radius:9px;background:var(--panel2);overflow:hidden}.bar-fill{height:100%;background:var(--acc)}
+.health-card{border:1px solid var(--line);border-radius:15px;padding:15px;background:var(--panel)}
+.health-card.warning{border-color:var(--warn)}
 @media(max-width:850px){.hero{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}nav{top:64px}}
-@media(max-width:520px){.summary-grid{grid-template-columns:1fr 1fr}.people-dashboard{grid-template-columns:1fr}.hero-main,.guide-card{padding:18px}.welcome-card{align-items:flex-start;flex-direction:column}}
+@media(max-width:850px){.filters{grid-template-columns:1fr 1fr}.event-media{grid-template-columns:1fr}}
+@media(max-width:520px){.summary-grid{grid-template-columns:1fr 1fr}.people-dashboard{grid-template-columns:1fr}.hero-main,.guide-card{padding:18px}.welcome-card{align-items:flex-start;flex-direction:column}.filters{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -143,6 +157,9 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
   <button data-t="unknowns" title="פנים שממתינות לזיהוי">? לבדיקה</button>
   <button data-t="persons" title="אנשים מוכרים ותמונות הייחוס שלהם">☺ אנשים</button>
   <button data-t="activity" title="מי נראה, איפה ומתי">◷ פעילות</button>
+  <button data-t="health-center" title="בדיקת מצלמות וחיבורים">♡ בריאות</button>
+  <button data-t="automations" title="בניית אוטומציות ל־Home Assistant">⌁ אוטומציות</button>
+  <button data-t="privacy" title="שמירת מידע ופרטיות">◈ פרטיות</button>
   <button data-t="calibration" title="בדיקת דיוק והמלצות בטוחות">◎ דיוק</button>
   <button data-t="ignored" title="אנשים שהמערכת מתעלמת מהם">⊘ התעלמות</button>
   <button data-t="settings" title="הגדרות וגיבויים">⚙ הגדרות</button>
@@ -151,6 +168,7 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 <main id="main"></main>
 <div id="toast"></div>
 <div id="lightbox" onclick="this.style.display='none'"><img id="lbimg" src=""><span class="cap" id="lbcap"></span></div>
+<dialog id="eventDialog" class="event-dialog"><div class="event-dialog-content" id="eventDialogContent"></div></dialog>
 
 <script>
 const $=s=>document.querySelector(s), main=$('#main');
@@ -192,6 +210,9 @@ async function render(){
   if(tab==='persons')return renderPersons();
   if(tab==='ignored')return renderIgnored();
   if(tab==='activity')return renderActivity();
+  if(tab==='health-center')return renderHealthCenter();
+  if(tab==='automations')return renderAutomations();
+  if(tab==='privacy')return renderPrivacy();
   if(tab==='calibration')return renderCalibration();
   if(tab==='settings')return renderSettings();
   if(tab==='log')return renderLog();
@@ -269,9 +290,25 @@ async function renderDashboard(){
     <section class="recent-list">${recent||'<div class="friendly-empty">עדיין אין זיהויים מאומתים חדשים.</div>'}</section>
   </div>`;
 }
-function showPersonActivity(name){
-  setTab('activity');
-  setTimeout(()=>{const q=$('#activitySearch');if(q){q.value=name;searchActivity()}},120);
+async function showPersonActivity(name){
+  const slug=Object.entries(persons).find(([,p])=>p.name===name)?.[0];
+  if(!slug)return;
+  const data=await j(`api/persons/${encodeURIComponent(slug)}/profile`);
+  const s=data.statistics||{},maxHour=Math.max(1,...data.hourly.map(x=>x.count));
+  main.innerHTML=`<div class="dashboard" dir="rtl">
+    <button class="ghost" onclick="setTab('dashboard')">→ חזרה</button>
+    <div class="section-head"><div><h2>${esc(name)}</h2><p>פרופיל פעילות ודיוק אישי</p></div></div>
+    <div class="summary-grid">
+      <div class="summary-card"><span class="label">כל הזיהויים</span><span class="value">${s.appearances||0}</span></div>
+      <div class="summary-card"><span class="label">ציון ממוצע</span><span class="value">${confidence(s.avg_score)}</span></div>
+      <div class="summary-card"><span class="label">נראה לאחרונה</span><span class="value" style="font-size:18px">${relativeTime(s.last_seen)}</span><small>${esc(s.last_camera||'—')}</small></div>
+      <div class="summary-card"><span class="label">דיוק שאומת</span><span class="value">${data.verified.accuracy===null?'—':confidence(data.verified.accuracy)}</span><small>${data.verified.total} בדיקות</small></div>
+    </div>
+    <h2>באילו שעות מופיע בדרך כלל</h2><div class="bar-list">${data.hourly.map(x=>`<div class="bar-row"><span>${String(x.hour).padStart(2,'0')}:00</span><div class="bar-track"><div class="bar-fill" style="width:${x.count/maxHour*100}%"></div></div><b>${x.count}</b></div>`).join('')||'<p class="stat">אין מספיק אירועים.</p>'}</div>
+    <h2>מצלמות נפוצות</h2><div class="row">${(s.cameras||[]).map(x=>`<span class="pill">${esc(x.camera)} · ${x.count}</span>`).join('')}</div>
+    <h2>איכות גלריה</h2><div class="health-card"><b>${data.gallery.photos} תמונות ייחוס</b><p class="stat">${esc(data.gallery.recommendation)}</p></div>
+    <h2>אירועים אחרונים</h2><div class="recent-list">${data.events.slice(0,20).map(e=>`<div class="recent-item" onclick="openEvent('${e.event_id}')"><img class="event-thumb" src="api/activity/${encodeURIComponent(e.event_id)}/image"><div><b>${fmtTs(e.start_ts)}</b><div class="stat">${esc(e.camera)}</div></div><span>${confidence(e.score)}</span></div>`).join('')}</div>
+  </div>`;
 }
 
 function backfillRow(bf){
@@ -575,7 +612,7 @@ async function renderActivity(){
     <td class="event-photo"><img class="event-thumb" src="api/activity/${encodeURIComponent(event.event_id)}/image"
       loading="lazy" alt="תמונת האירוע" title="לחיצה להגדלה"
       data-caption="${esc(event.camera)} · ${fmtTs(event.start_ts||event.updated_ts)}"
-      onclick="showFull(this.src,this.dataset.caption)"
+      onclick="openEvent('${event.event_id}')"
       onerror="this.parentElement.innerHTML='<span class=&quot;photo-missing&quot;>התמונה כבר לא זמינה ב־Frigate</span>'"></td>
     <td>${fmtTs(event.start_ts||event.updated_ts)}</td>
     <td>${esc(event.camera)}</td>
@@ -590,12 +627,16 @@ async function renderActivity(){
   </tr>`).join('');
   const scenarios=data.scenarios.filter(s=>(s.event_count||0)>1||s.person).map(s=>`<tr><td>${fmtTs(s.start_ts)}</td><td>${esc(s.person||'עדיין לא זוהה')}</td>
     <td>${decisionInfo(s.status)[0]}</td><td>${esc(s.cameras)}</td><td>${s.event_count}</td></tr>`).join('');
-  main.innerHTML=`<div class="dashboard" dir="rtl"><div class="row">
+  main.innerHTML=`<div class="dashboard" dir="rtl"><div class="filters">
       <input id="activitySearch" placeholder="חיפוש אדם, מצלמה או תיאור…" size="36" onkeydown="if(event.key==='Enter')searchActivity()">
+      <select id="activityPerson"><option value="">כל האנשים</option>${names.map(name=>`<option>${esc(name)}</option>`).join('')}</select>
+      <select id="activityStatus"><option value="">כל ההחלטות</option><option value="recognized">זוהה</option><option value="ambiguous">דרוש אישור</option><option value="unknown">לא מוכר</option><option value="no_face">ללא פנים</option></select>
+      <input id="activityFrom" type="datetime-local" title="מתאריך ושעה">
+      <input id="activityTo" type="datetime-local" title="עד תאריך ושעה">
       <button class="act" onclick="searchActivity()">חיפוש</button>
-      <span class="stat">${healthData.ai.enabled?'חיפוש AI חכם פעיל':'חיפוש טקסט רגיל פעיל'}</span>
     </div>
-    <h2>אירועי זיהוי</h2><p class="stat">בדקו את התמונה ורק אז בחרו מי באמת הופיע. לחיצה על התמונה מגדילה אותה.</p>
+    <p class="stat">${healthData.ai.enabled?'חיפוש AI סמנטי פעיל; זהות תמיד נקבעת רק בידי מנוע הפנים והאימות שלך.':'חיפוש לפי טקסט, אדם, החלטה ותאריך.'}</p>
+    <h2>אירועי זיהוי · ${data.total||data.events.length}</h2><p class="stat">לחצו על תמונה לצפייה גדולה, קליפ, דוגמאות ייחוס ואימות מהיר.</p>
     <div style="overflow:auto"><table><thead><tr><th>תמונה</th><th>זמן</th><th>מצלמה</th><th>החלטה</th>
       <th>אדם</th><th>ביטחון</th><th>קבוצה</th><th>הקשר AI</th><th>אימות שלך</th></tr></thead>
       <tbody id="activityRows">${rows||'<tr><td colspan="9">עדיין אין אירועים.</td></tr>'}</tbody></table></div>
@@ -607,20 +648,81 @@ async function labelEvent(eventId,label){
   await j(`api/audit/${eventId}/ground-truth`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({label})});
   toast('האימות נשמר וישמש לשיפור הדיוק');
-  renderActivity();
+  if($('#eventDialog')?.open)$('#eventDialog').close();
+  if(tab==='activity')renderActivity();
 }
 async function searchActivity(){
-  const q=$('#activitySearch').value.trim();
-  const data=await j('api/search?q='+encodeURIComponent(q));
+  const params=new URLSearchParams({limit:'500'});
+  const q=$('#activitySearch').value.trim(),person=$('#activityPerson')?.value,status=$('#activityStatus')?.value;
+  if(q)params.set('q',q);if(person)params.set('person',person);if(status)params.set('status',status);
+  if($('#activityFrom')?.value)params.set('date_from',String(new Date($('#activityFrom').value).getTime()/1000));
+  if($('#activityTo')?.value)params.set('date_to',String(new Date($('#activityTo').value).getTime()/1000));
+  const data=await j('api/activity?'+params);
   const rows=data.events.map(event=>`<tr>
     <td class="event-photo"><img class="event-thumb" src="api/activity/${encodeURIComponent(event.event_id)}/image"
       loading="lazy" alt="תמונת האירוע" data-caption="${esc(event.camera)} · ${fmtTs(event.start_ts)}"
-      onclick="showFull(this.src,this.dataset.caption)"
+      onclick="openEvent('${event.event_id}')"
       onerror="this.parentElement.innerHTML='<span class=&quot;photo-missing&quot;>התמונה אינה זמינה</span>'"></td>
     <td>${fmtTs(event.start_ts)}</td><td>${esc(event.camera)}</td>
     <td class="${decisionInfo(event.status)[1]}">${decisionInfo(event.status)[0]}</td><td>${esc(event.person||event.probable_person||'—')}</td>
     <td>${metric(event.score)}</td><td>${esc(event.scenario_id||'—')}</td><td>${esc(event.ai_description||'—')}</td><td>—</td></tr>`).join('');
   $('#activityRows').innerHTML=rows||'<tr><td colspan="9">לא נמצאו אירועים מתאימים.</td></tr>';
+}
+async function openEvent(eventId){
+  const [detail,refs]=await Promise.all([j(`api/audit/${eventId}`),j(`api/activity/${eventId}/references`)]);
+  const e=detail.event,predicted=e.person||e.probable_person;
+  const names=Object.values(persons).map(p=>p.name).sort();
+  const dialog=$('#eventDialog');
+  $('#eventDialogContent').innerHTML=`<div dir="rtl">
+    <div class="section-head"><div><h2>בדיקת אירוע</h2><p>${fmtTs(e.start_ts||e.updated_ts)} · ${esc(e.camera)}</p></div><button class="ghost" onclick="$('#eventDialog').close()">✕ סגור</button></div>
+    <div class="event-media"><img src="api/activity/${encodeURIComponent(eventId)}/image" alt="פנים מהאירוע">
+      <div><video controls preload="metadata" src="api/activity/${encodeURIComponent(eventId)}/clip" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"></video><p class="stat" style="display:none">אין קליפ זמין. Frigate כנראה לא שמר הקלטה לתאריך הזה; אפשר עדיין לאמת לפי התמונה.</p></div></div>
+    <div class="row"><span class="badge">${decisionInfo(e.status)[0]}</span><b>${predicted?`הצעת המערכת: ${esc(predicted)}`:'לא הוצעה זהות'}</b><span>${confidence(e.score)}</span></div>
+    <p class="stat">${decisionInfo(e.status)[2]} · ההפרש מהמועמד הבא הוא ${confidence(e.margin)}.</p>
+    ${refs.references.length?`<h2>תמונות ייחוס להשוואה</h2><div class="reference-strip">${refs.references.map(r=>`<img src="${r.url}" title="${esc(r.caption)}">`).join('')}</div>`:''}
+    <div class="verify-actions">
+      ${predicted?`<button class="act" onclick="labelEvent('${eventId}',${JSON.stringify(predicted).replace(/"/g,'&quot;')})">✓ נכון, זה ${esc(predicted)}</button>`:''}
+      <button class="ghost" onclick="labelEvent('${eventId}','__unknown__')">זה אדם לא מוכר</button>
+      <select id="eventOther"><option value="">זה אדם אחר…</option>${names.map(n=>`<option>${esc(n)}</option>`).join('')}</select>
+      <button class="ghost" onclick="const v=$('#eventOther').value;if(v)labelEvent('${eventId}',v)">שמור אדם אחר</button>
+      <button class="ghost" onclick="undoEvent('${eventId}')">↶ בטל אימות אחרון</button>
+    </div></div>`;
+  dialog.showModal();
+}
+async function undoEvent(eventId){
+  await j(`api/audit/${eventId}/undo`,{method:'POST'});
+  toast('האימות האחרון בוטל');$('#eventDialog').close();if(tab==='activity')renderActivity();
+}
+async function renderHealthCenter(){
+  const data=await j('api/system-report');if(tab!=='health-center')return;
+  const f=data.frigate;
+  main.innerHTML=`<div class="dashboard" dir="rtl"><div class="section-head"><div><h2>בריאות המערכת</h2><p>הסבר פשוט למה כדאי לטפל — בלי לקרוא לוגים.</p></div></div>
+    <div class="health-card ${f.secure_mode&&f.authenticated?'':'warning'}"><h3>חיבור ל־Frigate</h3>
+      <p>${f.reachable?'מחובר':'לא ניתן להתחבר'} · ${f.secure_mode?'חיבור מאובטח':'פורט 5000 לא מאומת'} · ${f.authenticated?'משתמש מאומת':'ללא פרטי כניסה'} · ${f.tls_verified?'TLS נבדק':'בדיקת תעודה כבויה'}</p>
+      <small>${esc(f.url)}</small>${!f.secure_mode?'<p class="stat">מומלץ לעבור ל־https://FRIGATE:8971 ולהגדיר משתמש viewer. פורט 5000 מיועד לרשת פנימית מוגבלת בלבד.</p>':''}</div>
+    <h2>מצלמות · 7 ימים</h2><div class="people-dashboard">${data.cameras.map(c=>`<div class="health-card ${c.level}"><h3>${esc(c.camera)}</h3><p>${c.events} אירועים · ${c.recognized} זיהויים</p><p class="stat">ללא פנים ${confidence(c.no_face_rate)} · דורש בדיקה ${confidence(c.review_rate)} · ציון ממוצע ${confidence(c.avg_score)}</p>${c.level==='warning'?'<p style="color:var(--warn)">כדאי לבדוק תאורה, גובה מצלמה ורזולוציית detect.</p>':'<p style="color:var(--good)">המצלמה נראית תקינה.</p>'}</div>`).join('')||'<div class="friendly-empty">אין עדיין מספיק אירועים לבדיקה.</div>'}</div></div>`;
+}
+async function renderAutomations(){
+  if(tab!=='automations')return;
+  main.innerHTML=`<div class="dashboard" dir="rtl"><div class="section-head"><div><h2>בונה אוטומציות</h2><p>בחרו תנאי וקבלו YAML מוכן ל־Home Assistant.</p></div></div>
+    <div class="health-card"><div class="filters"><select id="autoDecision"><option value="recognized">אדם מוכר זוהה</option><option value="unknown">אדם לא מוכר</option><option value="ambiguous">נדרש אימות</option></select><select id="autoPerson"><option value="">כל אדם</option>${Object.values(persons).map(p=>`<option>${esc(p.name)}</option>`).join('')}</select><input id="autoCamera" placeholder="מצלמה (רשות)"><button class="act" onclick="buildAutomation()">צור YAML</button></div><textarea id="autoYaml" style="width:100%;min-height:320px;background:var(--bg);color:var(--fg);border:1px solid var(--line);padding:14px" readonly></textarea></div>
+    <h2>התראות עם אימות</h2><p>FaceID מאזין לנושא <code>faceid/v1/review/set</code>. פעולה בהתראה יכולה לפרסם event_id ו־label, והאימות נשמר עם יומן שינויים.</p></div>`;
+  buildAutomation();
+}
+function buildAutomation(){
+  const d=$('#autoDecision')?.value||'recognized',p=$('#autoPerson')?.value||'',c=$('#autoCamera')?.value||'';
+  $('#autoYaml').value=`alias: "FaceID - ${d}"\ntriggers:\n  - trigger: mqtt\n    topic: faceid/v1/events\nconditions:\n  - condition: template\n    value_template: >-\n      {{ trigger.payload_json.decision == '${d}'${p?` and trigger.payload_json.person == '${p}'`:''}${c?` and trigger.payload_json.camera == '${c}'`:''} }}\nactions:\n  - action: notify.notify\n    data:\n      title: "FaceID"\n      message: "{{ trigger.payload_json.person | default('אדם לא מוכר', true) }} נראה/תה ב-{{ trigger.payload_json.camera }}"\nmode: queued`;
+}
+async function renderPrivacy(){
+  const p=await j('api/privacy');if(tab!=='privacy')return;
+  main.innerHTML=`<div class="dashboard" dir="rtl"><div class="section-head"><div><h2>פרטיות ושמירת מידע</h2><p>אתם שולטים כמה זמן נשמרות תמונות; נתוני סטטיסטיקה נשמרים בנפרד.</p></div></div>
+    <div class="summary-grid"><div class="summary-card"><span class="label">אירועים במסד</span><span class="value">${p.audit_events}</span></div><div class="summary-card"><span class="label">תמונות ראיה</span><span class="value">${p.evidence_images}</span><small>${(p.evidence_bytes/1048576).toFixed(1)} MB</small></div></div>
+    <div class="health-card"><h3>מדיניות שמירה</h3><div class="row"><label>זיהויים מוכרים <input id="knownDays" type="number" min="1" value="${p.known_evidence_days}"> ימים</label><label>לא מוכרים/בספק <input id="unknownDays" type="number" min="1" value="${p.unknown_evidence_days}"> ימים</label><button class="act" onclick="prunePrivacy()">נקה תמונות ישנות עכשיו</button></div><p class="stat">מחיקת תמונה אינה מוחקת את הזמן, המצלמה והציון מהסטטיסטיקה. מחיקה מלאה של אדם זמינה בבקשת המחיקה שלו עם purge_history.</p></div>
+    <div class="health-card" style="margin-top:14px"><h3>גבול ה־AI</h3><p>${esc(p.identity_policy)}</p><p class="stat">ה־AI רשאי לתאר הקשר, לסכם ולחפש. הוא לעולם אינו קובע זהות, גיל, מגדר או רגש.</p></div></div>`;
+}
+async function prunePrivacy(){
+  const r=await j('api/privacy/prune',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({known_days:+$('#knownDays').value,unknown_days:+$('#unknownDays').value})});
+  toast(`${r.removed_images} תמונות ישנות נמחקו`);renderPrivacy();
 }
 async function renderCalibration(){
   const report=await j('api/calibration');

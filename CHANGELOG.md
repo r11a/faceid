@@ -3,6 +3,27 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 2.0.0 — 2026-07-27
+
+- **Investigation center:** filter all recognition events by text, person, decision,
+  date and time. Open an event to see its face image, explanation, gallery references
+  and an inline Frigate clip when the recording still exists.
+- **Fast, accountable review:** large correct/other/unknown actions, undo, reviewer
+  attribution and append-only review history. HA actions can submit reviews over MQTT.
+- **Person profiles:** last location/time, totals, confidence, camera/hour charts,
+  verified accuracy, weak events and gallery coaching.
+- **System Doctor:** simple seven-day camera quality cards plus Frigate connection
+  diagnostics and setup advice.
+- **Safer Frigate connection:** authenticated port 8971, TLS verification and automatic
+  session renewal are supported and recommended. Port 5000 is compatibility-only.
+  Media is proxied so browser clients never receive Frigate credentials.
+- **Home Assistant tools:** central MQTT event entity, automation wizard and an
+  actionable-notification blueprint with snapshot and review buttons.
+- **Calibration, AI and privacy:** day/night cohorts, factual daily summaries, a hard
+  rule that AI never decides identity, separate evidence retention, immediate pruning
+  and full person-history deletion support.
+- **Granite UI:** responsive Hebrew event viewer, profiles, health and privacy screens.
+
 ## 1.0.2 — 2026-07-27
 
 - **Visual activity verification:** every Activity event now shows its captured face,

@@ -1,5 +1,6 @@
 """Event-level calibration: no frame leakage, explicit FAR/FRR trade-offs."""
 from collections import defaultdict
+from datetime import datetime
 
 
 UNKNOWN_LABEL = "__unknown__"
@@ -35,12 +36,21 @@ def _metrics(rows, threshold: float, margin: float, confirmations: int):
         "events": 0, "correct": 0, "false_reject": 0,
         "false_identification": 0,
     })
+    per_period = defaultdict(lambda: {
+        "events": 0, "correct": 0, "false_accept": 0,
+        "false_identification": 0,
+    })
     for row in rows:
         event = row["event"]
         truth = event["ground_truth"]
         predicted = _predict(row["observations"], threshold, margin, confirmations)
         camera = event["camera"]
+        hour = datetime.fromtimestamp(
+            float(event.get("start_ts") or event.get("updated_ts") or 0)
+        ).hour
+        period = "day" if 6 <= hour < 19 else "night"
         per_camera[camera]["events"] += 1
+        per_period[period]["events"] += 1
         if truth == UNKNOWN_LABEL:
             unknown += 1
             if predicted is None:
@@ -48,6 +58,7 @@ def _metrics(rows, threshold: float, margin: float, confirmations: int):
             else:
                 false_accept += 1
                 per_camera[camera]["false_accept"] += 1
+                per_period[period]["false_accept"] += 1
         else:
             known += 1
             per_person[truth]["events"] += 1
@@ -55,6 +66,7 @@ def _metrics(rows, threshold: float, margin: float, confirmations: int):
                 correct += 1
                 per_camera[camera]["correct"] += 1
                 per_person[truth]["correct"] += 1
+                per_period[period]["correct"] += 1
             else:
                 false_reject += 1
                 per_person[truth]["false_reject"] += 1
@@ -62,6 +74,7 @@ def _metrics(rows, threshold: float, margin: float, confirmations: int):
                     false_identification += 1
                     per_camera[camera]["false_identification"] += 1
                     per_person[truth]["false_identification"] += 1
+                    per_period[period]["false_identification"] += 1
     return {
         "threshold": round(threshold, 3),
         "margin": round(margin, 3),
@@ -82,6 +95,7 @@ def _metrics(rows, threshold: float, margin: float, confirmations: int):
         "false_identifications": false_identification,
         "per_camera": dict(per_camera),
         "per_person": dict(per_person),
+        "per_period": dict(per_period),
     }
 
 

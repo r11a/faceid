@@ -1,5 +1,5 @@
 name: FaceID
-version: "1.0.2"
+version: "2.0.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -23,7 +23,10 @@ services:
 options:
   mqtt_prefix: faceid
   backend: auto
-  frigate_url: http://192.168.1.10:5000
+  frigate_url: https://192.168.1.10:8971
+  frigate_username: ""
+  frigate_password: ""
+  frigate_verify_tls: true
   mqtt_host: ""
   mqtt_port: 1883
   mqtt_user: ""
@@ -49,6 +52,8 @@ options:
   backup_hour: 3
   backup_keep: 7
   audit_retention_days: 90
+  known_evidence_days: 30
+  unknown_evidence_days: 14
   presence_window: 120
   calibration_target_far: 0.01
   scenario_window: 90
@@ -69,6 +74,9 @@ schema:
   mqtt_prefix: str
   backend: list(auto|cpu|cuda|openvino)
   frigate_url: url
+  frigate_username: str?
+  frigate_password: password?
+  frigate_verify_tls: bool
   mqtt_host: str?
   mqtt_port: port
   mqtt_user: str?
@@ -94,6 +102,8 @@ schema:
   backup_hour: int(0,23)
   backup_keep: int(1,90)
   audit_retention_days: int(0,3650)
+  known_evidence_days: int(1,3650)
+  unknown_evidence_days: int(1,3650)
   presence_window: int(10,3600)
   calibration_target_far: float(0.0,0.5)
   scenario_window: int(5,900)

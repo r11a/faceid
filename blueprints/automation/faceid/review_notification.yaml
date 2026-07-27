@@ -1,0 +1,74 @@
+blueprint:
+  name: FaceID — actionable face review
+  description: >-
+    Sends a mobile notification with the Frigate snapshot. The buttons write
+    the operator's answer back to FaceID over MQTT, including an audit trail.
+  domain: automation
+  input:
+    notify_device:
+      name: Phone or tablet
+      selector:
+        device:
+          integration: mobile_app
+    mqtt_prefix:
+      name: FaceID MQTT prefix
+      default: faceid
+      selector:
+        text: {}
+
+mode: parallel
+max: 20
+
+variables:
+  prefix: !input mqtt_prefix
+
+trigger:
+  - platform: mqtt
+    topic: "+/v1/events"
+
+condition:
+  - condition: template
+    value_template: >-
+      {{ trigger.topic == prefix ~ '/v1/events'
+         and trigger.payload_json.decision in ['recognized', 'unknown', 'ambiguous'] }}
+
+action:
+  - variables:
+      event_id: "{{ trigger.payload_json.event_id }}"
+      proposed: "{{ trigger.payload_json.person | default('__unknown__', true) }}"
+      camera: "{{ trigger.payload_json.camera }}"
+      action_correct: "FACEID_CORRECT_{{ event_id }}"
+      action_unknown: "FACEID_UNKNOWN_{{ event_id }}"
+  - domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: "FaceID · {{ camera }}"
+    message: >-
+      {% if proposed != '__unknown__' %}האם זה {{ proposed }}?
+      {% else %}זוהה אדם לא מוכר. האם לאשר?{% endif %}
+    data:
+      image: "/api/frigate/notifications/{{ event_id }}/snapshot.jpg"
+      tag: "faceid-{{ event_id }}"
+      actions:
+        - action: "{{ action_correct }}"
+          title: "נכון"
+        - action: "{{ action_unknown }}"
+          title: "אדם לא מוכר"
+  - wait_for_trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_correct }}"
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_unknown }}"
+    timeout: "01:00:00"
+    continue_on_timeout: false
+  - service: mqtt.publish
+    data:
+      topic: "{{ prefix }}/v1/review/set"
+      payload: >-
+        {{ {'event_id': event_id,
+            'label': proposed if wait.trigger.event.data.action == action_correct else '__unknown__',
+            'reviewer': 'HA mobile notification'} | tojson }}

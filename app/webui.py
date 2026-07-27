@@ -11,8 +11,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import logbuffer
@@ -77,9 +77,16 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         return {"slug": gallery.create_person(body.name)}
 
     @app.delete("/api/persons/{slug}")
-    def delete_person(slug: str):
+    def delete_person(slug: str, purge_history: bool = False):
+        person = gallery.persons().get(slug)
+        if person is None:
+            raise HTTPException(404, "Unknown person")
         gallery.delete_person(slug)
-        return {"ok": True}
+        removed_events = (
+            processor.audit.delete_person_history(person["name"])
+            if purge_history and processor.audit else 0
+        )
+        return {"ok": True, "removed_events": removed_events}
 
     class FavBody(BaseModel):
         favorite: bool
@@ -471,13 +478,20 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         return {"events": processor.audit.recent(limit=limit, status=status)}
 
     @app.get("/api/activity")
-    def activity(limit: int = 100, status: str | None = None):
+    def activity(
+        limit: int = 100, offset: int = 0, status: str | None = None,
+        person: str | None = None, camera: str | None = None,
+        date_from: float | None = None, date_to: float | None = None,
+        q: str | None = None,
+    ):
         if processor.audit is None:
             return {"events": [], "scenarios": []}
-        return {
-            "events": processor.audit.recent(limit=limit, status=status),
-            "scenarios": processor.audit.recent_scenarios(limit=limit),
-        }
+        result = processor.audit.search_events(
+            limit=limit, offset=offset, status=status, person=person,
+            camera=camera, date_from=date_from, date_to=date_to, query=q,
+        )
+        result["scenarios"] = processor.audit.recent_scenarios(limit=limit)
+        return result
 
     @app.get("/api/activity/{event_id}/image")
     def activity_image(event_id: str):
@@ -498,6 +512,158 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             cached, media_type="image/jpeg",
             headers={"Cache-Control": "private, max-age=86400"},
         )
+
+    @app.get("/api/activity/{event_id}/clip")
+    def activity_clip(event_id: str, request: Request):
+        """Stream a Frigate event clip through FaceID without leaking credentials."""
+        if processor.audit is None or processor.audit.event_detail(event_id) is None:
+            raise HTTPException(404, "Unknown event")
+        headers = {}
+        if request.headers.get("range"):
+            headers["Range"] = request.headers["range"]
+        try:
+            upstream = processor.frigate.request(
+                "GET", f"/api/events/{event_id}/clip.mp4",
+                headers=headers, stream=True, timeout=processor.frigate.timeout * 8,
+            )
+        except Exception as exc:
+            raise HTTPException(502, f"Frigate clip request failed: {exc}") from exc
+        if upstream.status_code not in (200, 206):
+            upstream.close()
+            raise HTTPException(
+                404, "No clip is available. Check Frigate recording retention."
+            )
+
+        def chunks():
+            try:
+                yield from upstream.iter_content(chunk_size=1 << 18)
+            finally:
+                upstream.close()
+
+        response_headers = {"Cache-Control": "private, max-age=300"}
+        for name in ("content-range", "accept-ranges", "content-length"):
+            if upstream.headers.get(name):
+                response_headers[name.title()] = upstream.headers[name]
+        return StreamingResponse(
+            chunks(), status_code=upstream.status_code,
+            media_type=upstream.headers.get("content-type", "video/mp4"),
+            headers=response_headers,
+        )
+
+    @app.get("/api/activity/{event_id}/references")
+    def activity_references(event_id: str):
+        if processor.audit is None:
+            raise HTTPException(404, "Audit is not available")
+        detail = processor.audit.event_detail(event_id)
+        if detail is None:
+            raise HTTPException(404, "Unknown event")
+        event = detail["event"]
+        name = event.get("person") or event.get("probable_person")
+        matches = []
+        for slug, person in gallery.persons().items():
+            if person["name"] == name:
+                matches = [
+                    {"url": f"media/persons/{slug}/{filename}",
+                     "caption": f"דוגמת ייחוס של {name}"}
+                    for filename in (person.get("files") or [])[:3]
+                ]
+                break
+        return {"person": name, "references": matches,
+                "note": "Reference examples, not additional event frames."}
+
+    @app.get("/api/persons/{slug}/profile")
+    def person_profile(slug: str):
+        person = gallery.persons().get(slug)
+        if person is None:
+            raise HTTPException(404, "Unknown person")
+        profile = (
+            processor.audit.person_profile(person["name"])
+            if processor.audit else {"person": person["name"], "events": []}
+        )
+        profile["gallery"] = {
+            "photos": len(person.get("files") or []),
+            "sources": person.get("sources") or {},
+            "recommendation": (
+                "הוסף עוד תמונות מזוויות ומצלמות שונות"
+                if len(person.get("files") or []) < 5 else
+                "יש מספיק תמונות בסיס; בדוק את האירועים החלשים"
+            ),
+        }
+        return profile
+
+    @app.get("/api/system-report")
+    def system_report():
+        report = processor.audit.system_report() if processor.audit else {
+            "window_days": 7, "cameras": []
+        }
+        report["frigate"] = processor.frigate.connection_status()
+        report["mqtt"] = (
+            processor.dispatcher.health()
+            if getattr(processor, "dispatcher", None) else {}
+        )
+        return report
+
+    @app.get("/api/daily-summary")
+    def daily_summary():
+        rows = (
+            processor.audit.search_events(
+                limit=500, date_from=time.time() - 86400
+            )["events"] if processor.audit else []
+        )
+        recognized = [row for row in rows if row["status"] == "recognized"]
+        people_seen = sorted({
+            row["person"] for row in recognized if row.get("person")
+        })
+        return {
+            "events": len(rows), "recognized": len(recognized),
+            "needs_review": sum(
+                row["status"] in ("unknown", "ambiguous") for row in rows
+            ),
+            "people": people_seen,
+            "summary": (
+                f"ב־24 השעות האחרונות היו {len(rows)} אירועים, "
+                f"{len(recognized)} זיהויים ו־"
+                f"{sum(row['status'] in ('unknown', 'ambiguous') for row in rows)} "
+                "אירועים שממתינים לבדיקה."
+            ),
+            "identity_policy": "AI never decides a person's identity.",
+        }
+
+    @app.get("/api/privacy")
+    def privacy():
+        images = list((data_dir / "audit_images").glob("*.jpg"))
+        return {
+            "audit_events": (
+                processor.audit.search_events(limit=1)["total"]
+                if processor.audit else 0
+            ),
+            "evidence_images": len(images),
+            "evidence_bytes": sum(
+                image.stat().st_size for image in images if image.is_file()
+            ),
+            "known_evidence_days": int(
+                cfg["faceid"].get("known_evidence_days", 30)
+            ),
+            "unknown_evidence_days": int(
+                cfg["faceid"].get("unknown_evidence_days", 14)
+            ),
+            "identity_policy": (
+                "AI descriptions and search never choose or change identity."
+            ),
+        }
+
+    class PrivacyBody(BaseModel):
+        known_days: int = 30
+        unknown_days: int = 14
+
+    @app.post("/api/privacy/prune")
+    def privacy_prune(body: PrivacyBody):
+        if processor.audit is None:
+            raise HTTPException(404, "Audit is not available")
+        known = max(1, min(int(body.known_days), 3650))
+        unknown = max(1, min(int(body.unknown_days), 3650))
+        removed = processor.audit.prune_evidence(known, unknown)
+        return {"ok": True, "removed_images": removed}
 
     @app.get("/api/dashboard")
     def dashboard():
@@ -563,7 +729,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         label: str
 
     @app.post("/api/audit/{event_id}/ground-truth")
-    def ground_truth(event_id: str, body: GroundTruthBody):
+    def ground_truth(event_id: str, body: GroundTruthBody, request: Request):
         labels = {person["name"] for person in gallery.persons().values()}
         if body.label != UNKNOWN_LABEL and body.label not in labels:
             raise HTTPException(400, "Ground truth must be a known person or __unknown__")
@@ -574,9 +740,26 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             raise HTTPException(404, "Unknown event")
         if detail["event"]["status"] == "processing":
             raise HTTPException(409, "Wait for the event to finish before labeling it")
-        if not processor.audit.set_ground_truth(event_id, body.label):
+        reviewer = (
+            request.headers.get("x-remote-user-name")
+            or request.headers.get("x-forwarded-user") or "operator"
+        )
+        if not processor.audit.set_ground_truth(event_id, body.label, reviewer):
             raise HTTPException(404, "Unknown event")
         return {"ok": True, "event_id": event_id, "label": body.label}
+
+    @app.post("/api/audit/{event_id}/undo")
+    def undo_ground_truth(event_id: str, request: Request):
+        if processor.audit is None:
+            raise HTTPException(404, "Audit is not available")
+        reviewer = (
+            request.headers.get("x-remote-user-name")
+            or request.headers.get("x-forwarded-user") or "operator"
+        )
+        restored = processor.audit.undo_ground_truth(event_id, reviewer)
+        if restored is None:
+            raise HTTPException(409, "No previous review is available")
+        return {"ok": True, "label": restored or None}
 
     @app.get("/api/calibration")
     def calibration():
@@ -605,6 +788,11 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                        if getattr(processor, "ai_context", None) else {"enabled": False}),
                 "integrations": (processor.dispatcher.health()
                                  if getattr(processor, "dispatcher", None) else {}),
+                "frigate": {
+                    "secure_mode": processor.frigate.secure_mode,
+                    "authenticated": bool(processor.frigate.username),
+                    "tls_verified": bool(processor.frigate.verify_tls),
+                },
                 "suggest_threshold": float(cfg["faceid"].get("suggest_threshold", 0.40))}
 
     return app

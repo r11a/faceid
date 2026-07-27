@@ -48,10 +48,20 @@ def main():
                       max_per_person=int(cfg["faceid"].get("max_faces_per_person", 40)))
     gallery.trimmed_keep = int(cfg["faceid"].get("trimmed_keep", 10))
     gallery.dedupe_threshold = float(cfg["faceid"].get("dedupe_threshold", 0.65))
-    frigate = FrigateAPI(cfg["frigate"]["url"])
+    frigate_cfg = cfg["frigate"]
+    frigate = FrigateAPI(
+        frigate_cfg["url"],
+        username=str(frigate_cfg.get("username") or ""),
+        password=str(frigate_cfg.get("password") or ""),
+        verify_tls=bool(frigate_cfg.get("verify_tls", True)),
+    )
     audit = AuditStore(
         data_dir / "audit.db",
         retention_days=int(cfg["faceid"].get("audit_retention_days", 90)),
+    )
+    audit.prune_evidence(
+        int(cfg["faceid"].get("known_evidence_days", 30)),
+        int(cfg["faceid"].get("unknown_evidence_days", 14)),
     )
     f = cfg["faceid"]
     camera_graph = f.get("camera_graph") or {}
