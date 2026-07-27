@@ -78,6 +78,7 @@ class EventProcessor:
         self.prefix = str(f.get("mqtt_prefix", "faceid")).strip("/") or "faceid"
         self.present: dict[str, dict[str, float]] = {}  # camera -> {person: zuletzt gesehen}
         self._last_presence: dict[str, list] = {}  # zuletzt publizierter Stand je Kamera
+        self._person_presence_state: dict[str, bool] = {}
         self._update_policy()
         self.clip_analyzer = ClipAnalyzer(
             engine, frigate,
@@ -527,6 +528,10 @@ class EventProcessor:
                 confirmations = 0
                 if st["best_person"] is None and st["best_unknown"] is not None:
                     u = st["best_unknown"]
+                    confirmations = sum(
+                        1 for observation in st["decision"].observations
+                        if observation.get("person") == u.get("guess")
+                    )
                     crop, emb, full = u["crop"], u["emb"], u.get("full")
                     if self.hires_enroll:
                         # schärferes Gesicht aus der Aufnahme holen (bessere Referenz)
@@ -568,6 +573,7 @@ class EventProcessor:
                             eid, final_status, end_ts=st.get("end_time"),
                             person=u.get("guess"), score=u["guess_score"],
                             margin=u.get("margin", 0.0),
+                            confirmations=confirmations,
                         )
                     log.info("event %s: %s face stored (%s)", eid, final_status, uid)
                 elif self.audit:
@@ -677,6 +683,8 @@ class EventProcessor:
                 )
             except Exception:
                 log.exception("event %s: AI context enqueue failed", eid)
+        if status == "recognized" and person:
+            self._publish_person_state(person)
 
     def _publish_recognition(
         self, eid: str, st: dict, name: str, score: float,
@@ -720,6 +728,167 @@ class EventProcessor:
                 attrs["last"] = last
             self.client.publish(f"{self.prefix}/{cam}/person", ", ".join(names) or "nobody", retain=True)
             self.client.publish(f"{self.prefix}/{cam}/attributes", json.dumps(attrs, ensure_ascii=False), retain=True)
+        self._refresh_person_presence()
+
+    def _person_slug(self, name: str):
+        for slug, person in self.gallery.persons().items():
+            if person.get("name") == name:
+                return slug
+        return None
+
+    def _publish_person_discovery(self, slug: str, name: str):
+        if not self.client:
+            return
+        device = {
+            "identifiers": [f"{self.prefix}_person_{slug}"],
+            "name": name,
+            "manufacturer": "FaceID",
+            "model": "Recognized person",
+            "via_device": self.prefix,
+        }
+        common = {
+            "availability_topic": f"{self.prefix}/status",
+            "device": device,
+        }
+        entities = [
+            ("sensor", "last_location", {
+                **common,
+                "name": "מיקום אחרון",
+                "unique_id": f"{self.prefix}_{slug}_last_location",
+                "object_id": f"{self.prefix}_{slug}_last_location",
+                "state_topic": f"{self.prefix}/person/{slug}/location",
+                "json_attributes_topic": f"{self.prefix}/person/{slug}/attributes",
+                "icon": "mdi:map-marker-account",
+            }),
+            ("sensor", "last_seen", {
+                **common,
+                "name": "נראה לאחרונה",
+                "unique_id": f"{self.prefix}_{slug}_last_seen",
+                "object_id": f"{self.prefix}_{slug}_last_seen",
+                "state_topic": f"{self.prefix}/person/{slug}/last_seen",
+                "device_class": "timestamp",
+                "icon": "mdi:clock-outline",
+            }),
+            ("binary_sensor", "presence", {
+                **common,
+                "name": "נראה לאחרונה",
+                "unique_id": f"{self.prefix}_{slug}_presence",
+                "object_id": f"{self.prefix}_{slug}_presence",
+                "state_topic": f"{self.prefix}/person/{slug}/presence",
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "device_class": "presence",
+            }),
+            ("sensor", "today", {
+                **common,
+                "name": "הופעות היום",
+                "unique_id": f"{self.prefix}_{slug}_today",
+                "object_id": f"{self.prefix}_{slug}_today",
+                "state_topic": f"{self.prefix}/person/{slug}/today",
+                "icon": "mdi:counter",
+            }),
+            ("sensor", "average_confidence", {
+                **common,
+                "name": "ביטחון ממוצע",
+                "unique_id": f"{self.prefix}_{slug}_average_confidence",
+                "object_id": f"{self.prefix}_{slug}_average_confidence",
+                "state_topic": f"{self.prefix}/person/{slug}/average_confidence",
+                "unit_of_measurement": "%",
+                "icon": "mdi:gauge",
+            }),
+            ("sensor", "appearances", {
+                **common,
+                "name": "סך הופעות",
+                "unique_id": f"{self.prefix}_{slug}_appearances",
+                "object_id": f"{self.prefix}_{slug}_appearances",
+                "state_topic": f"{self.prefix}/person/{slug}/appearances",
+                "icon": "mdi:account-eye",
+            }),
+        ]
+        for component, key, config in entities:
+            self.client.publish(
+                f"homeassistant/{component}/{self.prefix}_{slug}_{key}/config",
+                json.dumps(config, ensure_ascii=False),
+                retain=True,
+            )
+
+    def _publish_person_state(self, name: str):
+        if not self.client:
+            return
+        slug = self._person_slug(name)
+        if not slug:
+            return
+        self._publish_person_discovery(slug, name)
+        stats = (
+            self.audit.person_statistics().get(name, {}) if self.audit else {}
+        )
+        active_cameras = sorted(
+            camera for camera, people in self.present.items() if name in people
+        )
+        present = bool(active_cameras)
+        last_camera = stats.get("last_camera") or (
+            active_cameras[0] if active_cameras else "not seen yet"
+        )
+        attributes = {
+            "person": name,
+            "last_seen": stats.get("last_seen"),
+            "last_camera": stats.get("last_camera"),
+            "last_score": round(float(stats.get("last_score", 0)), 3),
+            "average_score": round(float(stats.get("avg_score", 0)), 3),
+            "appearances": int(stats.get("appearances", 0)),
+            "appearances_today": int(stats.get("today", 0)),
+            "appearances_7_days": int(stats.get("last_7_days", 0)),
+            "appearances_30_days": int(stats.get("last_30_days", 0)),
+            "most_seen_camera": stats.get("top_camera"),
+            "camera_breakdown": stats.get("cameras", []),
+            "active_cameras": active_cameras,
+            "presence_window_seconds": self.presence_window,
+        }
+        self.client.publish(
+            f"{self.prefix}/person/{slug}/location", last_camera, retain=True
+        )
+        if stats.get("last_seen"):
+            last_seen = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(stats["last_seen"]))
+            )
+            self.client.publish(
+                f"{self.prefix}/person/{slug}/last_seen", last_seen, retain=True
+            )
+        self.client.publish(
+            f"{self.prefix}/person/{slug}/attributes",
+            json.dumps(attributes, ensure_ascii=False),
+            retain=True,
+        )
+        self.client.publish(
+            f"{self.prefix}/person/{slug}/presence",
+            "ON" if present else "OFF",
+            retain=True,
+        )
+        self.client.publish(
+            f"{self.prefix}/person/{slug}/today",
+            str(attributes["appearances_today"]),
+            retain=True,
+        )
+        self.client.publish(
+            f"{self.prefix}/person/{slug}/average_confidence",
+            str(round(attributes["average_score"] * 100, 1)),
+            retain=True,
+        )
+        self.client.publish(
+            f"{self.prefix}/person/{slug}/appearances",
+            str(attributes["appearances"]),
+            retain=True,
+        )
+        self._person_presence_state[name] = present
+
+    def _refresh_person_presence(self):
+        if not self.client:
+            return
+        for person in self.gallery.persons().values():
+            name = person.get("name")
+            present = any(name in people for people in self.present.values())
+            if self._person_presence_state.get(name) != present:
+                self._publish_person_state(name)
 
     def _frigate_cameras(self) -> set:
         """Kameranamen von Frigate holen — fuer den Fall, dass keine konfiguriert sind."""
@@ -789,3 +958,6 @@ class EventProcessor:
             self._last_presence.pop(cam, None)
             self.present.setdefault(cam, {})
             self._publish_presence(cam)
+        for slug, person in self.gallery.persons().items():
+            self._publish_person_discovery(slug, person["name"])
+            self._publish_person_state(person["name"])

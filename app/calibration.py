@@ -90,6 +90,17 @@ def build_calibration_report(
     confirmations: int, target_far: float = 0.01,
 ):
     current = _metrics(rows, current_threshold, current_margin, confirmations)
+    if not rows:
+        return {
+            "ready": False,
+            "sample_warning": (
+                "Label completed events in Activity before calibration can recommend "
+                "safe settings."
+            ),
+            "target_far": target_far,
+            "current": current,
+            "recommended": None,
+        }
     candidates = []
     for step in range(20, 81, 2):
         threshold = step / 100.0

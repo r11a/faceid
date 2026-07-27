@@ -1,5 +1,16 @@
 # FaceID App
 
+## What appears in Home Assistant
+
+FaceID uses MQTT discovery. After the app starts, every enrolled person gets a separate
+device with entities for last location, last-seen time, recent presence, appearances
+today, average confidence and total appearances. Open **Settings → Devices & services →
+MQTT → Devices** and search for the person's name.
+
+The last-location entity also exposes 7/30-day statistics, the most frequent camera,
+confidence scores and a camera breakdown as attributes. Restart FaceID once after
+updating so the new discovery messages are published immediately.
+
 Face recognition for [Frigate](https://frigate.video): confirmed people are published
 to MQTT (sensors appear automatically), optionally written back as `sub_label`, and
 unknown faces land in a review UI (side panel) where you assign them with one click.

@@ -1,26 +1,30 @@
 <!doctype html>
-<html lang="en">
+<html lang="he">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FaceID</title>
 <style>
 :root{
-  --bg:oklch(18% .012 80);--panel:oklch(22% .012 80);--line:oklch(32% .01 80);
-  --fg:oklch(88% .01 90);--dim:oklch(62% .01 90);--acc:oklch(85% .25 130);
-  --warn:oklch(75% .18 60);--bad:oklch(65% .2 25);
+  --bg:#0b1020;--panel:#121a2d;--panel2:#18233b;--line:#283652;
+  --fg:#f2f6ff;--dim:#98a5bd;--acc:#79e6a5;--accent2:#7aa8ff;
+  --warn:#ffc66d;--bad:#ff7d8c;--good:#79e6a5;
   --mono:ui-monospace,"SF Mono",Menlo,monospace;--sans:system-ui,-apple-system,sans-serif;
 }
 *{box-sizing:border-box;margin:0}
-body{background:var(--bg);color:var(--fg);font:14px/1.45 var(--sans)}
-header{display:flex;align-items:baseline;gap:16px;padding:10px 16px;border-bottom:1px solid var(--line)}
-header h1{font:700 15px var(--mono);color:var(--acc);letter-spacing:.08em}
-header .stat{font:12px var(--mono);color:var(--dim)}
-nav{display:flex;gap:0;border-bottom:1px solid var(--line)}
-nav button{background:none;border:0;border-right:1px solid var(--line);color:var(--dim);
-  font:13px var(--mono);padding:8px 18px;cursor:pointer}
-nav button.on{color:var(--acc);background:var(--panel)}
-main{padding:16px;max-width:1200px}
+body{background:radial-gradient(circle at 15% 0,#152544 0,transparent 36%),var(--bg);
+  color:var(--fg);font:14px/1.55 var(--sans);min-height:100vh}
+header{display:flex;align-items:center;gap:14px;padding:17px clamp(16px,3vw,36px);
+  border-bottom:1px solid var(--line);background:#0b1020dd;backdrop-filter:blur(16px);position:sticky;top:0;z-index:5}
+header h1{font:800 18px var(--sans);color:var(--fg);letter-spacing:.02em}
+header h1 span{color:var(--acc)}
+header .stat{font:12px var(--sans);color:var(--dim);padding:6px 10px;background:var(--panel);border-radius:99px}
+nav{display:flex;gap:6px;border-bottom:1px solid var(--line);padding:8px clamp(12px,3vw,32px);
+  overflow-x:auto;background:#0b1020bb;position:sticky;top:66px;z-index:4;backdrop-filter:blur(16px)}
+nav button{background:none;border:0;border-radius:9px;color:var(--dim);
+  font:600 13px var(--sans);padding:9px 14px;cursor:pointer;white-space:nowrap}
+nav button.on{color:#07130d;background:var(--acc)}
+main{padding:clamp(18px,3vw,36px);max-width:1500px;margin:auto}
 h2{font:600 12px var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.12em;margin:18px 0 8px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
 .tile{position:relative;border:1px solid var(--line);background:var(--panel)}
@@ -81,21 +85,65 @@ td.p{color:var(--acc)} td.u{color:var(--warn)}
   .lv-ERROR,.lv-CRITICAL{color:#e05555}
   .logwrap{background:var(--panel);border:1px solid var(--line);padding:10px;
            max-height:70vh;overflow:auto}
+button:disabled{opacity:.38!important;cursor:not-allowed!important}
+.dashboard{direction:rtl;text-align:right}
+.dashboard td,.dashboard th{text-align:right}
+.welcome-card{display:flex;align-items:center;justify-content:space-between;gap:18px;
+  border:1px solid var(--line);border-radius:18px;padding:20px;background:linear-gradient(145deg,#182742,#11192c)}
+.welcome-card h3{font-size:20px;margin-bottom:4px}.welcome-card p{color:var(--dim);max-width:760px}
+details{border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin:10px 0 20px}
+details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
+.hero{display:grid;grid-template-columns:1.4fr .8fr;gap:18px;align-items:stretch;margin-bottom:20px}
+.hero-main,.guide-card{border:1px solid var(--line);border-radius:20px;padding:24px;
+  background:linear-gradient(145deg,#182742,#11192c);box-shadow:0 18px 50px #02050d66}
+.eyebrow{color:var(--acc);font-weight:750;font-size:12px;letter-spacing:.08em;margin-bottom:8px}
+.hero h1{font-size:clamp(26px,4vw,44px);line-height:1.1;max-width:760px}
+.hero p{color:var(--dim);font-size:16px;margin-top:12px;max-width:720px}
+.status-line{display:flex;gap:9px;align-items:center;margin-top:20px;flex-wrap:wrap}
+.status-dot{width:9px;height:9px;border-radius:50%;background:var(--good);box-shadow:0 0 16px var(--good)}
+.pill,.badge{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:99px;padding:5px 9px;color:var(--dim);font-size:12px}
+.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0 28px}
+.summary-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:17px}
+.summary-card .value{display:block;font-size:30px;font-weight:800;margin:4px 0}
+.summary-card .label{color:var(--dim)}
+.section-head{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:28px 0 12px}
+.section-head h2{margin:0;color:var(--fg);font:750 18px var(--sans);text-transform:none;letter-spacing:0}
+.section-head p{color:var(--dim);margin-top:3px}
+.people-dashboard{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:14px}
+.person-stat-card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:15px;transition:.2s ease;cursor:pointer}
+.person-stat-card:hover{transform:translateY(-3px);border-color:var(--accent2);box-shadow:0 14px 35px #0005}
+.person-top{display:flex;gap:13px;align-items:center}
+.avatar{width:66px;height:66px;border-radius:17px;object-fit:cover;background:var(--panel2);border:1px solid var(--line)}
+.avatar-fallback{display:grid;place-items:center;font-size:24px;color:var(--accent2)}
+.person-title{font-size:18px;font-weight:750}.person-sub{color:var(--dim);font-size:13px;margin-top:3px}
+.mini-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:14px}
+.mini-stat{background:var(--panel2);border-radius:10px;padding:9px;text-align:center}
+.mini-stat b{display:block;font-size:15px}.mini-stat span{font-size:11px;color:var(--dim)}
+.recent-list{display:grid;gap:8px}.recent-item{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+  background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:11px 13px}
+.recent-item .time{color:var(--dim);font-size:12px}.score-good{color:var(--good)}
+.guide-list{display:grid;gap:12px;margin-top:15px}.guide-step{display:flex;gap:11px;align-items:flex-start}
+.step-num{flex:0 0 28px;height:28px;display:grid;place-items:center;border-radius:9px;background:var(--accent2);color:#071126;font-weight:800}
+.friendly-empty{padding:28px;border:1px dashed var(--line);border-radius:16px;color:var(--dim);text-align:center}
+.status-recognized{color:var(--good)}.status-review{color:var(--warn)}.status-no-face{color:var(--dim)}.status-processing{color:var(--accent2)}
+@media(max-width:850px){.hero{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}nav{top:64px}}
+@media(max-width:520px){.summary-grid{grid-template-columns:1fr 1fr}.people-dashboard{grid-template-columns:1fr}.hero-main,.guide-card{padding:18px}.welcome-card{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
 <header>
-  <h1>FACEID</h1>
+  <h1><span>Face</span>ID <small style="font-weight:500;color:var(--dim)">מרכז זיהוי חכם</small></h1>
   <span class="stat" id="health">—</span>
 </header>
 <nav>
-  <button data-t="unknowns" class="on" title="review queue: unrecognized faces, grouped by person">UNKNOWN</button>
-  <button data-t="persons" title="your gallery: enrolled people and their reference faces">PERSONS</button>
-  <button data-t="ignored" title="people you don't track: never notified, matched or resurfaced">IGNORED</button>
-  <button data-t="activity" title="final decisions, cross-camera scenarios and event labels">ACTIVITY</button>
-  <button data-t="calibration" title="measure false accepts/rejects and recommend safe thresholds">CALIBRATION</button>
-  <button data-t="settings" title="matching thresholds, backup and restore">SETTINGS</button>
-  <button data-t="log" title="recent service log — what FaceID is doing, and why nothing was recognised">LOG</button>
+  <button data-t="dashboard" class="on" title="סיכום פשוט של המערכת">⌂ בית</button>
+  <button data-t="unknowns" title="פנים שממתינות לזיהוי">? לבדיקה</button>
+  <button data-t="persons" title="אנשים מוכרים ותמונות הייחוס שלהם">☺ אנשים</button>
+  <button data-t="activity" title="מי נראה, איפה ומתי">◷ פעילות</button>
+  <button data-t="calibration" title="בדיקת דיוק והמלצות בטוחות">◎ דיוק</button>
+  <button data-t="ignored" title="אנשים שהמערכת מתעלמת מהם">⊘ התעלמות</button>
+  <button data-t="settings" title="הגדרות וגיבויים">⚙ הגדרות</button>
+  <button data-t="log" title="מידע טכני לפתרון תקלות">≡ מערכת</button>
 </nav>
 <main id="main"></main>
 <div id="toast"></div>
@@ -103,7 +151,7 @@ td.p{color:var(--acc)} td.u{color:var(--warn)}
 
 <script>
 const $=s=>document.querySelector(s), main=$('#main');
-let tab='unknowns', persons={}, selected=new Set(), suggestThr=0.40;
+let tab='dashboard', persons={}, selected=new Set(), suggestThr=0.40;
 
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json()}
 function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2500)}
@@ -120,7 +168,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
 
 async function health(){try{const h=await j('api/health');
   if(typeof h.suggest_threshold==='number')suggestThr=h.suggest_threshold;
-  $('#health').textContent=`${h.persons} persons · queue ${h.queue} · events ${h.open_events}`}catch(e){$('#health').textContent='offline'}}
+  $('#health').textContent=`● מחובר · ${h.persons} אנשים · ${h.queue} לבדיקה · ${h.open_events} פעילים`}catch(e){$('#health').textContent='● לא מחובר'}}
 
 function personOptions(sel){
   const es=Object.entries(persons).sort((a,b)=>a[1].name.localeCompare(b[1].name,undefined,{sensitivity:'base'}));
@@ -136,6 +184,7 @@ async function render(){
   const t=tab;
   persons=await j('api/persons');
   if(t!==tab)return;
+  if(tab==='dashboard')return renderDashboard();
   if(tab==='unknowns')return renderUnknowns();
   if(tab==='persons')return renderPersons();
   if(tab==='ignored')return renderIgnored();
@@ -143,25 +192,101 @@ async function render(){
   if(tab==='calibration')return renderCalibration();
   if(tab==='settings')return renderSettings();
   if(tab==='log')return renderLog();
-  return renderPersons();
+  return renderDashboard();
+}
+
+function relativeTime(ts){
+  if(!ts)return 'עדיין לא נראה';
+  const sec=Math.max(0,Date.now()/1000-ts),min=Math.round(sec/60);
+  if(min<1)return 'עכשיו';
+  if(min<60)return `לפני ${min} דקות`;
+  const hours=Math.round(min/60);
+  if(hours<24)return `לפני ${hours} שעות`;
+  return `לפני ${Math.round(hours/24)} ימים`;
+}
+function confidence(score){return score?`${Math.round(score*100)}%`:'—'}
+function setTab(next){
+  tab=next;selected.clear();
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x.dataset.t===next));
+  render();
+}
+async function renderDashboard(){
+  const [data,h]=await Promise.all([j('api/dashboard'),j('api/health')]);
+  if(tab!=='dashboard')return;
+  const s=data.summary||{},known=data.people.filter(p=>p.last_seen);
+  const people=data.people.map(p=>`<article class="person-stat-card" onclick="showPersonActivity(${JSON.stringify(p.name).replace(/"/g,'&quot;')})">
+    <div class="person-top">
+      ${p.photo?`<img class="avatar" src="${p.photo}" alt="${esc(p.name)}">`:`<div class="avatar avatar-fallback">☺</div>`}
+      <div><div class="person-title">${esc(p.name)}</div>
+        <div class="person-sub">${p.last_camera?`נראה לאחרונה ב־${esc(p.last_camera)} · ${relativeTime(p.last_seen)}`:'עדיין אין זיהוי חדש'}</div></div>
+    </div>
+    <div class="mini-stats">
+      <div class="mini-stat"><b>${p.today}</b><span>היום</span></div>
+      <div class="mini-stat"><b>${p.last_7_days}</b><span>השבוע</span></div>
+      <div class="mini-stat"><b>${confidence(p.avg_score)}</b><span>ביטחון ממוצע</span></div>
+    </div>
+    <div class="person-sub" style="margin-top:10px">הכי הרבה: ${esc(p.top_camera||'אין עדיין נתונים')} · ${p.reference_photos} תמונות ייחוס</div>
+  </article>`).join('');
+  const recent=data.recent.map(e=>`<div class="recent-item">
+    <span class="badge score-good">${confidence(e.score)}</span>
+    <div><b>${esc(e.person)}</b><div class="person-sub">${esc(e.camera)} · ${relativeTime(e.start_ts)}</div></div>
+    <button class="ghost" onclick="event.stopPropagation();showPersonActivity(${JSON.stringify(e.person).replace(/"/g,'&quot;')})">פרטים</button>
+  </div>`).join('');
+  const warning=(s.no_face_24h||0)>(s.recognized_24h||0)*2&&s.no_face_24h>3;
+  main.innerHTML=`<div class="dashboard">
+    <section class="hero">
+      <div class="hero-main">
+        <div class="eyebrow">תמונת מצב עכשיו</div>
+        <h1>${known.length?`${known.length} אנשים כבר זוהו במערכת`:'המערכת מוכנה לזיהוי הראשון'}</h1>
+        <p>כאן רואים מי הופיע, באיזו מצלמה ועד כמה הזיהוי היה בטוח — בלי לפענח לוגים או ציונים טכניים.</p>
+        <div class="status-line"><span class="status-dot"></span><b>המערכת פועלת</b>
+          <span class="pill">${esc((h.engine.providers||['CPU'])[0])}</span>
+          <span class="pill">AI ${h.ai.enabled?'פעיל':'כבוי'}</span></div>
+        ${warning?`<div class="pill" style="margin-top:14px;color:var(--warn)">⚠ יש הרבה אירועים ללא פנים ברורות. כדאי לבדוק רזולוציית Snapshot ומיקום מצלמות.</div>`:''}
+      </div>
+      <aside class="guide-card">
+        <div class="eyebrow">איך מתחילים?</div>
+        <div class="guide-list">
+          <div class="guide-step"><span class="step-num">1</span><div><b>עברו מול מצלמה</b><div class="person-sub">המתינו לסיום אירוע Frigate.</div></div></div>
+          <div class="guide-step"><span class="step-num">2</span><div><b>בדקו פעילות</b><div class="person-sub">ראו את השם, המיקום והביטחון.</div></div></div>
+          <div class="guide-step"><span class="step-num">3</span><div><b>אשרו מי באמת היה שם</b><div class="person-sub">כך המערכת תלמד אילו הגדרות מתאימות לבית שלכם.</div></div></div>
+        </div>
+        <button class="act" style="margin-top:18px" onclick="setTab('activity')">לפעילות האחרונה ←</button>
+      </aside>
+    </section>
+    <section class="summary-grid">
+      <div class="summary-card"><span class="label">זוהו בהצלחה היום</span><span class="value score-good">${s.recognized_24h||0}</span></div>
+      <div class="summary-card"><span class="label">ממתינים לבדיקה</span><span class="value" style="color:var(--warn)">${s.needs_review_24h||0}</span></div>
+      <div class="summary-card"><span class="label">ללא פנים ברורות</span><span class="value">${s.no_face_24h||0}</span></div>
+      <div class="summary-card"><span class="label">אירועים פעילים עכשיו</span><span class="value" style="color:var(--accent2)">${s.processing||0}</span></div>
+    </section>
+    <div class="section-head"><div><h2>אנשים מוכרים</h2><p>לחיצה על אדם תציג את הפעילות שלו</p></div><button class="ghost" onclick="setTab('persons')">ניהול אנשים</button></div>
+    <section class="people-dashboard">${people||'<div class="friendly-empty">עדיין אין אנשים בגלריה. הוסיפו אדם ותמונות כדי להתחיל.</div>'}</section>
+    <div class="section-head"><div><h2>זיהויים אחרונים</h2><p>זיהויים שהשלימו את כל בדיקות הבטיחות</p></div></div>
+    <section class="recent-list">${recent||'<div class="friendly-empty">עדיין אין זיהויים מאומתים חדשים.</div>'}</section>
+  </div>`;
+}
+function showPersonActivity(name){
+  setTab('activity');
+  setTimeout(()=>{const q=$('#activitySearch');if(q){q.value=name;searchActivity()}},120);
 }
 
 function backfillRow(bf){
   const status = bf.running
-    ? `scanning history… ${bf.processed}/${bf.total||'?'} events`
+    ? `סורק היסטוריה… ${bf.processed}/${bf.total||'?'} אירועים`
     : bf.result
       ? bf.result.error
-        ? `scan failed: ${esc(bf.result.error)}`
-        : `last scan: ${bf.result.faces} new faces, ${bf.result.known} already known, ${bf.result.no_face} without a face`
-      : 'pulls faces from past camera events into the review queue';
+        ? `הסריקה נכשלה: ${esc(bf.result.error)}`
+        : `סריקה אחרונה: ${bf.result.faces} פנים חדשות, ${bf.result.known} מוכרות, ${bf.result.no_face} ללא פנים`
+      : 'אפשר לייבא פנים מאירועי Frigate ישנים למסך הבדיקה';
   return `<div class="row">
-    <select id="bfdays" title="how far back to scan" ${bf.running?'disabled':''}>
-      <option value="7">last 7 days</option>
-      <option value="14" selected>last 14 days</option>
-      <option value="28">last 28 days</option>
+    <select id="bfdays" title="כמה זמן אחורה לסרוק" ${bf.running?'disabled':''}>
+      <option value="7">7 ימים אחרונים</option>
+      <option value="14" selected>14 ימים אחרונים</option>
+      <option value="28">28 ימים אחרונים</option>
     </select>
-    <button class="act" title="pull faces from past Frigate events into this queue; known people get tagged retroactively" onclick="startBackfill()" ${bf.running?'disabled':''}>
-      ${bf.running?'SCANNING…':'SCAN CAMERA HISTORY'}</button>
+    <button class="act" title="ייבוא פנים מאירועי Frigate ישנים" onclick="startBackfill()" ${bf.running?'disabled':''}>
+      ${bf.running?'סורק…':'סריקת היסטוריית מצלמות'}</button>
     <span class="stat">${status}</span>
   </div>`;
 }
@@ -169,8 +294,8 @@ async function startBackfill(){
   try{
     await j('api/backfill',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({days:+$('#bfdays').value})});
-    toast('History scan started');
-  }catch(e){toast('Scan already running')}
+    toast('סריקת ההיסטוריה התחילה');
+  }catch(e){toast('כבר מתבצעת סריקה')}
   render();
 }
 async function renderUnknowns(){
@@ -178,7 +303,7 @@ async function renderUnknowns(){
   if(tab!=='unknowns')return;
   if(bf.running&&tab==='unknowns')setTimeout(()=>{if(tab==='unknowns')render()},4000);
   if(!clusters.length){
-    main.innerHTML=backfillRow(bf)+'<div class="empty">No unknown faces in the queue.</div>';return}
+    main.innerHTML=`<div class="dashboard" dir="rtl"><div class="welcome-card"><div><span class="eyebrow">הכול מסודר</span><h3>אין פנים שממתינות לבדיקה</h3><p>אירועים חדשים שלא זוהו בביטחון יופיעו כאן.</p></div></div>${backfillRow(bf)}</div>`;return}
   const excluded=window._excludedIds||(window._excludedIds=new Set());
   const n2s={}; Object.entries(persons).forEach(([sl,p])=>{n2s[p.name]=sl;});
   const SUGGEST=suggestThr;
@@ -198,9 +323,12 @@ async function renderUnknowns(){
     .map(name=>({name,slug:n2s[name],items:byName[name]}));
   window._sugg=sugg; window._clusters=rest; window._n2s=n2s;
 
-  let html=backfillRow(bf)+`<div class="row">
-    <button class="act" title="assign every face whose best gallery match clears the recognition threshold" onclick="autoAssign()">APPLY SUGGESTIONS ≥50%</button>
-    <span class="stat">assigns every face whose best gallery match clears the recognition threshold</span>
+  let html=`<div class="dashboard" dir="rtl"><div class="welcome-card"><div><span class="eyebrow">דורש את תשומת לבך</span>
+    <h3>${clusters.reduce((n,c)=>n+c.length,0)} תמונות ממתינות לזיהוי</h3>
+    <p>בחרו שם קיים, כתבו שם חדש או העבירו אדם קבוע לרשימת ההתעלמות. לחיצה על תמונה מסמנת רק אותה.</p></div></div>
+    ${backfillRow(bf)}<div class="row">
+    <button class="act" title="שיוך אוטומטי רק להצעות שעברו את סף הזיהוי" onclick="autoAssign()">אישור הצעות בטוחות</button>
+    <span class="stat">ישויכו רק פנים שעברו את סף הביטחון הנוכחי</span>
   </div>`;
 
   // --- Vorschlags-Gruppen ---
@@ -209,12 +337,12 @@ async function renderUnknowns(){
     return `
     <div class="cluster sugg" data-sg="${gi}">
       <div class="head">
-        <b>★ Looks like ${esc(g.name)}</b>
-        <span class="stat">${g.items.length} face(s) · avg ${avg}%</span>
+        <b>★ כנראה ${esc(g.name)}</b>
+        <span class="stat">${g.items.length} תמונות · ביטחון ממוצע ${avg}%</span>
         <span style="flex:1"></span>
         <select id="ssel${gi}" title="assign to a different person instead">${personOptions(g.slug)}</select>
-        <button class="act" title="assign all faces in this group" onclick="assignSuggestion(${gi})">ASSIGN ALL</button>
-        <button class="ghost" style="color:var(--warn);border-color:var(--warn)" title="never notify, match or resurface these faces" onclick="ignoreSuggestion(${gi})">ignore</button>
+        <button class="act" title="שיוך כל התמונות בקבוצה" onclick="assignSuggestion(${gi})">אישור הכול</button>
+        <button class="ghost" style="color:var(--warn);border-color:var(--warn)" title="לא להתריע ולא להציג פנים אלה שוב" onclick="ignoreSuggestion(${gi})">התעלמות</button>
       </div>
       <div class="grid">${g.items.map(u=>`
         <div class="tile">
@@ -232,15 +360,15 @@ async function renderUnknowns(){
     return `
     <div class="cluster" data-i="${i}">
       <div class="head">
-        <b>CLUSTER ${String(i+1).padStart(2,'0')}</b>
-        <span class="stat">${c.length} capture${c.length>1?'s':''} · ${esc(c[0].camera||'')}</span>
-        ${c[0].guess?`<span class="guess">looks like ${esc(c[0].guess)} (${(c[0].guess_score*100|0)}%)</span>`:''}
+        <b>קבוצת פנים ${String(i+1).padStart(2,'0')}</b>
+        <span class="stat">${c.length} תמונות · ${esc(c[0].camera||'')}</span>
+        ${c[0].guess?`<span class="guess">אולי ${esc(c[0].guess)} (${(c[0].guess_score*100|0)}%)</span>`:''}
         <span style="flex:1"></span>
-        <select id="sel${i}" title="assign to an existing person"><option value="">— pick person —</option>${personOptions(gslug)}</select>
-        <input id="new${i}" placeholder="…or new name" size="14" title="or create a new person with this name">
-        <button class="act" title="assign selected tiles (or the whole cluster) to the chosen person" onclick="assignCluster(${i})">ASSIGN</button>
-        <button class="ghost" style="color:var(--warn);border-color:var(--warn)" onclick="ignoreCluster(${i})" title="never notify, match or resurface these faces">ignore</button>
-        <button class="ghost" title="delete garbage crops permanently — does NOT stop future matching; use ignore for people" onclick="discardCluster(${i})">discard</button>
+        <select id="sel${i}" title="שיוך לאדם קיים"><option value="">— בחירת אדם —</option>${personOptions(gslug)}</select>
+        <input id="new${i}" placeholder="…או שם חדש" size="14" title="יצירת אדם חדש בשם זה">
+        <button class="act" title="שיוך התמונות המסומנות, או כל הקבוצה" onclick="assignCluster(${i})">שיוך</button>
+        <button class="ghost" style="color:var(--warn);border-color:var(--warn)" onclick="ignoreCluster(${i})" title="לא להתריע ולא להציג פנים אלה שוב">התעלמות</button>
+        <button class="ghost" title="מחיקת תמונה לא שימושית בלבד" onclick="discardCluster(${i})">מחיקה</button>
       </div>
       <div class="grid">${c.map(u=>`
         <div class="tile" data-id="${u.id}" title="click to select — actions then apply to the selection only" onclick="this.classList.toggle('sel')">
@@ -250,7 +378,7 @@ async function renderUnknowns(){
         </div>`).join('')}
       </div>
     </div>`;}).join('');
-  main.innerHTML=html;
+  main.innerHTML=html+'</div>';
 }
 async function assignSuggestion(gi){
   const g=window._sugg[gi]; if(!g)return;
@@ -421,79 +549,99 @@ async function renderLog(){
 }
 
 function metric(v){return `${((+v||0)*100).toFixed(1)}%`}
+function decisionInfo(status){
+  return {
+    recognized:['זוהה','p','המערכת זיהתה את האדם בביטחון'],
+    ambiguous:['דרוש אישור','u','יש מועמד מתאים, אבל הביטחון עדיין לא מספיק'],
+    unknown:['אדם לא מוכר','u','לא נמצאה התאמה מספקת לאנשים השמורים'],
+    no_face:['לא נמצאו פנים','stat','לא נמצאו פנים ברורות בתמונה'],
+    ignored:['הושתק','stat','הפנים תואמות לקבוצת ההתעלמות'],
+    processing:['בעיבוד','u','האירוע עדיין אוסף תמונות לצורך החלטה']
+  }[status]||[status||'לא ידוע','stat',''];
+}
 async function renderActivity(){
   const [data,healthData]=await Promise.all([j('api/activity?limit=150'),j('api/health')]);
   if(tab!=='activity')return;
   const names=Object.values(persons).map(p=>p.name).sort();
   const options=(current)=>[
-    `<option value="">label ground truth…</option>`,
-    `<option value="__unknown__"${current==='__unknown__'?' selected':''}>Unknown person</option>`,
+    `<option value="">מי באמת הופיע?</option>`,
+    `<option value="__unknown__"${current==='__unknown__'?' selected':''}>אדם לא מוכר</option>`,
     ...names.map(name=>`<option value="${esc(name)}"${current===name?' selected':''}>${esc(name)}</option>`)
   ].join('');
   const rows=data.events.map(event=>`<tr>
     <td>${fmtTs(event.start_ts||event.updated_ts)}</td>
     <td>${esc(event.camera)}</td>
-    <td class="${event.status==='recognized'?'p':'u'}">${esc(event.status)}</td>
-    <td>${esc(event.person||'—')}${event.probable_person?`<div class="stat">appearance hint: ${esc(event.probable_person)} ${metric(event.probable_score)}</div>`:''}</td>
-    <td>${metric(event.score)}<div class="stat">margin ${metric(event.margin)} · ${event.confirmations||0} frames</div></td>
+    <td class="${decisionInfo(event.status)[1]}" title="${decisionInfo(event.status)[2]}">${decisionInfo(event.status)[0]}</td>
+    <td>${esc(event.person||'—')}${event.probable_person?`<div class="stat">הצעה: ${esc(event.probable_person)} ${metric(event.probable_score)}</div>`:''}</td>
+    <td>${event.score?metric(event.score):'—'}<div class="stat">${event.confirmations||0} תמונות תומכות</div></td>
     <td>${event.scenario_id?`<span title="${esc(event.scenario_id)}">${esc(event.scenario_id.slice(0,14))}…</span>`:'—'}</td>
     <td>${event.ai_description?`${esc(event.ai_description)}<div class="stat">${esc(event.ai_tags||'')}</div>`:'—'}</td>
-    <td><select onchange="labelEvent('${event.event_id}',this.value)" aria-label="ground truth">${options(event.ground_truth)}</select></td>
+    <td>${event.status==='processing'
+      ?'<select disabled><option>ממתין לסיום…</option></select>'
+      :`<select onchange="labelEvent('${event.event_id}',this.value)" aria-label="מי באמת הופיע">${options(event.ground_truth)}</select>`}</td>
   </tr>`).join('');
-  const scenarios=data.scenarios.map(s=>`<tr><td>${fmtTs(s.start_ts)}</td><td>${esc(s.person||'unresolved')}</td>
-    <td>${esc(s.status)}</td><td>${esc(s.cameras)}</td><td>${s.event_count}</td></tr>`).join('');
-  main.innerHTML=`<div class="row">
-      <input id="activitySearch" placeholder="Search person, camera, description…" size="36" onkeydown="if(event.key==='Enter')searchActivity()">
-      <button class="act" onclick="searchActivity()">SEARCH</button>
-      <span class="stat">semantic when local AI is enabled; text fallback otherwise · AI ${healthData.ai.enabled?'on':'off'}</span>
+  const scenarios=data.scenarios.filter(s=>(s.event_count||0)>1||s.person).map(s=>`<tr><td>${fmtTs(s.start_ts)}</td><td>${esc(s.person||'עדיין לא זוהה')}</td>
+    <td>${decisionInfo(s.status)[0]}</td><td>${esc(s.cameras)}</td><td>${s.event_count}</td></tr>`).join('');
+  main.innerHTML=`<div class="dashboard" dir="rtl"><div class="row">
+      <input id="activitySearch" placeholder="חיפוש אדם, מצלמה או תיאור…" size="36" onkeydown="if(event.key==='Enter')searchActivity()">
+      <button class="act" onclick="searchActivity()">חיפוש</button>
+      <span class="stat">${healthData.ai.enabled?'חיפוש AI חכם פעיל':'חיפוש טקסט רגיל פעיל'}</span>
     </div>
-    <h2>Events</h2><div style="overflow:auto"><table><thead><tr><th>Time</th><th>Camera</th><th>Decision</th>
-      <th>Person</th><th>Evidence</th><th>Scenario</th><th>Context</th><th>Truth</th></tr></thead>
-      <tbody id="activityRows">${rows||'<tr><td colspan="8">No final events yet.</td></tr>'}</tbody></table></div>
-    <h2>Cross-camera scenarios</h2><table><thead><tr><th>Start</th><th>Person/link</th><th>Status</th><th>Cameras</th><th>Events</th></tr></thead>
-      <tbody>${scenarios||'<tr><td colspan="5">No scenarios yet.</td></tr>'}</tbody></table>`;
+    <h2>אירועי זיהוי</h2><p class="stat">אפשר לאמת מדי פעם מי באמת הופיע וכך לקבל כיול אמין לבית שלך.</p>
+    <div style="overflow:auto"><table><thead><tr><th>זמן</th><th>מצלמה</th><th>החלטה</th>
+      <th>אדם</th><th>ביטחון</th><th>קבוצה</th><th>הקשר AI</th><th>אימות שלך</th></tr></thead>
+      <tbody id="activityRows">${rows||'<tr><td colspan="8">עדיין אין אירועים.</td></tr>'}</tbody></table></div>
+    <h2>מעבר בין מצלמות</h2><table><thead><tr><th>התחלה</th><th>אדם</th><th>מצב</th><th>מצלמות</th><th>אירועים</th></tr></thead>
+      <tbody>${scenarios||'<tr><td colspan="5">עדיין לא זוהה מעבר בין מצלמות.</td></tr>'}</tbody></table></div>`;
 }
 async function labelEvent(eventId,label){
   if(!label)return;
   await j(`api/audit/${eventId}/ground-truth`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({label})});
-  toast('Ground truth saved');
+  toast('האימות נשמר וישמש לשיפור הדיוק');
+  renderActivity();
 }
 async function searchActivity(){
   const q=$('#activitySearch').value.trim();
   const data=await j('api/search?q='+encodeURIComponent(q));
   const rows=data.events.map(event=>`<tr><td>${fmtTs(event.start_ts)}</td><td>${esc(event.camera)}</td>
-    <td class="${event.status==='recognized'?'p':'u'}">${esc(event.status)}</td><td>${esc(event.person||event.probable_person||'—')}</td>
+    <td class="${decisionInfo(event.status)[1]}">${decisionInfo(event.status)[0]}</td><td>${esc(event.person||event.probable_person||'—')}</td>
     <td>${metric(event.score)}</td><td>${esc(event.scenario_id||'—')}</td><td>${esc(event.ai_description||'—')}</td><td>${event.semantic_score==null?'':metric(event.semantic_score)}</td></tr>`).join('');
-  $('#activityRows').innerHTML=rows||'<tr><td colspan="8">No matching events.</td></tr>';
+  $('#activityRows').innerHTML=rows||'<tr><td colspan="8">לא נמצאו אירועים מתאימים.</td></tr>';
 }
 async function renderCalibration(){
   const report=await j('api/calibration');
   if(tab!=='calibration')return;
-  const current=report.current||{}, recommended=report.recommended||{};
+  const current=report.current||{}, recommended=report.recommended;
   const cameras=Object.entries(current.per_camera||{}).map(([name,m])=>
     `<tr><td>${esc(name)}</td><td>${m.events}</td><td>${m.correct}</td><td>${m.false_accept}</td><td>${m.false_identification||0}</td></tr>`).join('');
   const people=Object.entries(current.per_person||{}).map(([name,m])=>
     `<tr><td>${esc(name)}</td><td>${m.events}</td><td>${m.correct}</td><td>${m.false_reject}</td><td>${m.false_identification||0}</td></tr>`).join('');
-  main.innerHTML=`<h2>Evidence-based calibration</h2>
+  const progress=Math.min(100,Math.round((current.events||0)/20*100));
+  main.innerHTML=`<div class="dashboard" dir="rtl"><h2>בדיקת דיוק וכיול</h2>
     <div class="cluster ${report.ready?'sugg':''}">
-      <div class="head"><b>${report.ready?'READY TO CALIBRATE':'MORE LABELS REQUIRED'}</b>
-        <span class="stat">${current.events||0} independently labelled events · target FAR ${metric(report.target_far)}</span></div>
-      ${report.sample_warning?`<div class="stat">${esc(report.sample_warning)}</div>`:''}
-      <div class="row"><b>Current</b><span>TAR ${metric(current.tar)} · FAR ${metric(current.far)} · FRR ${metric(current.frr)}
-        · wrong-ID ${metric(current.false_identification_rate)} · unknown rejection ${metric(current.unknown_rejection)}</span></div>
-      <div class="row"><b>Recommended</b><span>threshold ${(+recommended.threshold||0).toFixed(2)} · margin ${(+recommended.margin||0).toFixed(2)}
-        · TAR ${metric(recommended.tar)} · FAR ${metric(recommended.far)}</span>
-        <button class="act" onclick="applyCalibration(${+recommended.threshold||0},${+recommended.margin||0})" ${report.ready?'':'disabled'}>APPLY</button></div>
+      <div class="head"><b>${report.ready?'יש מספיק נתונים לכיול אמין':'צריך עוד אימותים שלך'}</b>
+        <span class="stat">${current.events||0} מתוך 20 אירועים נבדקו</span></div>
+      <div style="height:8px;background:var(--line);border-radius:8px;overflow:hidden;margin:12px 0"><div style="height:100%;width:${progress}%;background:var(--acc)"></div></div>
+      <p>${report.ready?'המערכת חישבה הגדרה שמרנית לפי האירועים שאימתת.':'במסך הפעילות בחר מי באמת הופיע. עד שיהיו מספיק דוגמאות, ההגדרות הקיימות לא ישתנו.'}</p>
+      ${current.events?`<div class="row"><b>המצב הנוכחי</b><span>${metric(current.tar)} זיהויים נכונים · ${metric(current.far)} זיהויי שווא · ${metric(current.frr)} פספוסים</span></div>`:''}
+      ${recommended?`<div class="row"><b>המלצת המערכת</b><span>סף ביטחון ${(+recommended.threshold).toFixed(2)} · הפרש נדרש ${(+recommended.margin).toFixed(2)}
+        · דיוק ${metric(recommended.tar)} · זיהויי שווא ${metric(recommended.far)}</span>
+        <button class="act" onclick="applyCalibration(${+recommended.threshold},${+recommended.margin})" ${report.ready?'':'disabled'}>החל הגדרה מומלצת</button></div>`:''}
     </div>
-    <h2>By camera</h2><table><thead><tr><th>Camera</th><th>Events</th><th>Correct</th><th>False accepts</th><th>Wrong ID</th></tr></thead><tbody>${cameras||'<tr><td colspan="5">No labels yet.</td></tr>'}</tbody></table>
-    <h2>By person</h2><table><thead><tr><th>Person</th><th>Events</th><th>Correct</th><th>False rejects</th><th>Wrong ID</th></tr></thead><tbody>${people||'<tr><td colspan="5">No known-person labels yet.</td></tr>'}</tbody></table>
-    <div class="stat" style="margin-top:16px">Label complete events in Activity. Frames from one event are never split across calibration samples, preventing inflated accuracy.</div>`;
+    <div class="summary-grid">
+      <div class="summary-card"><span class="label">זיהויים נכונים</span><span class="value">${metric(current.tar)}</span><small>אנשים מוכרים שזוהו נכון</small></div>
+      <div class="summary-card"><span class="label">זיהויי שווא</span><span class="value">${metric(current.far)}</span><small>אדם לא מוכר שסומן כמוכר</small></div>
+      <div class="summary-card"><span class="label">פספוסים</span><span class="value">${metric(current.frr)}</span><small>אדם מוכר שלא זוהה</small></div>
+    </div>
+    <h2>לפי מצלמה</h2><table><thead><tr><th>מצלמה</th><th>אירועים</th><th>נכונים</th><th>זיהויי שווא</th><th>אדם שגוי</th></tr></thead><tbody>${cameras||'<tr><td colspan="5">עדיין אין אימותים.</td></tr>'}</tbody></table>
+    <h2>לפי אדם</h2><table><thead><tr><th>אדם</th><th>אירועים</th><th>נכונים</th><th>פספוסים</th><th>אדם שגוי</th></tr></thead><tbody>${people||'<tr><td colspan="5">עדיין אין אימותים לאנשים מוכרים.</td></tr>'}</tbody></table>
+    <div class="stat" style="margin-top:16px">כל אירוע נספר פעם אחת בלבד, גם אם הוא כולל כמה תמונות. כך נתון הדיוק נשאר אמיתי.</div></div>`;
 }
 async function applyCalibration(threshold,margin){
   await j('api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({match_threshold:threshold,match_margin:margin})});
-  toast('Calibrated thresholds applied');
+  toast('הגדרות הדיוק המומלצות הוחלו');
   renderCalibration();
 }
 function setLogLevel(l){logLevel=l;renderLog()}
@@ -507,17 +655,17 @@ async function renderSettings(){
   if(tab!=='settings')return;
   const [cfg,runtime]=await Promise.all([j('api/settings'),j('api/health')]);
   if(tab!=='settings')return;
-  const labels={match_threshold:'Recognized at / above',unknown_threshold:'Definitely unknown below',
-    match_margin:'Minimum lead over runner-up',
-    suggest_threshold:'Group as "looks like" from',cluster_eps:'Cluster grouping distance',
-    ignore_threshold:'Counts as ignored from',ignore_margin:'Ignore lead over known person'};
-  const hints={match_threshold:'higher = fewer false matches, but more real people land in review',
-    unknown_threshold:'below this a face is treated as a clear stranger',
-    match_margin:'best candidate must lead the second-best by at least this much',
-    suggest_threshold:'keep below the recognition threshold so borderline faces get pre-sorted',
-    cluster_eps:'higher merges more faces per cluster; lower splits them apart',
-    ignore_threshold:'similarity to an ignore anchor needed to stay silent',
-    ignore_margin:'ignore match must beat the best enrolled person by this much'};
+  const labels={match_threshold:'רמת הביטחון הדרושה לזיהוי',unknown_threshold:'מתחת לערך זה האדם נחשב לא מוכר',
+    match_margin:'פער ביטחון מהמועמד השני',
+    suggest_threshold:'רמת ביטחון להצעת שם',cluster_eps:'רגישות קיבוץ פנים דומות',
+    ignore_threshold:'רמת התאמה לרשימת התעלמות',ignore_margin:'עדיפות התעלמות על אדם מוכר'};
+  const hints={match_threshold:'ערך גבוה יותר מונע זיהוי שגוי, אך שולח יותר אירועים לבדיקה',
+    unknown_threshold:'פנים מתחת לערך זה יופיעו כאדם לא מוכר',
+    match_margin:'כמה ההתאמה הטובה ביותר חייבת להוביל על ההתאמה השנייה',
+    suggest_threshold:'באירועים גבוליים יוצג שם כהצעה בלבד, ללא זיהוי סופי',
+    cluster_eps:'ערך גבוה מקבץ יותר תמונות יחד; ערך נמוך מפריד ביניהן',
+    ignore_threshold:'מידת הדמיון הדרושה כדי להשתיק פנים שנשמרו להתעלמות',
+    ignore_margin:'ההתאמה להתעלמות חייבת להוביל על אדם מוכר בפער הזה'};
   const rows=Object.entries(cfg.thresholds).map(([k,v])=>{
     const [lo,hi]=cfg.ranges[k];
     return `<div style="margin:10px 0">
@@ -531,14 +679,22 @@ async function renderSettings(){
     </div>`;}).join('');
   const b=cfg.backup;
   main.innerHTML=`
-    <h2>Runtime</h2>
+    <div class="dashboard" dir="rtl">
+    <h2>הגדרות המערכת</h2>
+    <div class="welcome-card"><div><span class="eyebrow">המלצה</span>
+      <h3>אין צורך לשנות מספרים כדי להתחיל</h3>
+      <p>ההגדרות הנוכחיות בטוחות לשימוש. אמת לפחות 20 אירועים במסך הפעילות, ואז מסך הדיוק יציע התאמה אוטומטית.</p></div>
+      <button class="act" onclick="setTab('calibration')">בדיקת דיוק</button></div>
+    </div>
+    <h2>מצב המנוע</h2>
     <div class="cluster"><div class="row">
       <b>${esc(runtime.engine.backend||'unknown')} backend</b>
       <span class="stat">${esc((runtime.engine.providers||[]).join(', ')||'provider unavailable')}
         · startup ${runtime.engine.startup_seconds||0}s · durable jobs ${runtime.pending_jobs||0}
         · AI ${runtime.ai.enabled?'enabled':'disabled'}</span>
     </div></div>
-    <h2>Matching thresholds</h2>
+    <details><summary>הגדרות זיהוי מתקדמות</summary>
+    <p class="stat" dir="rtl">מומלץ לשנות אותן רק לאחר כיול או כאשר ברור איזה סוג טעות רוצים לצמצם.</p>
     ${rows}
     <div class="row" style="margin-top:6px">
       <b style="min-width:230px;font:600 13px var(--sans)">Max photos per person</b>
@@ -565,8 +721,9 @@ async function renderSettings(){
       <input id="set-trimkeep" type="number" min="0" max="100" value="${cfg.trimmed_keep}" style="width:70px">
       <span class="stat">how many trimmed photos to keep per person for review/restore (0 = delete immediately). Stops the set-aside pile from growing forever.</span>
     </div>
-    <div class="row"><button class="act" onclick="saveThresholds()">SAVE SETTINGS</button>
-      <span class="stat">saves the thresholds AND the photo limit above · applies live and persists (overrides config / app options)</span></div>
+    <div class="row"><button class="act" onclick="saveThresholds()">שמירת הגדרות</button>
+      <span class="stat">השינוי נכנס לתוקף מיד ונשמר גם לאחר הפעלה מחדש</span></div>
+    </details>
 
     <h2>Remove duplicate photos</h2>
     <div class="row">
@@ -668,13 +825,13 @@ function personCard(slug,p){
     <div class="person" id="p-${slug}">
       <div class="head">
         <button class="fav${p.favorite?' on':''}" title="${p.favorite?'remove from favorites':'mark as favorite'}" onclick="toggleFav('${slug}',${p.favorite?0:1})">${p.favorite?'★':'☆'}</button>
-        <b>${esc(p.name)}</b><span class="n">${p.count} faces</span>
+        <b>${esc(p.name)}</b><span class="n">${p.count} תמונות ייחוס</span>
         <span style="flex:1"></span>
-        <label class="ghost" style="cursor:pointer" title="enroll photos (e.g. from your photo library) — faces are extracted automatically">Upload photos
+        <label class="ghost" style="cursor:pointer" title="הוספת תמונות מהטלפון או מהמחשב; הפנים ייחתכו אוטומטית">הוספת תמונות
           <input type="file" multiple accept="image/*" style="display:none" onchange="upload('${slug}',this)">
         </label>
-        <button class="ghost" style="color:var(--warn);border-color:var(--warn)" title="stop tracking: never notify, match or resurface this person" onclick="ignorePerson('${slug}','${esc(p.name)}')">ignore person</button>
-        <button class="ghost" title="delete this person and all their reference faces permanently" onclick="delPerson('${slug}','${esc(p.name)}')">delete</button>
+        <button class="ghost" style="color:var(--warn);border-color:var(--warn)" title="הפסקת מעקב והתראות עבור אדם זה" onclick="ignorePerson('${slug}','${esc(p.name)}')">הפסקת מעקב</button>
+        <button class="ghost" title="מחיקת האדם וכל תמונות הייחוס שלו" onclick="delPerson('${slug}','${esc(p.name)}')">מחיקה</button>
       </div>
       <div class="grid">${p.files.map(f=>`
         <div class="tile" data-file="${f}"><img src="media/persons/${slug}/${f}" loading="lazy" style="cursor:zoom-in"
@@ -701,19 +858,21 @@ async function renderPersons(){
   const favs=entries.filter(([,p])=>p.favorite);
   const rest=entries.filter(([,p])=>!p.favorite);
   let body='';
-  if(favs.length) body+=`<h2>★ Favorites (${favs.length})</h2>`+favs.map(([s,p])=>personCard(s,p)).join('');
-  if(rest.length) body+=`<h2>${favs.length?'Others':'Persons'} (${rest.length})</h2>`+rest.map(([s,p])=>personCard(s,p)).join('');
-  if(!entries.length) body='<div class="empty">No persons yet.</div>';
+  if(favs.length) body+=`<h2>★ מועדפים (${favs.length})</h2>`+favs.map(([s,p])=>personCard(s,p)).join('');
+  if(rest.length) body+=`<h2>${favs.length?'אנשים נוספים':'אנשים מוכרים'} (${rest.length})</h2>`+rest.map(([s,p])=>personCard(s,p)).join('');
+  if(!entries.length) body='<div class="friendly-empty">עדיין אין אנשים מוכרים. צרו אדם והוסיפו כמה תמונות מזוויות שונות.</div>';
   const jump=entries.length>3?`
       <select id="pjump" title="jump to a person" onchange="if(this.value){document.getElementById('p-'+this.value).scrollIntoView({behavior:'smooth',block:'start'});this.value='';}">
-        <option value="">Jump to…</option>${personOptions('')}
+        <option value="">מעבר מהיר לאדם…</option>${personOptions('')}
       </select>`:'';
-  main.innerHTML=`
+  main.innerHTML=`<div class="dashboard" dir="rtl">
+    <div class="welcome-card"><div><span class="eyebrow">גלריית האנשים</span><h3>כאן מלמדים את המערכת את מי לזהות</h3>
+      <p>לאיכות טובה מומלץ לשמור 5–10 תמונות ברורות לכל אדם, מזוויות ותאורה שונות. אין צורך בעשרות תמונות דומות.</p></div></div>
     <div class="row">
-      <input id="pname" placeholder="New person…" size="18" title="create an empty person, then upload photos or assign faces from the unknown queue">
-      <button class="act" onclick="createPerson()">CREATE</button>
+      <input id="pname" placeholder="שם האדם החדש…" size="18" title="יצירת אדם חדש ולאחר מכן הוספת תמונות">
+      <button class="act" onclick="createPerson()">יצירת אדם</button>
       <span style="flex:1"></span>${jump}
-    </div>`+body;
+    </div>${body}</div>`;
 }
 async function clearTrimmed(slug,name){
   if(!confirm('Delete all set-aside photos of "'+name+'"? Your active reference photos stay.'))return;
@@ -736,12 +895,12 @@ async function toggleFav(slug,fav){
 }
 async function createPerson(){const n=$('#pname').value.trim();if(!n)return;
   await j('api/persons',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
-  toast(`Created "${n}"`);render()}
+  toast(`האדם "${n}" נוצר`);render()}
 async function upload(slug,inp){
   const fd=new FormData();[...inp.files].forEach(f=>fd.append('files',f));
-  toast(`Processing ${inp.files.length} photo(s)…`);
+  toast(`מעבד ${inp.files.length} תמונות…`);
   const r=await j(`api/persons/${slug}/photos`,{method:'POST',body:fd});
-  toast(`${r.added} enrolled${r.skipped.length?`, ${r.skipped.length} skipped`:''}`);render()}
+  toast(`${r.added} תמונות נוספו${r.skipped.length?`, ${r.skipped.length} לא התאימו`:''}`);render()}
 async function delFace(slug,f){await j(`api/persons/${slug}/faces/${f}`,{method:'DELETE'});render()}
 async function unassignFace(slug,f){await j(`api/persons/${slug}/faces/${f}/unassign`,{method:'POST'});
   toast('Face moved back to the unknown queue');render()}

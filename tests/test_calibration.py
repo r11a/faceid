@@ -13,6 +13,13 @@ def event(event_id, truth, observations, camera="front"):
 
 
 class CalibrationTests(unittest.TestCase):
+    def test_empty_calibration_does_not_invent_a_recommendation(self):
+        report = build_calibration_report(
+            [], current_threshold=.5, current_margin=.08, confirmations=2,
+        )
+        self.assertFalse(report["ready"])
+        self.assertIsNone(report["recommended"])
+
     def test_calibration_is_event_level_and_counts_false_accepts(self):
         rows = [
             event("known", "Alice", [

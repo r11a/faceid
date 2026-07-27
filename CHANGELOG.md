@@ -3,6 +3,20 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 1.0.1 — 2026-07-27
+
+- **Friendly Hebrew dashboard:** a new home screen shows real person photos, last seen
+  camera/time, today and weekly activity, average confidence and recent recognitions.
+- **Simpler workflow:** clear Hebrew navigation, onboarding guidance, a friendlier review
+  queue, plain-language activity decisions and advanced thresholds hidden by default.
+- **Person statistics:** total, daily, 7/30-day appearances, average confidence, last and
+  most frequent camera are calculated from finalized recognition events.
+- **Home Assistant person devices:** six MQTT-discovered entities per enrolled person
+  expose location, last-seen timestamp, recent presence, daily/total counts and average
+  confidence, with richer statistics as attributes.
+- **Safer calibration:** processing events cannot be labelled, and FaceID no longer shows
+  an invented recommendation before real labelled evidence exists.
+
 ## 1.0.0 — 2026-07-27
 
 - **Recorded-clip evidence:** finished events are sampled across diverse frames, all
