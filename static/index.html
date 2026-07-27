@@ -6,21 +6,21 @@
 <title>FaceID</title>
 <style>
 :root{
-  --bg:#0b1020;--panel:#121a2d;--panel2:#18233b;--line:#283652;
-  --fg:#f2f6ff;--dim:#98a5bd;--acc:#79e6a5;--accent2:#7aa8ff;
-  --warn:#ffc66d;--bad:#ff7d8c;--good:#79e6a5;
+  --bg:#111213;--panel:#1b1d1f;--panel2:#25282b;--line:#3a3d40;
+  --fg:#f1f1ef;--dim:#aaa9a5;--acc:#88d498;--accent2:#b8babd;
+  --warn:#e7b96b;--bad:#ef7c87;--good:#88d498;
   --mono:ui-monospace,"SF Mono",Menlo,monospace;--sans:system-ui,-apple-system,sans-serif;
 }
 *{box-sizing:border-box;margin:0}
-body{background:radial-gradient(circle at 15% 0,#152544 0,transparent 36%),var(--bg);
+body{background:radial-gradient(circle at 15% 0,#2b2d30 0,transparent 38%),var(--bg);
   color:var(--fg);font:14px/1.55 var(--sans);min-height:100vh}
 header{display:flex;align-items:center;gap:14px;padding:17px clamp(16px,3vw,36px);
-  border-bottom:1px solid var(--line);background:#0b1020dd;backdrop-filter:blur(16px);position:sticky;top:0;z-index:5}
+  border-bottom:1px solid var(--line);background:#141516e8;backdrop-filter:blur(16px);position:sticky;top:0;z-index:5}
 header h1{font:800 18px var(--sans);color:var(--fg);letter-spacing:.02em}
 header h1 span{color:var(--acc)}
 header .stat{font:12px var(--sans);color:var(--dim);padding:6px 10px;background:var(--panel);border-radius:99px}
 nav{display:flex;gap:6px;border-bottom:1px solid var(--line);padding:8px clamp(12px,3vw,32px);
-  overflow-x:auto;background:#0b1020bb;position:sticky;top:66px;z-index:4;backdrop-filter:blur(16px)}
+  overflow-x:auto;background:#141516d9;position:sticky;top:66px;z-index:4;backdrop-filter:blur(16px)}
 nav button{background:none;border:0;border-radius:9px;color:var(--dim);
   font:600 13px var(--sans);padding:9px 14px;cursor:pointer;white-space:nowrap}
 nav button.on{color:#07130d;background:var(--acc)}
@@ -89,13 +89,13 @@ button:disabled{opacity:.38!important;cursor:not-allowed!important}
 .dashboard{direction:rtl;text-align:right}
 .dashboard td,.dashboard th{text-align:right}
 .welcome-card{display:flex;align-items:center;justify-content:space-between;gap:18px;
-  border:1px solid var(--line);border-radius:18px;padding:20px;background:linear-gradient(145deg,#182742,#11192c)}
+  border:1px solid var(--line);border-radius:18px;padding:20px;background:linear-gradient(145deg,#2a2c2f,#191a1c)}
 .welcome-card h3{font-size:20px;margin-bottom:4px}.welcome-card p{color:var(--dim);max-width:760px}
 details{border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin:10px 0 20px}
 details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 .hero{display:grid;grid-template-columns:1.4fr .8fr;gap:18px;align-items:stretch;margin-bottom:20px}
 .hero-main,.guide-card{border:1px solid var(--line);border-radius:20px;padding:24px;
-  background:linear-gradient(145deg,#182742,#11192c);box-shadow:0 18px 50px #02050d66}
+  background:linear-gradient(145deg,#2a2c2f,#191a1c);box-shadow:0 18px 50px #00000066}
 .eyebrow{color:var(--acc);font-weight:750;font-size:12px;letter-spacing:.08em;margin-bottom:8px}
 .hero h1{font-size:clamp(26px,4vw,44px);line-height:1.1;max-width:760px}
 .hero p{color:var(--dim);font-size:16px;margin-top:12px;max-width:720px}
@@ -122,8 +122,11 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 .recent-list{display:grid;gap:8px}.recent-item{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
   background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:11px 13px}
 .recent-item .time{color:var(--dim);font-size:12px}.score-good{color:var(--good)}
+.event-thumb{width:72px;height:72px;border-radius:12px;object-fit:cover;display:block;
+  border:1px solid var(--line);cursor:zoom-in;background:var(--panel2)}
+.event-photo{width:86px}.photo-missing{font-size:11px;color:var(--dim);display:block;max-width:75px}
 .guide-list{display:grid;gap:12px;margin-top:15px}.guide-step{display:flex;gap:11px;align-items:flex-start}
-.step-num{flex:0 0 28px;height:28px;display:grid;place-items:center;border-radius:9px;background:var(--accent2);color:#071126;font-weight:800}
+.step-num{flex:0 0 28px;height:28px;display:grid;place-items:center;border-radius:9px;background:var(--acc);color:#132018;font-weight:800}
 .friendly-empty{padding:28px;border:1px dashed var(--line);border-radius:16px;color:var(--dim);text-align:center}
 .status-recognized{color:var(--good)}.status-review{color:var(--warn)}.status-no-face{color:var(--dim)}.status-processing{color:var(--accent2)}
 @media(max-width:850px){.hero{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}nav{top:64px}}
@@ -569,6 +572,11 @@ async function renderActivity(){
     ...names.map(name=>`<option value="${esc(name)}"${current===name?' selected':''}>${esc(name)}</option>`)
   ].join('');
   const rows=data.events.map(event=>`<tr>
+    <td class="event-photo"><img class="event-thumb" src="api/activity/${encodeURIComponent(event.event_id)}/image"
+      loading="lazy" alt="תמונת האירוע" title="לחיצה להגדלה"
+      data-caption="${esc(event.camera)} · ${fmtTs(event.start_ts||event.updated_ts)}"
+      onclick="showFull(this.src,this.dataset.caption)"
+      onerror="this.parentElement.innerHTML='<span class=&quot;photo-missing&quot;>התמונה כבר לא זמינה ב־Frigate</span>'"></td>
     <td>${fmtTs(event.start_ts||event.updated_ts)}</td>
     <td>${esc(event.camera)}</td>
     <td class="${decisionInfo(event.status)[1]}" title="${decisionInfo(event.status)[2]}">${decisionInfo(event.status)[0]}</td>
@@ -587,10 +595,10 @@ async function renderActivity(){
       <button class="act" onclick="searchActivity()">חיפוש</button>
       <span class="stat">${healthData.ai.enabled?'חיפוש AI חכם פעיל':'חיפוש טקסט רגיל פעיל'}</span>
     </div>
-    <h2>אירועי זיהוי</h2><p class="stat">אפשר לאמת מדי פעם מי באמת הופיע וכך לקבל כיול אמין לבית שלך.</p>
-    <div style="overflow:auto"><table><thead><tr><th>זמן</th><th>מצלמה</th><th>החלטה</th>
+    <h2>אירועי זיהוי</h2><p class="stat">בדקו את התמונה ורק אז בחרו מי באמת הופיע. לחיצה על התמונה מגדילה אותה.</p>
+    <div style="overflow:auto"><table><thead><tr><th>תמונה</th><th>זמן</th><th>מצלמה</th><th>החלטה</th>
       <th>אדם</th><th>ביטחון</th><th>קבוצה</th><th>הקשר AI</th><th>אימות שלך</th></tr></thead>
-      <tbody id="activityRows">${rows||'<tr><td colspan="8">עדיין אין אירועים.</td></tr>'}</tbody></table></div>
+      <tbody id="activityRows">${rows||'<tr><td colspan="9">עדיין אין אירועים.</td></tr>'}</tbody></table></div>
     <h2>מעבר בין מצלמות</h2><table><thead><tr><th>התחלה</th><th>אדם</th><th>מצב</th><th>מצלמות</th><th>אירועים</th></tr></thead>
       <tbody>${scenarios||'<tr><td colspan="5">עדיין לא זוהה מעבר בין מצלמות.</td></tr>'}</tbody></table></div>`;
 }
@@ -604,10 +612,15 @@ async function labelEvent(eventId,label){
 async function searchActivity(){
   const q=$('#activitySearch').value.trim();
   const data=await j('api/search?q='+encodeURIComponent(q));
-  const rows=data.events.map(event=>`<tr><td>${fmtTs(event.start_ts)}</td><td>${esc(event.camera)}</td>
+  const rows=data.events.map(event=>`<tr>
+    <td class="event-photo"><img class="event-thumb" src="api/activity/${encodeURIComponent(event.event_id)}/image"
+      loading="lazy" alt="תמונת האירוע" data-caption="${esc(event.camera)} · ${fmtTs(event.start_ts)}"
+      onclick="showFull(this.src,this.dataset.caption)"
+      onerror="this.parentElement.innerHTML='<span class=&quot;photo-missing&quot;>התמונה אינה זמינה</span>'"></td>
+    <td>${fmtTs(event.start_ts)}</td><td>${esc(event.camera)}</td>
     <td class="${decisionInfo(event.status)[1]}">${decisionInfo(event.status)[0]}</td><td>${esc(event.person||event.probable_person||'—')}</td>
-    <td>${metric(event.score)}</td><td>${esc(event.scenario_id||'—')}</td><td>${esc(event.ai_description||'—')}</td><td>${event.semantic_score==null?'':metric(event.semantic_score)}</td></tr>`).join('');
-  $('#activityRows').innerHTML=rows||'<tr><td colspan="8">לא נמצאו אירועים מתאימים.</td></tr>';
+    <td>${metric(event.score)}</td><td>${esc(event.scenario_id||'—')}</td><td>${esc(event.ai_description||'—')}</td><td>—</td></tr>`).join('');
+  $('#activityRows').innerHTML=rows||'<tr><td colspan="9">לא נמצאו אירועים מתאימים.</td></tr>';
 }
 async function renderCalibration(){
   const report=await j('api/calibration');

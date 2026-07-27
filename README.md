@@ -74,7 +74,8 @@ MQTT -> Home Assistant:  sensor.faceid_<camera>  +  faceid/event (JSON)
 ## Activity, calibration and automation
 
 The **Activity** tab shows each final decision, evidence, scenario and optional context.
-Label complete events as a known person or **Unknown person**. The **Calibration** tab
+Each row includes the captured face and an enlarged preview, so labels are based on
+visual evidence. Label complete events as a known person or **Unknown person**. The **Calibration** tab
 then measures TAR, FAR and FRR by camera and person and recommends a threshold/margin
 for the configured false-accept target. It intentionally keeps all frames from one event
 together; random frame splitting would produce misleadingly optimistic accuracy.

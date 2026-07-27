@@ -379,6 +379,8 @@ class EventProcessor:
             )
 
         if decision.status == "ignored":
+            if self.audit:
+                self.audit.save_evidence(eid, crop_face(img, face.bbox))
             st["best_unknown"] = None
             st["done"] = True
             st["final_decision"] = decision
@@ -407,6 +409,8 @@ class EventProcessor:
         )
 
         if decision.status == "recognized":
+            if self.audit:
+                self.audit.save_evidence(eid, crop)
             st["best_score"], st["best_person"] = decision.score, decision.person
             st["done"] = True
             st["final_decision"] = decision
@@ -560,6 +564,8 @@ class EventProcessor:
                          "margin": round(u.get("margin", 0.0), 3)},
                         full_bgr=full,
                     )
+                    if self.audit:
+                        self.audit.save_evidence(eid, crop)
                     final_status = u.get("decision", "unknown")
                     final_person = u.get("guess")
                     final_score = u["guess_score"]

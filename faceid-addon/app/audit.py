@@ -1,4 +1,5 @@
 """Persistent, append-only recognition audit backed by SQLite."""
+import hashlib
 import sqlite3
 import threading
 import time
@@ -10,9 +11,39 @@ class AuditStore:
     def __init__(self, path: Path, retention_days: int = 90):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.evidence_dir = self.path.parent / "audit_images"
+        self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._init_db()
         self.prune(retention_days)
+
+    def evidence_path(self, event_id: str) -> Path:
+        safe_name = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+        return self.evidence_dir / f"{safe_name}.jpg"
+
+    def save_evidence(self, event_id: str, image) -> Path | None:
+        """Persist a compact review image so verification survives Frigate retention."""
+        if image is None:
+            return None
+        temporary = None
+        try:
+            import cv2
+
+            ok, encoded = cv2.imencode(
+                ".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 88]
+            )
+            if not ok:
+                return None
+            target = self.evidence_path(event_id)
+            temporary = target.with_suffix(".tmp")
+            temporary.write_bytes(encoded.tobytes())
+            temporary.replace(target)
+            return target
+        except (OSError, ValueError):
+            return None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def _connect(self):
         con = sqlite3.connect(self.path, timeout=10)
@@ -243,6 +274,12 @@ class AuditStore:
                 (cutoff,),
             )
             con.execute("DELETE FROM scenarios WHERE end_ts < ?", (cutoff,))
+        for image in self.evidence_dir.glob("*.jpg"):
+            try:
+                if image.stat().st_mtime < cutoff:
+                    image.unlink()
+            except OSError:
+                pass
 
     def recent(self, limit: int = 100, status: str | None = None):
         sql = """
