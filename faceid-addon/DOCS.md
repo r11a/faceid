@@ -4,7 +4,7 @@ Face recognition for [Frigate](https://frigate.video): confirmed people are publ
 to MQTT (sensors appear automatically), optionally written back as `sub_label`, and
 unknown faces land in a review UI (side panel) where you assign them with one click.
 
-Full documentation: https://github.com/SkyTechNerds/faceid
+Full documentation: https://github.com/r11a/faceid
 
 ## Setup
 
