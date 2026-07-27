@@ -5,6 +5,11 @@ on top of [Frigate](https://frigate.video). It uses the same model family as Imm
 CompreFace (**InsightFace `buffalo_l`**: SCRFD detection + ArcFace embeddings) and was
 built because Frigate's built-in face recognition UX didn't cut it:
 
+The 1.0 pipeline evaluates diverse, quality-ranked faces from the finished Frigate
+clip, keeps a durable decision audit, measures false accepts/rejects from operator
+labels, and emits conservative cross-camera scenarios. Optional local AI adds searchable
+security context, but neither AI nor clothing appearance is allowed to declare identity.
+
 - **No train-tab treadmill.** Matching is nearest-neighbor over face embeddings — every
   image you assign is a visible reference point, with no training cycles and no queue
   that refills with already-known faces. To be clear: this is not immune to bad data —
@@ -28,7 +33,7 @@ built because Frigate's built-in face recognition UX didn't cut it:
   can restore it. The cap is adjustable in the Settings tab.
 - **Home Assistant native.** MQTT discovery sensors per camera (presence-window state like
   `Alice, Bob` → `nobody`), plus a per-recognition event topic for automations.
-- **Tags flow back to Frigate.** Recognized names are written as `sub_label`, so you can
+- **Optional Frigate write-back.** Confirmed names can be written as `sub_label`, so you can
   filter clips by person in Frigate's Explore view — including retroactively: the history
   scan tags past events, and assigning a face in the review UI tags its original event too.
 - **Yours to keep.** A Settings tab holds the matching thresholds (live-editable) plus
@@ -53,15 +58,33 @@ click, or scan your camera history to bootstrap the gallery:
 
 ```
 Frigate --MQTT frigate/events--> FaceID
-   ^                                |  snapshot.jpg?crop=1 (person crop)
+   ^                                |  several distinct person snapshots
    |                                v
-   +--API sub_label---------- InsightFace buffalo_l -> cosine match vs. gallery
+   +--optional sub_label------ InsightFace -> top-2 gallery matches
                                     |
-        match >= 0.50 -> publish person + tag Frigate event
-        below         -> review queue (clustered in the web UI)
+        score + runner-up margin + repeated agreement -> recognized
+        below unknown threshold                       -> unknown
+        otherwise                                     -> ambiguous review
 
 MQTT -> Home Assistant:  sensor.faceid_<camera>  +  faceid/event (JSON)
 ```
+
+## Activity, calibration and automation
+
+The **Activity** tab shows each final decision, evidence, scenario and optional context.
+Label complete events as a known person or **Unknown person**. The **Calibration** tab
+then measures TAR, FAR and FRR by camera and person and recommends a threshold/margin
+for the configured false-accept target. It intentionally keeps all frames from one event
+together; random frame splitting would produce misleadingly optimistic accuracy.
+
+Automation consumers should use `faceid/v1/events`; the legacy `faceid/event` topic
+remains for compatibility. The v1 payload contains a schema version, final decision,
+evidence, scenario and any appearance hint. Home Assistant device triggers are
+discovered automatically, and standalone installs can configure asynchronous webhooks.
+
+Optional AI context uses an Ollama-compatible `/api/generate` and `/api/embed` service
+for factual scene descriptions, tags and searches such as “red backpack”. It is never
+used for recognition, Frigate `sub_label`, or ground truth.
 
 ## Local-only, and what gets downloaded
 
@@ -74,8 +97,10 @@ recognition model itself, once, on first start:
 - **From where:** the official [InsightFace GitHub release](https://github.com/deepinsight/insightface/releases/tag/v0.7)
 - **Size:** ~300 MB, cached on disk afterwards (survives restarts and app updates)
 
-After that download, FaceID works completely offline. Your camera images and face data
-never leave your machine.
+After that download, core recognition works completely offline. Your camera images and
+face data never leave your machine. If AI context is enabled, frames are sent only to
+the explicitly configured Ollama-compatible URL; use a local address to keep all data
+on your network.
 
 ## Requirements
 
@@ -409,13 +434,19 @@ that matter most:
 | Option | Meaning |
 |---|---|
 | `match_threshold` (0.50) | raise if strangers get matched to known persons, lower if known persons end up in the review queue |
+| `unknown_threshold` (0.35) | below this the face is a clear unknown; the band above it is ambiguous |
+| `match_margin` (0.08) | required lead over the second-best enrolled person |
+| `min_confirmations` (2) | distinct agreeing frames required before publishing or ignoring |
 | `cluster_eps` (0.55) | raise to merge unknown clusters more aggressively, lower if different people land in one cluster |
 | `match_top_k` (3) | a person's score is the mean of their top-k reference similarities — dampens photo-count bias (1 = raw max) |
 | `max_faces_per_person` (40) | soft cap; adding more drops the most redundant reference (0 = unlimited) |
 | `ignore_threshold` (= match_threshold) | similarity at which a face counts as ignored |
+| `ignore_margin` (0.12) | required lead of an ignore anchor over the best enrolled person |
 | `ignore_learning` (true) | learn new looks of ignored people as additional anchors (guarded) |
 | `hires_enroll` (true) | fetch new review-queue faces from the recording (sharper references) |
 | `poll_interval` (0) | seconds; >0 also polls Frigate's event API for events MQTT never announces |
+| `set_sub_label` (false) | opt in to writing confirmed names back to Frigate |
+| `audit_retention_days` (90) | retention for the SQLite decision/evidence history |
 
 ## License
 

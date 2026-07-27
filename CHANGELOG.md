@@ -3,6 +3,36 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 1.0.0 — 2026-07-27
+
+- **Recorded-clip evidence:** finished events are sampled across diverse frames, all
+  faces are quality-scored, and the relevant face track is selected before consensus.
+- **Hardware backends:** automatic CPU, CUDA or OpenVINO provider selection with
+  provider details in the health endpoint.
+- **Durable processing:** snapshot and clip jobs survive restarts and retry safely.
+- **Measured calibration:** Activity labels complete events and reports TAR/FAR/FRR
+  globally, by camera and by person, with target-FAR-safe threshold recommendations.
+- **Cross-camera scenarios:** visits require a confirmed identity or short-lived
+  appearance hint. Appearance Re-ID never becomes a face identity verdict.
+- **Automation API v1:** stable MQTT event/scenario payloads, Home Assistant device
+  triggers, optional asynchronous webhooks and cooldown.
+- **Optional local AI context:** Ollama-compatible descriptions, tags and semantic
+  Activity search. AI is explicitly barred from identifying people.
+- **New Activity and Calibration UI** with evidence, scenarios and ground-truth labels.
+
+## 0.7.0 — 2026-07-27
+
+- **Multi-frame decisions:** a person is published only after distinct frames agree.
+- **Open-set safety:** recognition and ignore decisions require a configurable lead over
+  the runner-up; `unknown_threshold` now creates a real unknown/ambiguous boundary.
+- **Persistent audit:** SQLite records event verdicts and the evidence behind them, with
+  configurable retention and a read-only `/api/audit` endpoint.
+- **Safer integration:** Frigate write-back is opt-in by default and also applies to
+  manual assignment/backfill paths.
+- **Durability and privacy:** gallery metadata uses atomic replacement, nested person
+  deletion is safe, and the web server exposes only JPEG media instead of all of `data/`.
+- Dependency versions are pinned and decision/audit/gallery regression tests run in CI.
+
 ## 0.6.13 — 2026-07-26
 
 - **Log messages are English now.** README, UI, docs and changelog were English while the

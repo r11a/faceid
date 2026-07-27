@@ -1,5 +1,5 @@
 name: FaceID
-version: "0.6.13"
+version: "1.0.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/SkyTechNerds/faceid
@@ -22,6 +22,7 @@ services:
   - mqtt:want
 options:
   mqtt_prefix: faceid
+  backend: auto
   frigate_url: http://192.168.1.10:5000
   mqtt_host: ""
   mqtt_port: 1883
@@ -29,23 +30,44 @@ options:
   mqtt_password: ""
   match_threshold: 0.5
   unknown_threshold: 0.35
+  match_margin: 0.08
+  min_confirmations: 2
+  min_face_quality: 0.35
+  clip_analysis: true
+  clip_max_frames: 24
+  clip_max_samples: 8
   cluster_eps: 0.55
   suggest_threshold: 0.40
   max_faces_per_person: 40
   trimmed_keep: 10
   dedupe_threshold: 0.65
+  ignore_margin: 0.12
   hires_enroll: true
   frigate_topic_prefix: frigate
   poll_interval: 0
   backup_enabled: false
   backup_hour: 3
   backup_keep: 7
+  audit_retention_days: 90
   presence_window: 120
-  set_sub_label: true
+  calibration_target_far: 0.01
+  scenario_window: 90
+  camera_graph_json: "{}"
+  reid_enabled: true
+  reid_ttl: 180
+  reid_threshold: 0.90
+  automation_cooldown: 60
+  webhook_urls: []
+  ai_enabled: false
+  ai_url: http://localhost:11434
+  ai_vision_model: gemma3:4b
+  ai_embedding_model: embeddinggemma
+  set_sub_label: false
   cameras: []
   discovery_cameras: []
 schema:
   mqtt_prefix: str
+  backend: list(auto|cpu|cuda|openvino)
   frigate_url: url
   mqtt_host: str?
   mqtt_port: port
@@ -53,18 +75,39 @@ schema:
   mqtt_password: password?
   match_threshold: float(0.2,0.9)
   unknown_threshold: float(0.1,0.8)
+  match_margin: float(0.0,0.5)
+  min_confirmations: int(1,6)
+  min_face_quality: float(0.0,1.0)
+  clip_analysis: bool
+  clip_max_frames: int(4,120)
+  clip_max_samples: int(2,30)
   cluster_eps: float(0.3,0.8)
   suggest_threshold: float(0.1,0.9)
   max_faces_per_person: int(5,100)
   trimmed_keep: int(0,100)
   dedupe_threshold: float(0.50,0.95)
+  ignore_margin: float(0.0,0.5)
   hires_enroll: bool
   frigate_topic_prefix: str?
   poll_interval: int(0,3600)
   backup_enabled: bool
   backup_hour: int(0,23)
   backup_keep: int(1,90)
+  audit_retention_days: int(0,3650)
   presence_window: int(10,3600)
+  calibration_target_far: float(0.0,0.5)
+  scenario_window: int(5,900)
+  camera_graph_json: str
+  reid_enabled: bool
+  reid_ttl: int(10,1800)
+  reid_threshold: float(0.5,1.0)
+  automation_cooldown: int(0,3600)
+  webhook_urls:
+    - url
+  ai_enabled: bool
+  ai_url: url
+  ai_vision_model: str
+  ai_embedding_model: str
   set_sub_label: bool
   cameras:
     - str

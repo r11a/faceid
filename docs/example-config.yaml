@@ -12,6 +12,7 @@ mqtt:
 
 faceid:
   port: 8600                           # web UI / API port
+  backend: auto                        # auto, cpu, cuda or openvino
   # MQTT topic prefix + client id — change only when running multiple instances
   mqtt_prefix: faceid
   # Cosine-similarity thresholds (ArcFace embeddings):
@@ -20,6 +21,8 @@ faceid:
   #   in between           -> uncertain; goes to the review queue only
   match_threshold: 0.50
   unknown_threshold: 0.35
+  match_margin: 0.08                  # best match must lead the runner-up by this much
+  min_confirmations: 2                # distinct agreeing frames required before publishing
   # A match score is the mean of the top-k most similar reference photos of a person.
   # Higher resists a single lucky photo, but drags down people whose references cover
   # many angles — their own less similar photos pull the mean. Measure before changing:
@@ -33,10 +36,16 @@ faceid:
                                        # the detect snapshot — typically twice the face size
   ignore_threshold: 0.50               # similarity at which a face counts as ignored
                                        # (defaults to match_threshold when unset)
+  ignore_margin: 0.12                  # ignore must beat every enrolled person by this much
   ignore_learning: true                # learn new looks of ignored people as extra anchors
   min_face_px: 48                      # minimum face size in the snapshot (pixels)
+  min_face_quality: 0.35               # blur/light/pose/size gate before matching
   det_size: 640                        # detection input size (higher = better far faces, slower)
   max_attempts: 6                      # recognition attempts per Frigate event
+  clip_analysis: true                  # sample the finished clip for diverse, stronger evidence
+  clip_max_frames: 24
+  clip_max_samples: 8
+  audit_retention_days: 90             # SQLite decision history (0 = keep forever)
   frigate_topic_prefix: frigate        # must match `mqtt.topic_prefix` in Frigate's config
   poll_interval: 0                     # seconds; >0 also polls Frigate's event API.
                                        # Catches events MQTT never announces — notably
@@ -49,8 +58,24 @@ faceid:
   # "Looks like <person>" suggestion with the dropdown pre-selected. Keep below
   # match_threshold so borderline faces are pre-sorted without weak-match noise.
   suggest_threshold: 0.40
-  set_sub_label: true                  # write recognized names back to Frigate events
+  set_sub_label: false                 # opt-in: write confirmed names back to Frigate events
   presence_window: 120                 # camera sensor shows everyone seen within this window (s)
+  calibration_target_far: 0.01         # maximum false-accept rate for recommendations
+  scenario_window: 90                  # seconds for a visit to continue across cameras
+  camera_graph:                        # optional adjacency; omit to allow every camera transition
+    front_door: [hall]
+    hall: [front_door, garden]
+    garden: [hall]
+  reid_enabled: true                   # clothing continuity hint; never declares face identity
+  reid_ttl: 180
+  reid_threshold: 0.90
+  automation_cooldown: 60
+  webhook_urls: []                     # receive the same versioned payload as faceid/v1/events
+  ai_enabled: false                    # optional local Ollama vision + semantic event search
+  ai_url: http://localhost:11434
+  ai_vision_model: gemma3:4b
+  ai_embedding_model: embeddinggemma
+  ai_timeout: 45
   # process events only from these cameras (empty = all cameras)
   cameras: []
   # cameras that get a Home Assistant discovery sensor (sensor.faceid_<camera>)

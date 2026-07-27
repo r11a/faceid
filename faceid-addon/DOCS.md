@@ -1,7 +1,7 @@
 # FaceID App
 
-Face recognition for [Frigate](https://frigate.video): recognized people are published
-to MQTT (sensors appear automatically), written back to Frigate as `sub_label`, and
+Face recognition for [Frigate](https://frigate.video): confirmed people are published
+to MQTT (sensors appear automatically), optionally written back as `sub_label`, and
 unknown faces land in a review UI (side panel) where you assign them with one click.
 
 Full documentation: https://github.com/SkyTechNerds/faceid
@@ -24,11 +24,25 @@ Full documentation: https://github.com/SkyTechNerds/faceid
 |---|---|
 | `frigate_url` | Base URL of your Frigate instance |
 | `mqtt_*` | Leave empty to use the internal Mosquitto app automatically |
+| `backend` | `auto`, `cpu`, `cuda` or `openvino`; explicit modes fail fast when unavailable |
 | `match_threshold` | ≥ this cosine similarity = recognized (raise if strangers get misassigned) |
 | `unknown_threshold` | < this = definitely unknown |
+| `match_margin` | required lead over the runner-up before a match can count |
+| `min_confirmations` | distinct agreeing frames required before publishing |
+| `min_face_quality` | reject weak size, blur, lighting and pose evidence |
+| `clip_analysis` / `clip_max_*` | sample diverse faces from the finished recording |
 | `cluster_eps` | how aggressively unknown faces are grouped in the review UI |
 | `presence_window` | camera sensor lists everyone seen within this many seconds |
-| `set_sub_label` | write recognized names back to Frigate events |
+| `calibration_target_far` | false-accept target for calibration recommendations |
+| `scenario_window` | maximum gap between identity-linked cross-camera events |
+| `camera_graph_json` | JSON camera adjacency map, e.g. `{"front":["hall"]}` |
+| `reid_*` | short-lived clothing hint; it never becomes a face identity verdict |
+| `automation_cooldown` | duplicate suppression for versioned automation events |
+| `webhook_urls` | optional HTTP endpoints receiving the same final v1 event |
+| `ai_*` | optional local Ollama-compatible context and semantic search |
+| `set_sub_label` | opt in to writing confirmed names back to Frigate events |
+| `ignore_margin` | ignore match must beat the best enrolled person by this much |
+| `audit_retention_days` | days to keep the SQLite decision history (0 = forever) |
 | `cameras` | process only these cameras (empty = all) |
 | `discovery_cameras` | cameras that get a Home Assistant sensor |
 | `suggest_threshold` | score at which unknown faces are grouped into a "looks like <person>" suggestion |
