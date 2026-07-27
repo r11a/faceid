@@ -479,6 +479,45 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             "scenarios": processor.audit.recent_scenarios(limit=limit),
         }
 
+    @app.get("/api/dashboard")
+    def dashboard():
+        people = gallery.persons()
+        stats = processor.audit.person_statistics() if processor.audit else {}
+        cards = []
+        for slug, person in people.items():
+            person_stats = stats.get(person["name"], {})
+            files = person.get("files") or []
+            cards.append({
+                "slug": slug,
+                "name": person["name"],
+                "photo": f"media/persons/{slug}/{files[0]}" if files else None,
+                "reference_photos": int(person.get("count", len(files))),
+                "favorite": bool(person.get("favorite")),
+                "appearances": int(person_stats.get("appearances", 0)),
+                "today": int(person_stats.get("today", 0)),
+                "last_7_days": int(person_stats.get("last_7_days", 0)),
+                "last_30_days": int(person_stats.get("last_30_days", 0)),
+                "avg_score": float(person_stats.get("avg_score", 0)),
+                "last_seen": person_stats.get("last_seen"),
+                "last_camera": person_stats.get("last_camera"),
+                "last_score": float(person_stats.get("last_score", 0)),
+                "top_camera": person_stats.get("top_camera"),
+                "cameras": person_stats.get("cameras", []),
+            })
+        cards.sort(key=lambda item: (
+            not item["favorite"], -(item["last_seen"] or 0), item["name"].casefold()
+        ))
+        return {
+            "summary": (
+                processor.audit.dashboard_summary() if processor.audit else {}
+            ),
+            "people": cards,
+            "recent": (
+                processor.audit.recent(limit=8, status="recognized")
+                if processor.audit else []
+            ),
+        }
+
     @app.get("/api/search")
     def search(q: str = "", limit: int = 50):
         if processor.audit is None:
@@ -508,7 +547,14 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         labels = {person["name"] for person in gallery.persons().values()}
         if body.label != UNKNOWN_LABEL and body.label not in labels:
             raise HTTPException(400, "Ground truth must be a known person or __unknown__")
-        if processor.audit is None or not processor.audit.set_ground_truth(event_id, body.label):
+        if processor.audit is None:
+            raise HTTPException(404, "Audit is not available")
+        detail = processor.audit.event_detail(event_id)
+        if detail is None:
+            raise HTTPException(404, "Unknown event")
+        if detail["event"]["status"] == "processing":
+            raise HTTPException(409, "Wait for the event to finish before labeling it")
+        if not processor.audit.set_ground_truth(event_id, body.label):
             raise HTTPException(404, "Unknown event")
         return {"ok": True, "event_id": event_id, "label": body.label}
 

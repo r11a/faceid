@@ -317,10 +317,81 @@ class AuditStore:
         with self._lock, self._connection() as con:
             cur = con.execute(
                 "UPDATE events SET ground_truth=?, ground_truth_ts=?, updated_ts=? "
-                "WHERE event_id=?",
+                "WHERE event_id=? AND status!='processing'",
                 (label, time.time(), time.time(), event_id),
             )
             return cur.rowcount > 0
+
+    def person_statistics(self):
+        now = time.time()
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            totals = con.execute(
+                """
+                SELECT person, COUNT(*) AS appearances, AVG(score) AS avg_score,
+                       MAX(start_ts) AS last_seen,
+                       SUM(CASE WHEN date(start_ts, 'unixepoch', 'localtime')
+                                      = date('now', 'localtime')
+                                THEN 1 ELSE 0 END) AS today,
+                       SUM(CASE WHEN start_ts>=? THEN 1 ELSE 0 END) AS last_7_days,
+                       SUM(CASE WHEN start_ts>=? THEN 1 ELSE 0 END) AS last_30_days
+                FROM events
+                WHERE status='recognized' AND person IS NOT NULL
+                GROUP BY person
+                """,
+                (now - 7 * 86400, now - 30 * 86400),
+            ).fetchall()
+            result = {}
+            for raw in totals:
+                row = dict(raw)
+                last = con.execute(
+                    """
+                    SELECT camera, score, event_id FROM events
+                    WHERE status='recognized' AND person=?
+                    ORDER BY start_ts DESC LIMIT 1
+                    """,
+                    (row["person"],),
+                ).fetchone()
+                cameras = con.execute(
+                    """
+                    SELECT camera, COUNT(*) AS count FROM events
+                    WHERE status='recognized' AND person=?
+                    GROUP BY camera ORDER BY count DESC, camera
+                    """,
+                    (row["person"],),
+                ).fetchall()
+                result[row["person"]] = {
+                    **row,
+                    "avg_score": round(float(row["avg_score"] or 0), 4),
+                    "last_camera": last["camera"] if last else None,
+                    "last_score": float(last["score"] or 0) if last else 0.0,
+                    "last_event_id": last["event_id"] if last else None,
+                    "top_camera": cameras[0]["camera"] if cameras else None,
+                    "cameras": [dict(item) for item in cameras],
+                }
+            return result
+
+    def dashboard_summary(self):
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                """
+                SELECT status, COUNT(*) AS count FROM events
+                WHERE date(start_ts, 'unixepoch', 'localtime')
+                      = date('now', 'localtime')
+                GROUP BY status
+                """
+            ).fetchall()
+        counts = {row["status"]: row["count"] for row in rows}
+        return {
+            "events_24h": sum(counts.values()),
+            "recognized_24h": counts.get("recognized", 0),
+            "needs_review_24h": (
+                counts.get("unknown", 0) + counts.get("ambiguous", 0)
+            ),
+            "no_face_24h": counts.get("no_face", 0),
+            "processing": counts.get("processing", 0),
+        }
 
     def labeled_events(self):
         with self._lock, self._connection() as con:

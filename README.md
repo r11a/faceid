@@ -31,8 +31,10 @@ security context, but neither AI nor clothing appearance is allowed to declare i
   galleries lean: when it's exceeded, the reference **most similar to the rest** is set
   aside (so unusual angles are kept, not lost) — visibly, on the person card, where you
   can restore it. The cap is adjustable in the Settings tab.
-- **Home Assistant native.** MQTT discovery sensors per camera (presence-window state like
-  `Alice, Bob` → `nobody`), plus a per-recognition event topic for automations.
+- **Home Assistant native.** MQTT discovery creates sensors per camera and a device for
+  every enrolled person: last location, last-seen time, recent presence, appearances
+  today, average confidence and total appearances. Rich attributes include 7/30-day
+  counts, most frequent camera and a camera breakdown.
 - **Optional Frigate write-back.** Confirmed names can be written as `sub_label`, so you can
   filter clips by person in Frigate's Explore view — including retroactively: the history
   scan tags past events, and assigning a face in the review UI tags its original event too.
@@ -85,6 +87,26 @@ discovered automatically, and standalone installs can configure asynchronous web
 Optional AI context uses an Ollama-compatible `/api/generate` and `/api/embed` service
 for factual scene descriptions, tags and searches such as “red backpack”. It is never
 used for recognition, Frigate `sub_label`, or ground truth.
+
+### Home Assistant entities per person
+
+After FaceID reconnects to MQTT, each enrolled person appears as a separate device under
+**Settings → Devices & services → MQTT**. For a person whose slug is `alice`, discovery
+creates:
+
+| Entity | Example | Useful for |
+|---|---|---|
+| `sensor.faceid_alice_last_location` | `Front Door` | Where the person was last seen |
+| `sensor.faceid_alice_last_seen` | timestamp | “Seen in the last 10 minutes” automations |
+| `binary_sensor.faceid_alice_presence` | on/off | Short presence window after recognition |
+| `sensor.faceid_alice_today` | `4` | Daily dashboard counters |
+| `sensor.faceid_alice_average_confidence` | `73.2 %` | Monitoring recognition quality |
+| `sensor.faceid_alice_appearances` | `128` | Total finalized recognition events |
+
+The last-location sensor attributes also contain `appearances_7_days`,
+`appearances_30_days`, `most_seen_camera`, `camera_breakdown`, `last_score` and active
+cameras. Entity IDs may receive a numeric suffix if an older entity with the same ID
+already exists; use the entity shown in Home Assistant rather than assuming the exact ID.
 
 ## Local-only, and what gets downloaded
 
