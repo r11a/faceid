@@ -2,7 +2,7 @@ name: FaceID
 version: "1.0.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
-url: https://github.com/SkyTechNerds/faceid
+url: https://github.com/r11a/faceid
 arch:
   - amd64
   - aarch64

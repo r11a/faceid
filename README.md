@@ -117,10 +117,10 @@ on your network.
 
 1. Add this repository to your app store — one click:
 
-   [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FSkyTechNerds%2Ffaceid)
+   [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fr11a%2Ffaceid)
 
    (or manually: **Settings → Apps → App Store → ⋮ → Repositories** → add
-   `https://github.com/SkyTechNerds/faceid`)
+   `https://github.com/r11a/faceid`)
 2. Install the **FaceID** app, set your Frigate URL in the options (MQTT is picked up
    automatically from the Mosquitto app) and start it.
 3. Open the **FaceID** panel in the sidebar. First start downloads the model (~300 MB).
@@ -141,7 +141,7 @@ apt install python3-venv python3-dev build-essential libglib2.0-0 libgl1 libxcb1
 **2. Get the code and install the Python environment**
 
 ```bash
-git clone https://github.com/SkyTechNerds/faceid /opt/faceid
+git clone https://github.com/r11a/faceid /opt/faceid
 cd /opt/faceid
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
