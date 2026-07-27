@@ -19,7 +19,10 @@ Full documentation: https://github.com/r11a/faceid
 
 ## Setup
 
-1. Set `frigate_url` to your Frigate instance (e.g. `http://192.168.1.10:5000`).
+1. Prefer `frigate_url: https://FRIGATE_IP:8971`, with `frigate_username` and
+   `frigate_password` set to a dedicated Frigate viewer. Leave
+   `frigate_verify_tls` enabled for a trusted certificate. Port 5000 remains a
+   compatibility option for a tightly restricted internal network only.
 2. MQTT: leave `mqtt_host` empty to automatically use the Mosquitto broker app.
    Fill the `mqtt_*` options only for an external broker.
 3. Optional: restrict processing to specific cameras (`cameras`), and list the cameras
@@ -34,6 +37,9 @@ Full documentation: https://github.com/r11a/faceid
 | Option | Description |
 |---|---|
 | `frigate_url` | Base URL of your Frigate instance |
+| `frigate_username` / `frigate_password` | Credentials for authenticated port 8971 |
+| `frigate_verify_tls` | Verify the HTTPS certificate (recommended) |
+| `known_evidence_days` / `unknown_evidence_days` | Review-image retention |
 | `mqtt_*` | Leave empty to use the internal Mosquitto app automatically |
 | `backend` | `auto`, `cpu`, `cuda` or `openvino`; explicit modes fail fast when unavailable |
 | `match_threshold` | ≥ this cosine similarity = recognized (raise if strangers get misassigned) |

@@ -195,7 +195,7 @@ class EventProcessor:
         zu unterscheiden."""
         url = self.cfg["frigate"]["url"].rstrip("/")
         try:
-            r = requests.get(f"{url}/api/config", timeout=8)
+            r = self.frigate.request("GET", "/api/config", timeout=8)
             if r.status_code != 200:
                 log.error("Frigate at %s replied HTTP %s — without snapshots nothing can be recognised", url, r.status_code)
                 return
@@ -211,6 +211,7 @@ class EventProcessor:
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         log.info("MQTT connected (%s), subscribing to %s/events", reason_code, self.frigate_topic)
         client.subscribe(f"{self.frigate_topic}/events")
+        client.subscribe(f"{self.prefix}/v1/review/set")
         client.publish(f"{self.prefix}/status", "online", retain=True)
         self._publish_discovery()
 
@@ -218,6 +219,25 @@ class EventProcessor:
         try:
             payload = json.loads(msg.payload)
         except json.JSONDecodeError:
+            return
+        if msg.topic == f"{self.prefix}/v1/review/set":
+            if not self.audit:
+                return
+            event_id = str(payload.get("event_id") or "")
+            label = str(payload.get("label") or "")
+            allowed = {
+                person["name"] for person in self.gallery.persons().values()
+            } | {"__unknown__"}
+            ok = bool(
+                event_id and label in allowed
+                and self.audit.set_ground_truth(
+                    event_id, label, str(payload.get("reviewer") or "HA action")
+                )
+            )
+            client.publish(
+                f"{self.prefix}/v1/review/result",
+                json.dumps({"event_id": event_id, "label": label, "ok": ok}),
+            )
             return
         after = payload.get("after") or {}
         etype = payload.get("type")
@@ -460,10 +480,12 @@ class EventProcessor:
         while True:
             time.sleep(self.poll_interval)
             try:
-                r = requests.get(f"{url}/api/events",
-                                 params={"label": "person", "has_snapshot": 1,
-                                         "limit": 50, "after": since - 30},
-                                 timeout=10)
+                r = self.frigate.request(
+                    "GET", "/api/events",
+                    params={"label": "person", "has_snapshot": 1,
+                            "limit": 50, "after": since - 30},
+                    timeout=10,
+                )
                 if r.status_code != 200:
                     continue
                 batch = r.json()
@@ -899,7 +921,7 @@ class EventProcessor:
     def _frigate_cameras(self) -> set:
         """Kameranamen von Frigate holen — fuer den Fall, dass keine konfiguriert sind."""
         try:
-            r = requests.get(f"{self.cfg['frigate']['url'].rstrip('/')}/api/config", timeout=8)
+            r = self.frigate.request("GET", "/api/config", timeout=8)
             if r.status_code == 200:
                 return set((r.json().get("cameras") or {}).keys())
         except (requests.RequestException, ValueError) as e:
@@ -932,6 +954,22 @@ class EventProcessor:
                      "" if cams else " — cameras unknown, they follow on first recognition")
         device = {"identifiers": [self.prefix], "name": self.prefix.replace("-", " ").title() if self.prefix != "faceid" else "FaceID",
                   "manufacturer": "Eigenbau", "model": "InsightFace/ArcFace"}
+        event_conf = {
+            "name": "Recognition event",
+            "unique_id": f"{self.prefix}_recognition_event",
+            "object_id": f"{self.prefix}_recognition_event",
+            "state_topic": f"{self.prefix}/v1/events",
+            "event_types": ["recognized", "unknown", "ambiguous", "no_face", "ignored"],
+            "value_template": "{{ value_json.decision }}",
+            "json_attributes_topic": f"{self.prefix}/v1/events",
+            "availability_topic": f"{self.prefix}/status",
+            "icon": "mdi:face-recognition",
+            "device": device,
+        }
+        self.client.publish(
+            f"homeassistant/event/{self.prefix}_recognition_event/config",
+            json.dumps(event_conf, ensure_ascii=False), retain=True,
+        )
         for cam in cams:
             conf = {
                 "name": cam,  # HA stellt den Gerätenamen "FaceID" voran

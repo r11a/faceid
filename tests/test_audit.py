@@ -86,6 +86,43 @@ class AuditStoreTests(unittest.TestCase):
             self.assertEqual(path.suffix, ".jpg")
             self.assertNotIn("outside", path.name)
 
+    def test_filtered_history_profile_and_review_undo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            now = time.time()
+            audit.start_event("event-1", "front", now)
+            audit.finalize(
+                "event-1", "recognized", end_ts=now + 1, person="Alice",
+                score=0.72, margin=0.2, confirmations=2,
+            )
+            audit.start_event("event-2", "garage", now - 10)
+            audit.finalize(
+                "event-2", "unknown", end_ts=now - 9,
+                score=0.2, margin=0.01, confirmations=0,
+            )
+            result = audit.search_events(
+                person="Alice", camera="front", date_from=now - 1
+            )
+            self.assertEqual(result["total"], 1)
+            self.assertEqual(result["events"][0]["event_id"], "event-1")
+            self.assertTrue(
+                audit.set_ground_truth("event-1", "Alice", "tester")
+            )
+            self.assertEqual(
+                audit.event_detail("event-1")["event"]["ground_truth_by"],
+                "tester",
+            )
+            self.assertEqual(audit.undo_ground_truth("event-1", "tester"), "")
+            self.assertIsNone(
+                audit.event_detail("event-1")["event"]["ground_truth"]
+            )
+            profile = audit.person_profile("Alice")
+            self.assertEqual(profile["statistics"]["appearances"], 1)
+            self.assertEqual(profile["events"][0]["camera"], "front")
+            report = audit.system_report()
+            self.assertEqual({row["camera"] for row in report["cameras"]},
+                             {"front", "garage"})
+
 
 if __name__ == "__main__":
     unittest.main()

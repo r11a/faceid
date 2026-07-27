@@ -117,6 +117,18 @@ class AuditStore:
                     updated_ts REAL NOT NULL,
                     PRIMARY KEY(event_id, kind)
                 );
+                CREATE TABLE IF NOT EXISTS review_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL,
+                    previous_label TEXT,
+                    new_label TEXT,
+                    reviewer TEXT NOT NULL,
+                    action TEXT NOT NULL DEFAULT 'label',
+                    ts REAL NOT NULL,
+                    FOREIGN KEY(event_id) REFERENCES events(event_id)
+                );
+                CREATE INDEX IF NOT EXISTS review_history_event_idx
+                    ON review_history(event_id, id DESC);
                 """
             )
             self._ensure_column(con, "observations", "quality", "REAL")
@@ -130,6 +142,7 @@ class AuditStore:
                 ("ai_embedding", "TEXT"),
                 ("probable_person", "TEXT"),
                 ("probable_score", "REAL"),
+                ("ground_truth_by", "TEXT"),
             ):
                 self._ensure_column(con, "events", column, declaration)
 
@@ -298,6 +311,62 @@ class AuditStore:
             con.row_factory = sqlite3.Row
             return [dict(row) for row in con.execute(sql, params).fetchall()]
 
+    def search_events(
+        self, *, limit: int = 100, offset: int = 0,
+        status: str | None = None, person: str | None = None,
+        camera: str | None = None, date_from: float | None = None,
+        date_to: float | None = None, query: str | None = None,
+    ):
+        clauses, params = [], []
+        if status:
+            clauses.append("status=?")
+            params.append(status)
+        if person:
+            clauses.append(
+                "(person=? OR probable_person=? OR ground_truth=?)"
+            )
+            params.extend((person, person, person))
+        if camera:
+            clauses.append("camera=?")
+            params.append(camera)
+        if date_from is not None:
+            clauses.append("COALESCE(start_ts, updated_ts)>=?")
+            params.append(float(date_from))
+        if date_to is not None:
+            clauses.append("COALESCE(start_ts, updated_ts)<=?")
+            params.append(float(date_to))
+        if query:
+            like = f"%{query.strip()}%"
+            clauses.append(
+                "(camera LIKE ? OR person LIKE ? OR probable_person LIKE ? "
+                "OR ai_description LIKE ? OR ai_tags LIKE ?)"
+            )
+            params.extend((like, like, like, like, like))
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        columns = """
+            event_id, camera, start_ts, end_ts, status, person, score, margin,
+            confirmations, updated_ts, ground_truth, ground_truth_ts,
+            ground_truth_by, scenario_id, ai_description, ai_tags,
+            probable_person, probable_score
+        """
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            total = con.execute(
+                f"SELECT COUNT(*) FROM events{where}", params
+            ).fetchone()[0]
+            rows = con.execute(
+                f"SELECT {columns} FROM events{where} "
+                "ORDER BY COALESCE(start_ts, updated_ts) DESC LIMIT ? OFFSET ?",
+                [*params, max(1, min(int(limit), 500)), max(0, int(offset))],
+            ).fetchall()
+            cameras = [
+                row[0] for row in con.execute(
+                    "SELECT DISTINCT camera FROM events ORDER BY camera"
+                ).fetchall()
+            ]
+        return {"events": [dict(row) for row in rows], "total": total,
+                "cameras": cameras}
+
     def context_events(self, limit: int = 500):
         import json
 
@@ -350,14 +419,165 @@ class AuditStore:
                 "observations": [dict(row) for row in observations],
             }
 
-    def set_ground_truth(self, event_id: str, label: str) -> bool:
+    def set_ground_truth(
+        self, event_id: str, label: str, reviewer: str = "operator",
+        action: str = "label",
+    ) -> bool:
+        now = time.time()
         with self._lock, self._connection() as con:
+            previous = con.execute(
+                "SELECT ground_truth FROM events WHERE event_id=? "
+                "AND status!='processing'", (event_id,)
+            ).fetchone()
+            if previous is None:
+                return False
             cur = con.execute(
-                "UPDATE events SET ground_truth=?, ground_truth_ts=?, updated_ts=? "
+                "UPDATE events SET ground_truth=?, ground_truth_ts=?, "
+                "ground_truth_by=?, updated_ts=? "
                 "WHERE event_id=? AND status!='processing'",
-                (label, time.time(), time.time(), event_id),
+                (label, now, reviewer[:80], now, event_id),
             )
+            if cur.rowcount:
+                con.execute(
+                    "INSERT INTO review_history(event_id, previous_label, "
+                    "new_label, reviewer, action, ts) VALUES(?, ?, ?, ?, ?, ?)",
+                    (event_id, previous[0], label, reviewer[:80], action, now),
+                )
             return cur.rowcount > 0
+
+    def undo_ground_truth(self, event_id: str, reviewer: str = "operator"):
+        with self._lock, self._connection() as con:
+            row = con.execute(
+                "SELECT previous_label, new_label FROM review_history "
+                "WHERE event_id=? ORDER BY id DESC LIMIT 1", (event_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        previous = row[0]
+        if previous is None:
+            now = time.time()
+            with self._lock, self._connection() as con:
+                con.execute(
+                    "UPDATE events SET ground_truth=NULL, ground_truth_ts=?, "
+                    "ground_truth_by=?, updated_ts=? WHERE event_id=?",
+                    (now, reviewer[:80], now, event_id),
+                )
+                con.execute(
+                    "INSERT INTO review_history(event_id, previous_label, "
+                    "new_label, reviewer, action, ts) VALUES(?, ?, NULL, ?, ?, ?)",
+                    (event_id, row[1], reviewer[:80], "undo", now),
+                )
+            return ""
+        self.set_ground_truth(event_id, previous, reviewer, action="undo")
+        return previous
+
+    def person_profile(self, person: str, limit: int = 100):
+        result = self.search_events(person=person, limit=limit)
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            hourly = con.execute(
+                "SELECT CAST(strftime('%H', start_ts, 'unixepoch', 'localtime') "
+                "AS INTEGER) hour, COUNT(*) count FROM events "
+                "WHERE status='recognized' AND person=? GROUP BY hour ORDER BY hour",
+                (person,),
+            ).fetchall()
+            daily = con.execute(
+                "SELECT date(start_ts, 'unixepoch', 'localtime') day, COUNT(*) count "
+                "FROM events WHERE status='recognized' AND person=? "
+                "AND start_ts>=? GROUP BY day ORDER BY day",
+                (person, time.time() - 30 * 86400),
+            ).fetchall()
+            verified = con.execute(
+                "SELECT COUNT(*) total, "
+                "SUM(CASE WHEN ground_truth=person THEN 1 ELSE 0 END) correct "
+                "FROM events WHERE person=? AND ground_truth IS NOT NULL",
+                (person,),
+            ).fetchone()
+            weak = con.execute(
+                "SELECT event_id, camera, start_ts, score, margin, status "
+                "FROM events WHERE (person=? OR probable_person=?) "
+                "AND (score<0.6 OR status='ambiguous') "
+                "ORDER BY start_ts DESC LIMIT 20", (person, person)
+            ).fetchall()
+        stats = self.person_statistics().get(person, {})
+        total = int(verified["total"] or 0)
+        correct = int(verified["correct"] or 0)
+        return {
+            "person": person, "statistics": stats,
+            "events": result["events"],
+            "hourly": [dict(row) for row in hourly],
+            "daily": [dict(row) for row in daily],
+            "verified": {"total": total, "correct": correct,
+                         "accuracy": correct / total if total else None},
+            "weak_events": [dict(row) for row in weak],
+        }
+
+    def system_report(self):
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                """
+                SELECT camera, COUNT(*) events,
+                  SUM(CASE WHEN status='recognized' THEN 1 ELSE 0 END) recognized,
+                  SUM(CASE WHEN status='no_face' THEN 1 ELSE 0 END) no_face,
+                  SUM(CASE WHEN status IN ('unknown','ambiguous') THEN 1 ELSE 0 END) review,
+                  AVG(CASE WHEN score>0 THEN score END) avg_score
+                FROM events WHERE status!='processing' AND start_ts>=?
+                GROUP BY camera ORDER BY events DESC
+                """, (time.time() - 7 * 86400,)
+            ).fetchall()
+        cameras = []
+        for raw in rows:
+            row = dict(raw)
+            events = max(1, int(row["events"]))
+            row["no_face_rate"] = int(row["no_face"] or 0) / events
+            row["review_rate"] = int(row["review"] or 0) / events
+            row["avg_score"] = float(row["avg_score"] or 0)
+            row["level"] = (
+                "warning" if row["no_face_rate"] > 0.55
+                or row["review_rate"] > 0.45 else "good"
+            )
+            cameras.append(row)
+        return {"window_days": 7, "cameras": cameras}
+
+    def prune_evidence(self, known_days: int, unknown_days: int) -> int:
+        """Apply separate image retention without deleting recognition metadata."""
+        now = time.time()
+        removed = 0
+        with self._lock, self._connection() as con:
+            rows = con.execute(
+                "SELECT event_id, status, updated_ts FROM events "
+                "WHERE status!='processing'"
+            ).fetchall()
+        for event_id, status, updated_ts in rows:
+            days = known_days if status == "recognized" else unknown_days
+            if days <= 0 or float(updated_ts or now) >= now - days * 86400:
+                continue
+            path = self.evidence_path(event_id)
+            if path.is_file():
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        return removed
+
+    def delete_person_history(self, person: str) -> int:
+        with self._lock, self._connection() as con:
+            event_ids = [
+                row[0] for row in con.execute(
+                    "SELECT event_id FROM events WHERE person=? "
+                    "OR probable_person=? OR ground_truth=?", (person, person, person)
+                ).fetchall()
+            ]
+            for event_id in event_ids:
+                con.execute("DELETE FROM review_history WHERE event_id=?", (event_id,))
+                con.execute("DELETE FROM observations WHERE event_id=?", (event_id,))
+                con.execute("DELETE FROM jobs WHERE event_id=?", (event_id,))
+                con.execute("DELETE FROM events WHERE event_id=?", (event_id,))
+        for event_id in event_ids:
+            self.evidence_path(event_id).unlink(missing_ok=True)
+        return len(event_ids)
 
     def person_statistics(self):
         now = time.time()

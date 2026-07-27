@@ -42,7 +42,11 @@ def run_backfill(engine, gallery, frigate, frigate_url: str, days: int = 14,
         params = {"label": "person", "has_snapshot": 1, "limit": 100, "after": after}
         if before:
             params["before"] = before
-        batch = requests.get(f"{frigate_url}/api/events", params=params, timeout=10).json()
+        response = frigate.request(
+            "GET", "/api/events", params=params, timeout=10
+        )
+        response.raise_for_status()
+        batch = response.json()
         if not batch:
             break
         events.extend(batch)

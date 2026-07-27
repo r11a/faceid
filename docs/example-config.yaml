@@ -2,7 +2,10 @@
 # config.yaml is gitignored: it contains your MQTT credentials.
 
 frigate:
-  url: http://192.168.1.10:5000        # your Frigate base URL
+  url: https://192.168.1.10:8971       # authenticated Frigate API (recommended)
+  username: faceid-viewer              # dedicated Frigate viewer account
+  password: "change-me"
+  verify_tls: true                     # false only for a trusted self-signed setup
 
 mqtt:
   host: 192.168.1.2                    # your MQTT broker (same one Frigate uses)
@@ -46,6 +49,8 @@ faceid:
   clip_max_frames: 24
   clip_max_samples: 8
   audit_retention_days: 90             # SQLite decision history (0 = keep forever)
+  known_evidence_days: 30              # local review images for recognized people
+  unknown_evidence_days: 14            # local review images for unknown/review events
   frigate_topic_prefix: frigate        # must match `mqtt.topic_prefix` in Frigate's config
   poll_interval: 0                     # seconds; >0 also polls Frigate's event API.
                                        # Catches events MQTT never announces — notably

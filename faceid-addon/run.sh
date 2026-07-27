@@ -49,6 +49,9 @@ WEBHOOKS=$(jq -c '.webhook_urls // []' "${OPT}")
 cat > /opt/faceid/config.yaml << EOF
 frigate:
   url: $(cfg '.frigate_url')
+  username: "$(cfg '.frigate_username')"
+  password: "$(cfg '.frigate_password')"
+  verify_tls: $(cfg '.frigate_verify_tls')
 mqtt:
   host: ${MQTT_HOST}
   port: ${MQTT_PORT:-1883}
@@ -79,6 +82,8 @@ faceid:
   backup_hour: $(cfg '.backup_hour')
   backup_keep: $(cfg '.backup_keep')
   audit_retention_days: $(cfg '.audit_retention_days')
+  known_evidence_days: $(cfg '.known_evidence_days')
+  unknown_evidence_days: $(cfg '.unknown_evidence_days')
   presence_window: $(cfg '.presence_window')
   calibration_target_far: $(cfg '.calibration_target_far')
   scenario_window: $(cfg '.scenario_window')

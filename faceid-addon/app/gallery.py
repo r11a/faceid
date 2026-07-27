@@ -284,6 +284,7 @@ class Gallery:
             return {
                 slug: {"name": e["name"], "count": len(e["files"]), "files": list(e["files"]),
                        "favorite": bool(e.get("favorite", False)),
+                       "sources": dict(e.get("sources", {})),
                        "trimmed": self.trimmed(slug)}
                 for slug, e in self._cache.items()
             }
