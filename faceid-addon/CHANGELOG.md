@@ -3,6 +3,17 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 1.0.2 — 2026-07-27
+
+- **Visual activity verification:** every Activity event now shows its captured face,
+  opens a larger preview on click, and clearly explains when an old Frigate image has
+  expired.
+- **Durable evidence thumbnails:** new recognition events keep a compact local review
+  image for the same retention period as the audit, so calibration labels can be based
+  on what was actually seen instead of a name and score alone.
+- **Granite theme:** the blue dashboard palette has been replaced with neutral dark
+  granite surfaces; green, amber and red are reserved for meaningful status.
+
 ## 1.0.1 — 2026-07-27
 
 - **Friendly Hebrew dashboard:** a new home screen shows real person photos, last seen

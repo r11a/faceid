@@ -479,6 +479,26 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             "scenarios": processor.audit.recent_scenarios(limit=limit),
         }
 
+    @app.get("/api/activity/{event_id}/image")
+    def activity_image(event_id: str):
+        """Proxy and cache a review image without exposing Frigate credentials."""
+        if processor.audit is None:
+            raise HTTPException(404, "Audit is not available")
+        if processor.audit.event_detail(event_id) is None:
+            raise HTTPException(404, "Unknown event")
+        cached = processor.audit.evidence_path(event_id)
+        if not cached.is_file():
+            image = processor.frigate.snapshot(event_id, crop=True)
+            cached = processor.audit.save_evidence(event_id, image)
+        if cached is None or not cached.is_file():
+            raise HTTPException(
+                404, "The event image is no longer available in Frigate"
+            )
+        return FileResponse(
+            cached, media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+
     @app.get("/api/dashboard")
     def dashboard():
         people = gallery.persons()

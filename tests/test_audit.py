@@ -78,6 +78,14 @@ class AuditStoreTests(unittest.TestCase):
             )
             self.assertTrue(audit.set_ground_truth("event-1", "Alice"))
 
+    def test_evidence_path_cannot_escape_data_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            path = audit.evidence_path("../../outside")
+            self.assertEqual(path.parent, audit.evidence_dir)
+            self.assertEqual(path.suffix, ".jpg")
+            self.assertNotIn("outside", path.name)
+
 
 if __name__ == "__main__":
     unittest.main()
