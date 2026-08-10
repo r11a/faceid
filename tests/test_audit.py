@@ -123,6 +123,22 @@ class AuditStoreTests(unittest.TestCase):
             self.assertEqual({row["camera"] for row in report["cameras"]},
                              {"front", "garage"})
 
+    def test_person_profile_groups_hours_in_requested_timezone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            # 2024-01-01 00:30 UTC must stay in hour 00 for a UTC browser,
+            # regardless of the timezone configured inside the add-on container.
+            timestamp = 1704069000.0
+            audit.start_event("event-utc", "front", timestamp)
+            audit.finalize(
+                "event-utc", "recognized", end_ts=timestamp + 1,
+                person="Alice", score=0.8, margin=0.2, confirmations=2,
+            )
+            profile = audit.person_profile("Alice", timezone_name="UTC")
+            hours = {row["hour"]: row["count"] for row in profile["hourly"]}
+            self.assertEqual(hours[0], 1)
+            self.assertEqual(sum(hours.values()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
