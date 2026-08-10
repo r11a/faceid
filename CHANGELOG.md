@@ -3,6 +3,12 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 2.1.1 — 2026-08-10
+
+- **Safe upgrades:** existing Home Assistant installations now receive media-cache
+  defaults even when their older `options.json` does not yet contain the new 2.1
+  fields, preventing a `null` value from blocking add-on startup.
+
 ## 2.1.0 — 2026-08-10
 
 - **Learning Center:** a guided, non-destructive gallery coach explains blurry,

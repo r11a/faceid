@@ -59,9 +59,9 @@ def main():
     )
     media_store = EventMediaStore(
         data_dir, frigate,
-        max_clip_bytes=int(cfg["faceid"].get("media_max_clip_mb", 150)) * 1_000_000,
-        max_cache_bytes=int(cfg["faceid"].get("media_cache_mb", 1000)) * 1_000_000,
-        retention_hours=float(cfg["faceid"].get("media_retention_hours", 24)),
+        max_clip_bytes=int(cfg["faceid"].get("media_max_clip_mb") or 150) * 1_000_000,
+        max_cache_bytes=int(cfg["faceid"].get("media_cache_mb") or 1000) * 1_000_000,
+        retention_hours=float(cfg["faceid"].get("media_retention_hours") or 24),
     )
     audit = AuditStore(
         data_dir / "audit.db",
