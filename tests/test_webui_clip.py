@@ -44,7 +44,13 @@ class WebUIClipTests(unittest.TestCase):
                 processor, Path(tmp), Path(__file__).parents[1] / "static",
             )
             index = TestClient(app).get("/")
-            self.assertEqual(index.headers["cache-control"], "no-store, max-age=0")
+            self.assertIn("no-store", index.headers["cache-control"])
+            self.assertNotIn("etag", index.headers)
+            self.assertNotIn("last-modified", index.headers)
+            self.assertEqual(index.headers["x-faceid-ui-version"], "3.1.1")
+            versioned = TestClient(app).get("/ui-3.1.1")
+            self.assertEqual(versioned.status_code, 200)
+            self.assertEqual(versioned.content, index.content)
             response = TestClient(app).get(
                 "/api/activity/e1/clip", headers={"Range": "bytes=0-15"}
             )

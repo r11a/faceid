@@ -66,12 +66,30 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             raise HTTPException(404, "Unknown media")
         return FileResponse(target)
 
+    def _index_response():
+        """Return HTML bytes directly so neither Starlette nor ingress can reuse an ETag."""
+        return Response(
+            content=(static_dir / "index.html").read_bytes(),
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": (
+                    "no-store, no-cache, must-revalidate, proxy-revalidate, "
+                    "max-age=0, s-maxage=0"
+                ),
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Surrogate-Control": "no-store",
+                "X-FaceID-UI-Version": VERSION,
+            },
+        )
+
     @app.get("/")
     def index():
-        return FileResponse(
-            static_dir / "index.html",
-            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-        )
+        return _index_response()
+
+    @app.get("/ui-3.1.1")
+    def versioned_index():
+        return _index_response()
 
     @app.get("/api/persons")
     def persons():
