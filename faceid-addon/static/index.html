@@ -253,7 +253,7 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 <dialog id="videoOverlay" class="video-overlay" onclick="if(event.target===this)closeEventVideo()"><div class="video-panel" onclick="event.stopPropagation()"><button class="ghost video-close" onclick="closeEventVideo()">✕ סגור</button><video id="eventVideo" controls playsinline preload="metadata"></video><div id="videoMessage" class="stat" style="display:none;padding:18px;text-align:center"></div></div></dialog>
 
 <script>
-const UI_VERSION='3.1.3';
+const UI_VERSION='3.1.4';
 const $=s=>document.querySelector(s), main=$('#main');
 let tab='dashboard', persons={}, selected=new Set(), suggestThr=0.40;
 let workspace=localStorage.getItem('faceid-workspace')||'operate';

@@ -3,6 +3,17 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 3.1.4 — 2026-08-10
+
+- **Versioned Ingress path corrected:** the entry no longer starts with `/`.
+  Home Assistant already appends it to an Ingress URL ending in `/`; the old
+  value produced a double-slash path and FastAPI returned `Not Found`.
+- **Fresh document without manual cache clearing:** normal browser sessions open
+  the new `ui-3.1.4` document while API requests continue to resolve from the
+  stable Ingress root.
+- **Regression protection:** release CI rejects a leading slash and verifies the
+  exact versioned entry expected by Home Assistant Supervisor.
+
 ## 3.1.3 — 2026-08-10
 
 - **Fresh UI in normal Home Assistant sessions:** the add-on opens a new Ingress

@@ -86,7 +86,9 @@ jobs:
           if f"## {version}" not in changelog:
               print(f"version {version} has no CHANGELOG.md entry"); sys.exit(1)
           manifest = yaml.safe_load(open("faceid-addon/config.yaml"))
-          expected_entry = f"/ui-{version}"
+          # Supervisor appends this value to an ingress URL that already ends
+          # in '/'. A leading slash creates '//ui-…' and FastAPI returns 404.
+          expected_entry = f"ui-{version}"
           if manifest.get("ingress_entry") != expected_entry:
               print(f"ingress_entry must be {expected_entry}"); sys.exit(1)
           backend = Path("app/__init__.py").read_text()
