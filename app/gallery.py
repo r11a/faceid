@@ -483,6 +483,24 @@ class Gallery:
             (self.persons_dir / slug / fname).unlink(missing_ok=True)
             self._persist(slug)
 
+    def set_aside_face(self, slug: str, fname: str, reason: str) -> bool:
+        """Move a reviewed reference to the reversible set-aside area."""
+        with self._lock:
+            entry = self._cache.get(slug)
+            if entry is None or fname not in entry["files"]:
+                return False
+            idx = entry["files"].index(fname)
+            emb = entry["emb"][idx]
+            self._trim_face(
+                slug, fname, emb, 0.0,
+                reason=(reason or "set aside by the gallery coach")[:240],
+            )
+            entry.get("sources", {}).pop(fname, None)
+            entry["files"].pop(idx)
+            entry["emb"] = np.delete(entry["emb"], idx, axis=0)
+            self._persist(slug)
+            return True
+
     def unassign_face(self, slug: str, fname: str) -> bool:
         """Gesicht aus einer Person entfernen und zurück in die Unknown-Queue legen."""
         with self._lock:

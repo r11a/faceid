@@ -48,6 +48,11 @@ faceid:
   clip_analysis: true                  # sample the finished clip for diverse, stronger evidence
   clip_max_frames: 24
   clip_max_samples: 8
+  # Clips are downloaded once and shared by recognition + browser playback.
+  # These hard disk-cache limits protect the host from long recordings.
+  media_max_clip_mb: 150
+  media_cache_mb: 1000
+  media_retention_hours: 24
   audit_retention_days: 90             # SQLite decision history (0 = keep forever)
   known_evidence_days: 30              # local review images for recognized people
   unknown_evidence_days: 14            # local review images for unknown/review events

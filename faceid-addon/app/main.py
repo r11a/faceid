@@ -18,6 +18,8 @@ from .scenarios import ScenarioManager
 from .reid import AppearanceReID
 from .integrations import IntegrationDispatcher
 from .ai_context import AIContextService
+from .media_store import EventMediaStore
+from .frigate_sync import FrigateGallerySync
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -54,6 +56,12 @@ def main():
         username=str(frigate_cfg.get("username") or ""),
         password=str(frigate_cfg.get("password") or ""),
         verify_tls=bool(frigate_cfg.get("verify_tls", True)),
+    )
+    media_store = EventMediaStore(
+        data_dir, frigate,
+        max_clip_bytes=int(cfg["faceid"].get("media_max_clip_mb", 150)) * 1_000_000,
+        max_cache_bytes=int(cfg["faceid"].get("media_cache_mb", 1000)) * 1_000_000,
+        retention_hours=float(cfg["faceid"].get("media_retention_hours", 24)),
     )
     audit = AuditStore(
         data_dir / "audit.db",
@@ -92,8 +100,9 @@ def main():
     processor = EventProcessor(
         cfg, engine, gallery, frigate, audit=audit,
         scenario_manager=scenario_manager, reid=reid,
-        dispatcher=dispatcher, ai_context=ai_context,
+        dispatcher=dispatcher, ai_context=ai_context, media_store=media_store,
     )
+    processor.frigate_sync = FrigateGallerySync(data_dir, gallery, engine, frigate)
     processor.start()
     start_auto_backup(cfg["faceid"], data_dir)
     app = build_app(cfg, engine, gallery, processor, data_dir, BASE / "static")

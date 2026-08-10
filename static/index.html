@@ -20,7 +20,9 @@ header h1{font:800 18px var(--sans);color:var(--fg);letter-spacing:.02em}
 header h1 span{color:var(--acc)}
 header .stat{font:12px var(--sans);color:var(--dim);padding:6px 10px;background:var(--panel);border-radius:99px}
 nav{display:flex;gap:6px;border-bottom:1px solid var(--line);padding:8px clamp(12px,3vw,32px);
-  overflow-x:auto;background:#141516d9;position:sticky;top:66px;z-index:4;backdrop-filter:blur(16px)}
+  overflow-x:auto;background:#141516d9;position:sticky;top:66px;z-index:4;backdrop-filter:blur(16px);
+  scrollbar-width:none;-webkit-overflow-scrolling:touch}
+nav::-webkit-scrollbar{display:none}
 nav button{background:none;border:0;border-radius:9px;color:var(--dim);
   font:600 13px var(--sans);padding:9px 14px;cursor:pointer;white-space:nowrap}
 nav button.on{color:#07130d;background:var(--acc)}
@@ -146,9 +148,31 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 .bar-row .hour{text-align:right;direction:ltr}.bar-row .count{text-align:left}.bar-track{height:10px;border-radius:9px;background:var(--panel2);overflow:hidden;direction:ltr}.bar-fill{height:100%;background:var(--acc);transform-origin:left center}
 .health-card{border:1px solid var(--line);border-radius:15px;padding:15px;background:var(--panel)}
 .health-card.warning{border-color:var(--warn)}
+.evidence-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
+.evidence-card{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:14px}
+.evidence-card.primary{border-color:var(--good)}.evidence-card.support{border-style:dashed}
+.evidence-card .evidence-label{display:block;color:var(--dim);font-size:11px;margin-bottom:5px}
+.sync-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:9px;margin:12px 0}
+.sync-card{position:relative;border:1px solid var(--line);background:var(--panel);border-radius:13px;padding:8px;cursor:pointer}
+.sync-card img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:9px;background:var(--panel2)}
+.sync-card input{position:absolute;top:14px;right:14px;z-index:2;width:20px;height:20px}
+.sync-card.done{opacity:.55}.progress-note{padding:12px;border-right:3px solid var(--acc);background:var(--panel);color:var(--dim)}
 @media(max-width:850px){.hero{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}nav{top:64px}}
 @media(max-width:850px){.filters{grid-template-columns:1fr 1fr}.event-media{grid-template-columns:1fr}}
-@media(max-width:520px){.summary-grid{grid-template-columns:1fr 1fr}.people-dashboard{grid-template-columns:1fr}.hero-main,.guide-card{padding:18px}.welcome-card{align-items:flex-start;flex-direction:column}.filters{grid-template-columns:1fr}}
+@media(max-width:700px){.evidence-grid{grid-template-columns:1fr}.sync-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:520px){header{padding:12px 14px;align-items:flex-start}header h1{font-size:16px}header .stat{font-size:10px}nav{top:58px}.summary-grid{grid-template-columns:1fr 1fr}.people-dashboard{grid-template-columns:1fr}.hero-main,.guide-card{padding:18px}.welcome-card{align-items:flex-start;flex-direction:column}.filters{grid-template-columns:1fr}}
+@media(max-width:520px){
+  .activity-scroll{overflow:visible!important}.activity-table,.activity-table tbody,.activity-table tr,.activity-table td{display:block;width:100%}
+  .activity-table thead{display:none}.activity-table tr{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px;margin:12px 0}
+  .activity-table td{border:0;padding:5px 2px}.activity-table td:not(.event-photo){display:grid;grid-template-columns:92px 1fr;gap:8px;align-items:start}
+  .activity-table td:not(.event-photo)::before{color:var(--dim);font-size:11px}
+  .activity-table td:nth-child(2)::before{content:'זמן'}.activity-table td:nth-child(3)::before{content:'מצלמה'}
+  .activity-table td:nth-child(4)::before{content:'החלטה'}.activity-table td:nth-child(5)::before{content:'אדם'}
+  .activity-table td:nth-child(6)::before{content:'ביטחון'}.activity-table td:nth-child(7)::before{content:'קבוצה'}
+  .activity-table td:nth-child(8)::before{content:'הקשר AI'}.activity-table td:nth-child(9)::before{content:'אימות שלך'}
+  .activity-table .event-photo{max-width:none}.activity-table .event-thumb{width:100%;height:190px;margin-bottom:8px}
+  .activity-table select{width:100%;min-width:0}
+}
 </style>
 </head>
 <body>
@@ -160,6 +184,7 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
   <button data-t="dashboard" class="on" title="סיכום פשוט של המערכת">⌂ בית</button>
   <button data-t="unknowns" title="פנים שממתינות לזיהוי">? לבדיקה</button>
   <button data-t="persons" title="אנשים מוכרים ותמונות הייחוס שלהם">☺ אנשים</button>
+  <button data-t="learning" title="שיפור הגלריה וסנכרון מבוקר עם Frigate">✦ למידה</button>
   <button data-t="activity" title="מי נראה, איפה ומתי">◷ פעילות</button>
   <button data-t="health-center" title="בדיקת מצלמות וחיבורים">♡ בריאות</button>
   <button data-t="automations" title="בניית אוטומציות ל־Home Assistant">⌁ אוטומציות</button>
@@ -173,7 +198,7 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 <div id="toast"></div>
 <div id="lightbox" onclick="this.style.display='none'"><img id="lbimg" src=""><span class="cap" id="lbcap"></span></div>
 <dialog id="eventDialog" class="event-dialog"><div class="event-dialog-content" id="eventDialogContent"></div></dialog>
-<dialog id="videoOverlay" class="video-overlay" onclick="if(event.target===this)closeEventVideo()"><div class="video-panel" onclick="event.stopPropagation()"><button class="ghost video-close" onclick="closeEventVideo()">✕ סגור</button><video id="eventVideo" controls playsinline preload="metadata"></video><p id="videoMessage" class="stat" style="display:none;padding:14px">אין קליפ זמין. Frigate כנראה לא שמר הקלטה לאירוע הזה.</p></div></dialog>
+<dialog id="videoOverlay" class="video-overlay" onclick="if(event.target===this)closeEventVideo()"><div class="video-panel" onclick="event.stopPropagation()"><button class="ghost video-close" onclick="closeEventVideo()">✕ סגור</button><video id="eventVideo" controls playsinline preload="metadata"></video><div id="videoMessage" class="stat" style="display:none;padding:18px;text-align:center"></div></div></dialog>
 
 <script>
 const $=s=>document.querySelector(s), main=$('#main');
@@ -213,6 +238,7 @@ async function render(){
   if(tab==='dashboard')return renderDashboard();
   if(tab==='unknowns')return renderUnknowns();
   if(tab==='persons')return renderPersons();
+  if(tab==='learning')return renderLearning();
   if(tab==='ignored')return renderIgnored();
   if(tab==='activity')return renderActivity();
   if(tab==='health-center')return renderHealthCenter();
@@ -334,8 +360,60 @@ function backfillRow(bf){
     </select>
     <button class="act" title="ייבוא פנים מאירועי Frigate ישנים" onclick="startBackfill()" ${bf.running?'disabled':''}>
       ${bf.running?'סורק…':'סריקת היסטוריית מצלמות'}</button>
+    ${bf.running?'<button class="ghost" onclick="cancelBackfill()">עצור אחרי האירוע הנוכחי</button>':''}
     <span class="stat">${status}</span>
   </div>`;
+}
+async function cancelBackfill(){
+  await j('api/backfill/cancel',{method:'POST'});
+  toast('הסריקה תיעצר בנקודת העצירה הבטוחה הבאה');
+}
+
+function galleryAdvice(person){
+  const files=person.files||[],sources=Object.values(person.sources||{});
+  const cameras=new Set(sources.map(s=>s.camera).filter(Boolean));
+  if(files.length<5)return 'התחלה טובה היא 5 תמונות ברורות מזוויות שונות.';
+  if(cameras.size<2)return 'רוב תמונות הייחוס מאותה מצלמה. כדאי להוסיף זווית נוספת.';
+  if(files.length>30)return 'יש כיסוי רחב. התמקדו מעכשיו רק בתמונות שמוסיפות תאורה או זווית חדשה.';
+  return 'הגלריה נראית מאוזנת. המשיכו לאמת רק אירועים מאתגרים.';
+}
+async function renderLearning(){
+  main.innerHTML='<div class="friendly-empty">בודק את הגלריות מול Frigate…</div>';
+  const [backfill,coach]=await Promise.all([j('api/backfill'),j('api/gallery-coach')]);
+  let sync=null,syncError='';
+  try{sync=await j('api/frigate-sync')}catch(e){syncError=e.message}
+  if(tab!=='learning')return;
+  const people=coach.people.map(p=>`<details><summary>${esc(p.person)} · ${p.images.length} תמונות · ${p.review_count?p.review_count+' לבדיקה':'כיסוי תקין'}</summary><p class="stat">${p.advice.map(esc).join(' · ')}</p><div class="sync-grid">${p.images.filter(x=>x.reasons.length).slice(0,20).map(x=>`<div class="sync-card"><img loading="lazy" src="${x.url}"><b>${Math.round(x.score*100)}%</b><div class="stat">${x.reasons.map(esc).join(' · ')}</div><button class="ghost" onclick="setAsideReference('${p.slug}','${x.file}')">העבר הצידה</button></div>`).join('')||'<div class="friendly-empty">אין תמונות חלשות שמחייבות בדיקה.</div>'}</div></details>`).join('');
+  const remote=(sync?.remote||[]).filter(x=>!x.imported).slice(0,80).map(x=>`<label class="sync-card"><input class="sync-import" type="checkbox" data-person="${esc(x.person)}" data-file="${esc(x.file)}"><img loading="lazy" src="${x.url}"><b>${esc(x.person.replaceAll('_',' '))}</b><div class="stat">מ־Frigate</div></label>`).join('');
+  const local=(sync?.local||[]).filter(x=>!x.exported).slice(0,80).map(x=>`<label class="sync-card"><input class="sync-export" type="checkbox" data-slug="${esc(x.slug)}" data-file="${esc(x.file)}"><img loading="lazy" src="${x.url}"><b>${esc(x.person)}</b><div class="stat">אל Frigate</div></label>`).join('');
+  const s=sync?.summary||{};
+  main.innerHTML=`<div class="dashboard" dir="rtl">
+    <div class="section-head"><div><h2>מרכז למידה</h2><p>משפרים את חומר הלימוד בשלבים ברורים — שום תמונה לא עוברת אוטומטית.</p></div></div>
+    <div class="progress-note"><b>כלל בטיחות:</b> FaceID ממשיך לקבוע זהות לפי פנים בלבד. הופעה ו־AI מסייעים לחיפוש ולהסבר, ולעולם אינם פותחים דלת או מבטלים התרעה.</div>
+    <h2>1 · אשף איכות הגלריה</h2><p class="stat">${esc(coach.method)} נמצאו ${coach.summary.review} תמונות שכדאי לבדוק.</p><div>${people||'<div class="friendly-empty">עדיין אין אנשים בגלריה.</div>'}</div>
+    <h2>2 · לימוד מאירועים קיימים</h2><div class="health-card"><p>סריקה מוגבלת של אירועי Frigate מחפשת פנים שימושיות ושולחת אותן למסך הבדיקה — לא ישירות לאדם.</p>${backfillRow(backfill)}</div>
+    <h2>3 · סנכרון עם ספריית הפנים של Frigate</h2>
+    ${syncError?`<div class="health-card warning"><b>לא ניתן לקרוא את ספריית Frigate</b><p class="stat">${esc(syncError)}</p></div>`:`<div class="summary-grid"><div class="summary-card"><span class="label">FaceID</span><span class="value">${s.local_images||0}</span><small>${s.local_people||0} אנשים</small></div><div class="summary-card"><span class="label">Frigate</span><span class="value">${s.frigate_images||0}</span><small>${s.frigate_people||0} אנשים</small></div></div>
+      <details open><summary>ייבוא תמונות מ־Frigate ל־FaceID (${s.import_candidates||0})</summary><p class="stat">בחרו רק תמונות ברורות. כל תמונה נבדקת שוב על ידי מנוע הפנים לפני שמירתה.</p><div class="sync-grid">${remote||'<div class="friendly-empty">אין תמונות חדשות לייבוא.</div>'}</div><button class="act" onclick="runFrigateSync('import')">ייבא מסומנות</button></details>
+      <details><summary>שליחת תמונות נבחרות מ־FaceID ל־Frigate (${s.export_candidates||0})</summary><p class="stat">Frigate עשוי לדחות תמונה ללא פנים ברורות. כישלון נשמר ככישלון בלבד ואינו חוסם ניסיון עתידי.</p><div class="sync-grid">${local||'<div class="friendly-empty">אין תמונות חדשות לשליחה.</div>'}</div><button class="act" onclick="runFrigateSync('export')">שלח מסומנות</button></details>`}
+    <h2>4 · אימות וכיול</h2><div class="welcome-card"><div><h3>אמתו אירועים אמיתיים לפני שינוי ספים</h3><p>הכיול מפריד אירועים שלמים ולא פריימים מאותו אירוע, ומשתמש גם בדוגמאות של אנשים לא מוכרים כדי למדוד זיהויי שווא.</p></div><button class="act" onclick="setTab('calibration')">למסך הדיוק</button></div>
+  </div>`;
+}
+async function setAsideReference(slug,file){
+  if(!confirm('להעביר את התמונה הצידה? אפשר לשחזר אותה ממסך האנשים.'))return;
+  await j('api/gallery-coach/set-aside',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug,file,reason:'נבדקה והועברה הצידה באשף איכות הגלריה'})});
+  toast('התמונה הועברה הצידה וניתנת לשחזור');persons=await j('api/persons');renderLearning();
+}
+async function runFrigateSync(direction){
+  const selector=direction==='import'?'.sync-import:checked':'.sync-export:checked';
+  const items=[...document.querySelectorAll(selector)].map(el=>direction==='import'?{person:el.dataset.person,file:el.dataset.file}:{slug:el.dataset.slug,file:el.dataset.file});
+  if(!items.length){toast('יש לבחור לפחות תמונה אחת');return}
+  const action=direction==='import'?'לייבא':'לשלוח';
+  if(!confirm(`${action} ${items.length} תמונות מסומנות?`))return;
+  toast('הסנכרון התחיל…');
+  const result=await j(`api/frigate-sync/${direction}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items})});
+  const count=result.imported??result.exported??0;
+  toast(`הושלמו ${count}; שגיאות ${result.errors?.length||0}`);persons=await j('api/persons');renderLearning();
 }
 async function startBackfill(){
   try{
@@ -644,7 +722,7 @@ async function renderActivity(){
     </div>
     <p class="stat">${healthData.ai.enabled?'חיפוש AI סמנטי פעיל; זהות תמיד נקבעת רק בידי מנוע הפנים והאימות שלך.':'חיפוש לפי טקסט, אדם, החלטה ותאריך.'}</p>
     <h2>אירועי זיהוי · ${data.total||data.events.length}</h2><p class="stat">לחצו על תמונה לצפייה גדולה, קליפ, דוגמאות ייחוס ואימות מהיר.</p>
-    <div style="overflow:auto"><table><thead><tr><th>תמונה</th><th>זמן</th><th>מצלמה</th><th>החלטה</th>
+    <div class="activity-scroll" style="overflow:auto"><table class="activity-table"><thead><tr><th>תמונה</th><th>זמן</th><th>מצלמה</th><th>החלטה</th>
       <th>אדם</th><th>ביטחון</th><th>קבוצה</th><th>הקשר AI</th><th>אימות שלך</th></tr></thead>
       <tbody id="activityRows">${rows||'<tr><td colspan="9">עדיין אין אירועים.</td></tr>'}</tbody></table></div>
     <h2>מעבר בין מצלמות</h2><table><thead><tr><th>התחלה</th><th>אדם</th><th>מצב</th><th>מצלמות</th><th>אירועים</th></tr></thead>
@@ -684,8 +762,12 @@ async function openEvent(eventId){
   $('#eventDialogContent').innerHTML=`<div dir="rtl">
     <div class="section-head"><div><h2>בדיקת אירוע</h2><p>${fmtTs(e.start_ts||e.updated_ts)} · ${esc(e.camera)}</p></div><button class="ghost" onclick="closeEventDialog()">✕ סגור</button></div>
     <div class="event-media"><img src="api/activity/${encodeURIComponent(eventId)}/image" alt="פנים מהאירוע"><button class="act play-clip" onclick="showEventVideo('${eventId}')">▶ נגן קליפ</button></div>
-    <div class="row"><span class="badge">${decisionInfo(e.status)[0]}</span><b>${predicted?`הצעת המערכת: ${esc(predicted)}`:'לא הוצעה זהות'}</b><span>${confidence(e.score)}</span></div>
-    <p class="stat">${decisionInfo(e.status)[2]} · ההפרש מהמועמד הבא הוא ${confidence(e.margin)}.</p>
+    <div class="evidence-grid">
+      <div class="evidence-card primary"><span class="evidence-label">החלטת פנים · סמכות הזהות</span><b>${e.person?esc(e.person):decisionInfo(e.status)[0]}</b><p>${confidence(e.score)} · פער ${confidence(e.margin)} · ${e.confirmations||0} פריימים</p></div>
+      <div class="evidence-card support"><span class="evidence-label">הופעה בין מצלמות · רמז בלבד</span><b>${e.probable_person?esc(e.probable_person):'אין רמז'}</b><p>${e.probable_person?confidence(e.probable_score):'לא שימש לקביעת זהות'}</p></div>
+      <div class="evidence-card support"><span class="evidence-label">AI מקומי · תיאור וחיפוש בלבד</span><b>${e.ai_description?esc(e.ai_description):'אין תיאור'}</b><p>לעולם אינו מצביע על זהות</p></div>
+    </div>
+    <p class="stat">${decisionInfo(e.status)[2]}</p>
     ${refs.references.length?`<h2>תמונות ייחוס להשוואה</h2><div class="reference-strip">${refs.references.map(r=>`<img src="${r.url}" title="${esc(r.caption)}">`).join('')}</div>`:''}
     <div class="verify-actions">
       ${predicted?`<button class="act" onclick="labelEvent('${eventId}',${JSON.stringify(predicted).replace(/"/g,'&quot;')})">✓ נכון, זה ${esc(predicted)}</button>`:''}
@@ -700,17 +782,25 @@ function closeEventDialog(){
   closeEventVideo();
   const dialog=$('#eventDialog');if(dialog?.open)dialog.close();
 }
-function showEventVideo(eventId){
+async function showEventVideo(eventId){
   const overlay=$('#videoOverlay'),video=$('#eventVideo'),message=$('#videoMessage');
-  message.style.display='none';video.style.display='block';
-  video.onerror=()=>{video.style.display='none';message.style.display='block'};
-  video.src=`api/activity/${encodeURIComponent(eventId)}/clip`;
+  message.style.display='block';message.innerHTML='מכין את הקליפ מההקלטה…';video.style.display='none';
   if(!overlay.open)overlay.showModal();
-  const play=video.play();if(play?.catch)play.catch(()=>{});
+  try{
+    const status=await j(`api/activity/${encodeURIComponent(eventId)}/clip/status?prepare=true`);
+    video.onerror=()=>{video.style.display='none';message.style.display='block';message.innerHTML=`הקליפ נמצא אך הדפדפן לא הצליח לנגן אותו. <a class="act" href="api/activity/${encodeURIComponent(eventId)}/clip?download=true">הורדת הקליפ</a>`};
+    video.onloadedmetadata=()=>{message.style.display='none';video.style.display='block'};
+    video.src=`api/activity/${encodeURIComponent(eventId)}/clip`;
+    video.load();
+    const play=video.play();if(play?.catch)play.catch(()=>{});
+  }catch(e){
+    video.style.display='none';message.style.display='block';
+    message.innerHTML=`לא נמצא קליפ לאירוע הזה, וגם יצירה מההקלטה לפי המצלמה והזמן נכשלה.<br><small>${esc(e.message)}</small>`;
+  }
 }
 function closeEventVideo(){
   const overlay=$('#videoOverlay'),video=$('#eventVideo');
-  if(video){video.pause();video.removeAttribute('src');video.load();video.onerror=null}
+  if(video){video.pause();video.removeAttribute('src');video.load();video.onerror=null;video.onloadedmetadata=null}
   if(overlay?.open)overlay.close();
 }
 $('#videoOverlay').addEventListener('cancel',event=>{event.preventDefault();closeEventVideo()});
@@ -758,12 +848,22 @@ async function renderCalibration(){
   const people=Object.entries(current.per_person||{}).map(([name,m])=>
     `<tr><td>${esc(name)}</td><td>${m.events}</td><td>${m.correct}</td><td>${m.false_reject}</td><td>${m.false_identification||0}</td></tr>`).join('');
   const progress=Math.min(100,Math.round((current.events||0)/20*100));
+  const securityProgress=Math.min(100,Math.round(Math.min(
+    (current.events||0)/100,
+    (current.known_events||0)/30,
+    (current.unknown_events||0)/30
+  )*100));
   main.innerHTML=`<div class="dashboard" dir="rtl"><h2>בדיקת דיוק וכיול</h2>
     <div class="cluster ${report.ready?'sugg':''}">
       <div class="head"><b>${report.ready?'יש מספיק נתונים לכיול אמין':'צריך עוד אימותים שלך'}</b>
         <span class="stat">${current.events||0} מתוך 20 אירועים נבדקו</span></div>
       <div style="height:8px;background:var(--line);border-radius:8px;overflow:hidden;margin:12px 0"><div style="height:100%;width:${progress}%;background:var(--acc)"></div></div>
       <p>${report.ready?'המערכת חישבה הגדרה שמרנית לפי האירועים שאימתת.':'במסך הפעילות בחר מי באמת הופיע. עד שיהיו מספיק דוגמאות, ההגדרות הקיימות לא ישתנו.'}</p>
+      <div class="row"><b>איזון הדוגמאות</b><span>${current.known_events||0} אירועי אדם מוכר · ${current.unknown_events||0} אירועי זר</span></div>
+      ${report.sample_warning?`<p class="stat">חסר לכיול ראשוני: ${esc(report.sample_warning)}</p>`:''}
+      <div class="row"><b>${report.security_ready?'אימות אבטחה הושלם':'אימות אבטחה עדיין בתהליך'}</b><span>${securityProgress}% · היעד: 100 אירועים, לפחות 30 מוכרים ו־30 זרים</span></div>
+      <div style="height:8px;background:var(--line);border-radius:8px;overflow:hidden;margin:8px 0 12px"><div style="height:100%;width:${securityProgress}%;background:var(--muted)"></div></div>
+      ${report.security_warning?'<p class="stat">כיול ראשוני יכול לשפר את הבית, אך אינו הוכחה לרמת אבטחה. המשיכו לאמת אירועים ממצלמות, שעות ותאורה שונות.</p>':''}
       ${current.events?`<div class="row"><b>המצב הנוכחי</b><span>${metric(current.tar)} זיהויים נכונים · ${metric(current.far)} זיהויי שווא · ${metric(current.frr)} פספוסים</span></div>`:''}
       ${recommended?`<div class="row"><b>המלצת המערכת</b><span>סף ביטחון ${(+recommended.threshold).toFixed(2)} · הפרש נדרש ${(+recommended.margin).toFixed(2)}
         · דיוק ${metric(recommended.tar)} · זיהויי שווא ${metric(recommended.far)}</span>

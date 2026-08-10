@@ -3,6 +3,29 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 2.1.0 — 2026-08-10
+
+- **Learning Center:** a guided, non-destructive gallery coach explains blurry,
+  poorly lit and near-duplicate references; bounded Frigate history learning can
+  be monitored and cancelled without silently enrolling anyone.
+- **Controlled Frigate gallery sync:** operators can preview and explicitly select
+  face images to import or export. Imported images are detected and embedded again,
+  names are normalized safely, and a durable ledger prevents duplicate transfers.
+- **Reliable clips on mobile and ingress:** clips are fetched once into a bounded
+  local cache and served with proper HTTP Range support. If an event clip is absent,
+  FaceID reconstructs it from Frigate recordings; the UI reports a real absence and
+  offers download when a browser cannot decode the MP4.
+- **Clear evidence boundaries:** event details visually separate face identity from
+  cross-camera appearance hints and optional AI descriptions. Only the face decision
+  and operator review can establish identity.
+- **Safer calibration:** preliminary tuning and security validation are now distinct.
+  The UI shows known/stranger balance and does not imply security-grade evidence
+  before 100 independent events including at least 30 of each class.
+- **Lower memory use:** recording analysis keeps compressed candidate frames instead
+  of retaining many full-resolution 4K arrays in RAM.
+- **Mobile activity redesign:** recognition rows become readable event cards, the
+  navigation scrollbar is hidden, and the clip player remains above the image modal.
+
 ## 2.0.1 — 2026-08-10
 
 - **Correct local-time activity chart:** hourly person statistics now use the

@@ -3,6 +3,60 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 2.1.0 — 2026-08-10
+
+- **Learning Center:** a guided, non-destructive gallery coach explains blurry,
+  poorly lit and near-duplicate references; bounded Frigate history learning can
+  be monitored and cancelled without silently enrolling anyone.
+- **Controlled Frigate gallery sync:** operators can preview and explicitly select
+  face images to import or export. Imported images are detected and embedded again,
+  names are normalized safely, and a durable ledger prevents duplicate transfers.
+- **Reliable clips on mobile and ingress:** clips are fetched once into a bounded
+  local cache and served with proper HTTP Range support. If an event clip is absent,
+  FaceID reconstructs it from Frigate recordings; the UI reports a real absence and
+  offers download when a browser cannot decode the MP4.
+- **Clear evidence boundaries:** event details visually separate face identity from
+  cross-camera appearance hints and optional AI descriptions. Only the face decision
+  and operator review can establish identity.
+- **Safer calibration:** preliminary tuning and security validation are now distinct.
+  The UI shows known/stranger balance and does not imply security-grade evidence
+  before 100 independent events including at least 30 of each class.
+- **Lower memory use:** recording analysis keeps compressed candidate frames instead
+  of retaining many full-resolution 4K arrays in RAM.
+- **Mobile activity redesign:** recognition rows become readable event cards, the
+  navigation scrollbar is hidden, and the clip player remains above the image modal.
+
+## 2.0.1 — 2026-08-10
+
+- **Correct local-time activity chart:** hourly person statistics now use the
+  browser's IANA timezone (including daylight-saving rules) instead of the add-on
+  container timezone. Bar direction is isolated from the Hebrew RTL layout, so bar
+  length always grows consistently with the displayed count.
+- **Mobile clip player:** event clips now open from an explicit play button in a
+  second top-layer modal above the event image. Closing pauses playback, removes the
+  media source and leaves the event review open underneath.
+
+## 2.0.0 — 2026-07-27
+
+- **Investigation center:** filter all recognition events by text, person, decision,
+  date and time. Open an event to see its face image, explanation, gallery references
+  and an inline Frigate clip when the recording still exists.
+- **Fast, accountable review:** large correct/other/unknown actions, undo, reviewer
+  attribution and append-only review history. HA actions can submit reviews over MQTT.
+- **Person profiles:** last location/time, totals, confidence, camera/hour charts,
+  verified accuracy, weak events and gallery coaching.
+- **System Doctor:** simple seven-day camera quality cards plus Frigate connection
+  diagnostics and setup advice.
+- **Safer Frigate connection:** authenticated port 8971, TLS verification and automatic
+  session renewal are supported and recommended. Port 5000 is compatibility-only.
+  Media is proxied so browser clients never receive Frigate credentials.
+- **Home Assistant tools:** central MQTT event entity, automation wizard and an
+  actionable-notification blueprint with snapshot and review buttons.
+- **Calibration, AI and privacy:** day/night cohorts, factual daily summaries, a hard
+  rule that AI never decides identity, separate evidence retention, immediate pruning
+  and full person-history deletion support.
+- **Granite UI:** responsive Hebrew event viewer, profiles, health and privacy screens.
+
 ## 1.0.2 — 2026-07-27
 
 - **Visual activity verification:** every Activity event now shows its captured face,

@@ -23,6 +23,7 @@ class ClipAnalyzer:
         self, engine, frigate, *, max_frames: int = 24, max_samples: int = 8,
         min_face_px: int = 48, min_quality: float = 0.35,
         track_similarity: float = 0.55, diversity_similarity: float = 0.995,
+        media_store=None, max_faces_per_frame: int = 4,
     ):
         self.engine = engine
         self.frigate = frigate
@@ -32,8 +33,13 @@ class ClipAnalyzer:
         self.min_quality = float(min_quality)
         self.track_similarity = float(track_similarity)
         self.diversity_similarity = float(diversity_similarity)
+        self.media_store = media_store
+        self.max_faces_per_frame = max(1, min(int(max_faces_per_frame), 12))
 
     def analyze(self, event_id: str, reference_embedding=None) -> list[FaceSample]:
+        if self.media_store is not None:
+            path = self.media_store.clip_path(event_id)
+            return self._analyze_file(str(path), reference_embedding) if path else []
         fd, path = tempfile.mkstemp(suffix=".mp4", prefix="faceid-analyze-")
         os.close(fd)
         try:
@@ -61,6 +67,7 @@ class ClipAnalyzer:
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     continue
+                measured = []
                 for face in self.engine.faces(frame):
                     quality = measure_face_quality(
                         frame, face, min_face_px=self.min_face_px,
@@ -68,11 +75,24 @@ class ClipAnalyzer:
                     )
                     if not quality.usable:
                         continue
+                    measured.append((quality.score, quality, face))
+                # A pathological detector result must not retain hundreds of copies
+                # of a 4K frame until the event finishes.
+                measured.sort(key=lambda item: item[0], reverse=True)
+                encoded = None
+                for _, quality, face in measured[:self.max_faces_per_frame]:
+                    if encoded is None:
+                        ok, buffer = cv2.imencode(
+                            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88]
+                        )
+                        if not ok:
+                            break
+                        encoded = buffer.tobytes()
                     emb = face.normed_embedding
                     track = self._track_for(tracks, emb)
                     tracks[track]["embeddings"].append(emb)
                     tracks[track]["samples"].append(
-                        FaceSample(frame, face, quality, int(frame_index), track)
+                        FaceSample(encoded, face, quality, int(frame_index), track)
                     )
 
             if not tracks:
@@ -94,7 +114,14 @@ class ClipAnalyzer:
                 diverse.append(sample)
                 if len(diverse) >= self.max_samples:
                     break
-            return sorted(diverse, key=lambda sample: sample.frame_index)
+            for sample in diverse:
+                sample.frame = cv2.imdecode(
+                    np.frombuffer(sample.frame, np.uint8), cv2.IMREAD_COLOR
+                )
+            return sorted(
+                (sample for sample in diverse if sample.frame is not None),
+                key=lambda sample: sample.frame_index,
+            )
         finally:
             cap.release()
 

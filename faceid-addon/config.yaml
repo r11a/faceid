@@ -1,5 +1,5 @@
 name: FaceID
-version: "2.0.1"
+version: "2.1.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -39,6 +39,9 @@ options:
   clip_analysis: true
   clip_max_frames: 24
   clip_max_samples: 8
+  media_max_clip_mb: 150
+  media_cache_mb: 1000
+  media_retention_hours: 24
   cluster_eps: 0.55
   suggest_threshold: 0.40
   max_faces_per_person: 40
@@ -89,6 +92,9 @@ schema:
   clip_analysis: bool
   clip_max_frames: int(4,120)
   clip_max_samples: int(2,30)
+  media_max_clip_mb: int(20,1000)
+  media_cache_mb: int(100,10000)
+  media_retention_hours: int(1,168)
   cluster_eps: float(0.3,0.8)
   suggest_threshold: float(0.1,0.9)
   max_faces_per_person: int(5,100)

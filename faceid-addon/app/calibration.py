@@ -133,12 +133,30 @@ def build_calibration_report(
             item["margin"],
         ),
     ) if candidates else current
+    ready = (len(rows) >= 20 and current["known_events"] >= 5
+             and current["unknown_events"] >= 5)
+    # A small balanced set is enough for a preliminary household tuning, but
+    # not enough to claim security-grade error rates. Keep that distinction
+    # explicit so a lucky handful of stranger events cannot imply safety.
+    security_ready = (
+        len(rows) >= 100 and current["known_events"] >= 30
+        and current["unknown_events"] >= 30
+    )
+    missing = []
+    if len(rows) < 20:
+        missing.append(f"{20 - len(rows)} more completed events")
+    if current["known_events"] < 5:
+        missing.append(f"{5 - current['known_events']} more known-person events")
+    if current["unknown_events"] < 5:
+        missing.append(f"{5 - current['unknown_events']} more stranger events")
     return {
-        "ready": len(rows) >= 20 and current["known_events"] >= 5
-                 and current["unknown_events"] >= 5,
-        "sample_warning": (
-            None if len(rows) >= 20
-            else "Label at least 20 independent events before trusting calibration."
+        "ready": ready,
+        "security_ready": security_ready,
+        "sample_warning": None if ready else "Label " + ", ".join(missing) + ".",
+        "security_warning": (
+            None if security_ready else
+            "Security validation needs at least 100 independent events, including "
+            "30 known-person and 30 stranger events across real cameras and lighting."
         ),
         "target_far": target_far,
         "current": current,
