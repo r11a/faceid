@@ -87,8 +87,9 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     def index():
         return _index_response()
 
-    @app.get("/ui-3.1.1")
-    def versioned_index():
+    @app.get("/ui-{ui_version}")
+    def versioned_index(ui_version: str):
+        """Compatibility alias only; Home Assistant ingress always enters at root."""
         return _index_response()
 
     @app.get("/api/persons")
