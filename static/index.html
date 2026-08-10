@@ -19,6 +19,9 @@ header{display:flex;align-items:center;gap:14px;padding:17px clamp(16px,3vw,36px
 header h1{font:800 18px var(--sans);color:var(--fg);letter-spacing:.02em}
 header h1 span{color:var(--acc)}
 header .stat{font:12px var(--sans);color:var(--dim);padding:6px 10px;background:var(--panel);border-radius:99px}
+.header-spacer{flex:1}
+.version-badge{color:var(--acc)!important;font-weight:800!important;border:1px solid color-mix(in oklab,var(--acc) 45%,var(--line))}
+.clock{font-variant-numeric:tabular-nums;color:var(--fg)!important}
 nav{display:flex;gap:6px;border-bottom:1px solid var(--line);padding:8px clamp(12px,3vw,32px);
   overflow-x:auto;background:#141516d9;position:sticky;top:116px;z-index:4;backdrop-filter:blur(16px);
   scrollbar-width:none;-webkit-overflow-scrolling:touch}
@@ -125,6 +128,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .sample-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:9px}.sample-card{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#17191b}.sample-card img{width:100%;height:88px;object-fit:cover}.sample-card div{padding:7px;font-size:11px}.sample-card.reject{border-color:#824a50}
 .visit-list{display:grid;gap:11px}.visit-card{display:grid;grid-template-columns:180px 1fr auto;gap:16px;align-items:center;border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:16px}.route{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.route span{border:1px solid var(--line);border-radius:99px;padding:4px 9px}.role-note{border-right:3px solid var(--warn);padding:10px 14px;background:#2a241b;border-radius:8px}
 @media(max-width:760px){.camera-layout{grid-template-columns:1fr}.camera-list{position:static;grid-template-columns:repeat(2,1fr)}.funnel{grid-template-columns:repeat(2,1fr)}.visit-card{grid-template-columns:1fr}.studio-controls .row>*{width:100%}.act,.ghost{min-height:44px}}
+@media(max-width:560px){header{gap:7px;flex-wrap:wrap}header h1{width:100%}.header-spacer{display:none}header .stat{font-size:10px;padding:5px 8px}.clock{margin-inline-start:auto}}
 .dashboard{direction:rtl;text-align:right}
 .dashboard td,.dashboard th{text-align:right}
 .welcome-card{display:flex;align-items:center;justify-content:space-between;gap:18px;
@@ -215,6 +219,9 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 <body>
 <header>
   <h1><span>Face</span>ID <small style="font-weight:500;color:var(--dim)">מרכז זיהוי חכם</small></h1>
+  <span class="header-spacer"></span>
+  <span class="stat clock" id="clock" aria-label="שעה מקומית">--:--:--</span>
+  <span class="stat version-badge" id="versionBadge">v—</span>
   <span class="stat" id="health">—</span>
 </header>
 <div class="workspace-switch" aria-label="בחירת אזור עבודה">
@@ -246,6 +253,7 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 <dialog id="videoOverlay" class="video-overlay" onclick="if(event.target===this)closeEventVideo()"><div class="video-panel" onclick="event.stopPropagation()"><button class="ghost video-close" onclick="closeEventVideo()">✕ סגור</button><video id="eventVideo" controls playsinline preload="metadata"></video><div id="videoMessage" class="stat" style="display:none;padding:18px;text-align:center"></div></div></dialog>
 
 <script>
+const UI_VERSION='3.1.1';
 const $=s=>document.querySelector(s), main=$('#main');
 let tab='dashboard', persons={}, selected=new Set(), suggestThr=0.40;
 let workspace=localStorage.getItem('faceid-workspace')||'operate';
@@ -288,8 +296,22 @@ document.querySelectorAll('.workspace-switch button').forEach(b=>b.onclick=()=>s
 setWorkspace(workspace,false);
 
 async function health(){try{const h=await j('api/health');
+  if(h.version&&h.version!==UI_VERSION){
+    const reloadKey=`faceid-ui-reload-${h.version}`;
+    if(!sessionStorage.getItem(reloadKey)){
+      sessionStorage.setItem(reloadKey,'1');
+      const fresh=new URL(location.href);fresh.searchParams.set('_faceid_ui',h.version);location.replace(fresh);return;
+    }
+    toast(`ממשק ${UI_VERSION} מחובר לשרת ${h.version}. סגרו ופתחו מחדש את חלון התוסף.`,'error');
+  }
   if(typeof h.suggest_threshold==='number')suggestThr=h.suggest_threshold;
-  $('#health').textContent=`● מחובר · v${h.version||'?'} · ${h.persons} אנשים · ${h.queue} לבדיקה · ${h.open_events} פעילים`}catch(e){$('#health').textContent='● לא מחובר'}}
+  $('#versionBadge').textContent=`v${h.version||'?'}`;
+  $('#health').textContent=`● מחובר · ${h.persons} אנשים · ${h.queue} לבדיקה · ${h.open_events} פעילים`}catch(e){$('#health').textContent='● לא מחובר'}}
+function updateClock(){
+  const now=new Date();
+  $('#clock').textContent=now.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  $('#clock').title=now.toLocaleDateString('he-IL',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
+}
 
 function personOptions(sel){
   const es=Object.entries(persons).sort((a,b)=>a[1].name.localeCompare(b[1].name,undefined,{sensitivity:'base'}));
@@ -1333,7 +1355,7 @@ async function delPerson(slug,name){if(!confirm(`Delete "${name}" and all their 
   await j(`api/persons/${slug}`,{method:'DELETE'});render()}
 
 
-health();setInterval(health,10000);render();
+updateClock();setInterval(updateClock,1000);health();setInterval(health,10000);render();
 </script>
 </body>
 </html>

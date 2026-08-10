@@ -3,6 +3,17 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 3.1.1 — 2026-08-10
+
+- **Reliable UI upgrades through Home Assistant Ingress:** each release now opens a
+  versioned ingress entry point instead of reusing the same browser document URL.
+- **No reusable document validators:** the main UI is served as fresh HTML bytes with
+  strict browser and proxy no-cache headers, without `ETag` or `Last-Modified`.
+- **Automatic version recovery:** the UI compares its embedded version with the
+  running backend and performs one cache-busted reload when they differ.
+- **Visible clock and version:** the header shows a live local clock and the version
+  reported by the running backend in separate mobile-friendly badges.
+
 ## 3.1.0 — 2026-08-10
 
 - **Commercial-grade workspace UI:** daily operations, event investigation and
