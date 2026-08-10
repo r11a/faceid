@@ -55,6 +55,12 @@ Full documentation: https://github.com/r11a/faceid
 | `camera_graph_json` | JSON camera adjacency map, e.g. `{"front":["hall"]}` |
 | `reid_*` | short-lived clothing hint; it never becomes a face identity verdict |
 | `automation_cooldown` | duplicate suppression for versioned automation events |
+| `video_decode` | `auto`, software, VAAPI or CUDA; actual backend/fallback appears in Health |
+| `body_enabled` | enable the trained body-consensus advisor (off until reviewed and trained) |
+| `body_threshold` | minimum body classifier probability; calibration may raise it |
+| `body_confirmations` | distinct events required before body consensus is shown |
+| `body_consensus_window` | seconds in which body confirmations are grouped |
+| `vision_advisor_enabled` | optional local Vision investigation path; never identity authority |
 | `webhook_urls` | optional HTTP endpoints receiving the same final v1 event |
 | `ai_*` | optional local Ollama-compatible context and semantic search |
 | `set_sub_label` | opt in to writing confirmed names back to Frigate events |

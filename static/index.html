@@ -185,6 +185,7 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
   <button data-t="unknowns" title="פנים שממתינות לזיהוי">? לבדיקה</button>
   <button data-t="persons" title="אנשים מוכרים ותמונות הייחוס שלהם">☺ אנשים</button>
   <button data-t="learning" title="שיפור הגלריה וסנכרון מבוקר עם Frigate">✦ למידה</button>
+  <button data-t="advanced" title="זיהוי גוף ובדיקת שלוש שכבות">◇ זיהוי מתקדם</button>
   <button data-t="activity" title="מי נראה, איפה ומתי">◷ פעילות</button>
   <button data-t="health-center" title="בדיקת מצלמות וחיבורים">♡ בריאות</button>
   <button data-t="automations" title="בניית אוטומציות ל־Home Assistant">⌁ אוטומציות</button>
@@ -239,6 +240,7 @@ async function render(){
   if(tab==='unknowns')return renderUnknowns();
   if(tab==='persons')return renderPersons();
   if(tab==='learning')return renderLearning();
+  if(tab==='advanced')return renderAdvanced();
   if(tab==='ignored')return renderIgnored();
   if(tab==='activity')return renderActivity();
   if(tab==='health-center')return renderHealthCenter();
@@ -384,8 +386,8 @@ async function renderLearning(){
   try{sync=await j('api/frigate-sync')}catch(e){syncError=e.message}
   if(tab!=='learning')return;
   const people=coach.people.map(p=>`<details><summary>${esc(p.person)} · ${p.images.length} תמונות · ${p.review_count?p.review_count+' לבדיקה':'כיסוי תקין'}</summary><p class="stat">${p.advice.map(esc).join(' · ')}</p><div class="sync-grid">${p.images.filter(x=>x.reasons.length).slice(0,20).map(x=>`<div class="sync-card"><img loading="lazy" src="${x.url}"><b>${Math.round(x.score*100)}%</b><div class="stat">${x.reasons.map(esc).join(' · ')}</div><button class="ghost" onclick="setAsideReference('${p.slug}','${x.file}')">העבר הצידה</button></div>`).join('')||'<div class="friendly-empty">אין תמונות חלשות שמחייבות בדיקה.</div>'}</div></details>`).join('');
-  const remote=(sync?.remote||[]).filter(x=>!x.imported).slice(0,80).map(x=>`<label class="sync-card"><input class="sync-import" type="checkbox" data-person="${esc(x.person)}" data-file="${esc(x.file)}"><img loading="lazy" src="${x.url}"><b>${esc(x.person.replaceAll('_',' '))}</b><div class="stat">מ־Frigate</div></label>`).join('');
-  const local=(sync?.local||[]).filter(x=>!x.exported).slice(0,80).map(x=>`<label class="sync-card"><input class="sync-export" type="checkbox" data-slug="${esc(x.slug)}" data-file="${esc(x.file)}"><img loading="lazy" src="${x.url}"><b>${esc(x.person)}</b><div class="stat">אל Frigate</div></label>`).join('');
+  const remote=(sync?.remote||[]).filter(x=>!x.imported&&!x.dismissed).slice(0,80).map(x=>`<label class="sync-card"><input class="sync-import" type="checkbox" data-person="${esc(x.person)}" data-file="${esc(x.file)}"><img loading="lazy" src="${x.url}"><b>${esc(x.person.replaceAll('_',' '))}</b><div class="stat">מ־Frigate${x.failure?' · ניסיון קודם נכשל':''}</div></label>`).join('');
+  const local=(sync?.local||[]).filter(x=>!x.exported&&!x.dismissed).slice(0,80).map(x=>`<label class="sync-card"><input class="sync-export" type="checkbox" data-slug="${esc(x.slug)}" data-file="${esc(x.file)}"><img loading="lazy" src="${x.url}"><b>${esc(x.person)}</b><div class="stat">אל Frigate${x.failure?' · ניסיון קודם נכשל':''}</div></label>`).join('');
   const s=sync?.summary||{};
   main.innerHTML=`<div class="dashboard" dir="rtl">
     <div class="section-head"><div><h2>מרכז למידה</h2><p>משפרים את חומר הלימוד בשלבים ברורים — שום תמונה לא עוברת אוטומטית.</p></div></div>
@@ -394,8 +396,8 @@ async function renderLearning(){
     <h2>2 · לימוד מאירועים קיימים</h2><div class="health-card"><p>סריקה מוגבלת של אירועי Frigate מחפשת פנים שימושיות ושולחת אותן למסך הבדיקה — לא ישירות לאדם.</p>${backfillRow(backfill)}</div>
     <h2>3 · סנכרון עם ספריית הפנים של Frigate</h2>
     ${syncError?`<div class="health-card warning"><b>לא ניתן לקרוא את ספריית Frigate</b><p class="stat">${esc(syncError)}</p></div>`:`<div class="summary-grid"><div class="summary-card"><span class="label">FaceID</span><span class="value">${s.local_images||0}</span><small>${s.local_people||0} אנשים</small></div><div class="summary-card"><span class="label">Frigate</span><span class="value">${s.frigate_images||0}</span><small>${s.frigate_people||0} אנשים</small></div></div>
-      <details open><summary>ייבוא תמונות מ־Frigate ל־FaceID (${s.import_candidates||0})</summary><p class="stat">בחרו רק תמונות ברורות. כל תמונה נבדקת שוב על ידי מנוע הפנים לפני שמירתה.</p><div class="sync-grid">${remote||'<div class="friendly-empty">אין תמונות חדשות לייבוא.</div>'}</div><button class="act" onclick="runFrigateSync('import')">ייבא מסומנות</button></details>
-      <details><summary>שליחת תמונות נבחרות מ־FaceID ל־Frigate (${s.export_candidates||0})</summary><p class="stat">Frigate עשוי לדחות תמונה ללא פנים ברורות. כישלון נשמר ככישלון בלבד ואינו חוסם ניסיון עתידי.</p><div class="sync-grid">${local||'<div class="friendly-empty">אין תמונות חדשות לשליחה.</div>'}</div><button class="act" onclick="runFrigateSync('export')">שלח מסומנות</button></details>`}
+      <details open><summary>ייבוא תמונות מ־Frigate ל־FaceID (${s.import_candidates||0})</summary><p class="stat">בחרו רק תמונות ברורות. כל תמונה נבדקת שוב על ידי מנוע הפנים לפני שמירתה.</p><div class="sync-grid">${remote||'<div class="friendly-empty">אין תמונות חדשות לייבוא.</div>'}</div><div class="row"><button class="act" onclick="runFrigateSync('import')">ייבא מסומנות</button><button class="ghost" onclick="dismissFrigateSync('import')">הסתר מסומנות</button></div></details>
+      <details><summary>שליחת תמונות נבחרות מ־FaceID ל־Frigate (${s.export_candidates||0})</summary><p class="stat">Frigate עשוי לדחות תמונה ללא פנים ברורות. כישלון נשמר עם סיבה ואינו חוסם ניסיון עתידי.</p><div class="sync-grid">${local||'<div class="friendly-empty">אין תמונות חדשות לשליחה.</div>'}</div><div class="row"><button class="act" onclick="runFrigateSync('export')">שלח מסומנות</button><button class="ghost" onclick="dismissFrigateSync('export')">הסתר מסומנות</button></div></details>`}
     <h2>4 · אימות וכיול</h2><div class="welcome-card"><div><h3>אמתו אירועים אמיתיים לפני שינוי ספים</h3><p>הכיול מפריד אירועים שלמים ולא פריימים מאותו אירוע, ומשתמש גם בדוגמאות של אנשים לא מוכרים כדי למדוד זיהויי שווא.</p></div><button class="act" onclick="setTab('calibration')">למסך הדיוק</button></div>
   </div>`;
 }
@@ -775,9 +777,51 @@ async function openEvent(eventId){
       <select id="eventOther"><option value="">זה אדם אחר…</option>${names.map(n=>`<option>${esc(n)}</option>`).join('')}</select>
       <button class="ghost" onclick="const v=$('#eventOther').value;if(v)labelEvent('${eventId}',v)">שמור אדם אחר</button>
       <button class="ghost" onclick="undoEvent('${eventId}')">↶ בטל אימות אחרון</button>
+      ${predicted?`<button class="ghost" onclick="stageBody('${eventId}',${JSON.stringify(predicted).replace(/"/g,'&quot;')})">הוסף לבדיקה ללימוד גוף</button>`:''}
+      <button class="ghost" onclick="testRecognition('${eventId}')">בדיקת פנים · גוף · AI</button>
     </div></div>`;
   dialog.showModal();
 }
+async function deleteLearningRun(runId){
+  await j(`api/backfill/runs/${encodeURIComponent(runId)}`,{method:'DELETE'});
+  toast('רישום הריצה נמחק');renderLearning();
+}
+async function dismissFrigateSync(direction){
+  const selector=direction==='import'?'.sync-import:checked':'.sync-export:checked';
+  const items=[...document.querySelectorAll(selector)].map(el=>direction==='import'?{person:el.dataset.person,file:el.dataset.file}:{slug:el.dataset.slug,file:el.dataset.file});
+  if(!items.length){toast('יש לבחור תמונות להסתרה');return}
+  await j('api/frigate-sync/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({direction,items})});toast('הבחירה הוסתרה ונשמרה');renderLearning();
+}
+async function stageBody(eventId,person){
+  try{await j(`api/body/from-event/${encodeURIComponent(eventId)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({person})});toast('התמונה נוספה לבדיקה — היא עדיין לא נלמדה');}
+  catch(e){toast('לא ניתן להוסיף: '+e.message)}
+}
+async function testRecognition(eventId){
+  toast('מריץ בדיקה על שלוש השכבות…');
+  try{const r=await j(`api/recognition-test/${encodeURIComponent(eventId)}`,{method:'POST'});
+    const face=r.face||{},body=r.body||{},vision=r.vision||{};
+    $('#eventDialogContent').insertAdjacentHTML('beforeend',`<div class="health-card" style="margin-top:14px" dir="rtl"><h3>בדיקת שלוש שכבות</h3>
+      ${vision.grid?`<img src="api/recognition-test/${encodeURIComponent(eventId)}/grid" style="width:100%;max-height:440px;object-fit:contain;margin:12px 0" alt="פריימים שנבדקו">`:'<p class="stat">לא נשמר קליפ לאירוע הזה, לכן אין רשת פריימים להצגה.</p>'}
+      <div class="evidence-grid"><div class="evidence-card primary"><span class="evidence-label">פנים · קובע זהות</span><b>${esc(face.person||face.decision||'ללא תוצאה')}</b><p>${confidence(face.score||0)}</p></div>
+      <div class="evidence-card support"><span class="evidence-label">גוף · רמז בלבד</span><b>${esc(body.person||body.candidate||'ללא תוצאה')}</b><p>${body.score?confidence(body.score):''} · ${body.confirmations||0} חיזוקים</p></div>
+      <div class="evidence-card support"><span class="evidence-label">AI חזותי · חקירה בלבד</span><b>${esc(vision.status||'כבוי')}</b><p>${esc(vision.analysis?JSON.stringify(vision.analysis):vision.error||'לא קובע זהות')}</p></div></div><p class="stat">${esc(r.policy)}</p></div>`);
+  }catch(e){toast('הבדיקה נכשלה: '+e.message)}
+}
+
+async function renderAdvanced(){
+  const [data,h]=await Promise.all([j('api/body'),j('api/health')]);if(tab!=='advanced')return;
+  const people=Object.values(persons).map(p=>p.name).sort();
+  const cards=data.pending.map(row=>`<div class="sync-card"><img src="${row.image}" alt="דוגמת גוף לבדיקה"><b>${esc(row.suggested_person||'לא ידוע')}</b><p class="stat">${esc(row.camera||'')} · חדות ${row.quality?.sharpness||0}</p><select id="body-${row.id}">${people.map(name=>`<option ${name===row.suggested_person?'selected':''}>${esc(name)}</option>`).join('')}</select><div class="row"><button class="act" onclick="reviewBody('${row.id}','approve')">נכון</button><button class="ghost" onclick="reviewBody('${row.id}','stranger')">אדם זר</button><button class="ghost" onclick="reviewBody('${row.id}','reject')">לא שימושי</button></div></div>`).join('');
+  const s=data.status,frames=h.frames||{},vision=h.vision||{};
+  main.innerHTML=`<div class="dashboard" dir="rtl"><div class="hero"><div class="hero-main"><div class="eyebrow">FaceID 3 · שלוש שכבות ראיות</div><h1>יותר הקשר, בלי להפוך רמז לזהות</h1><p>פנים קובעות זהות. גוף מחזק הופעה חוזרת רק אחרי בדיקה שלך. AI חזותי מסביר מה רואים לצורכי חקירה בלבד.</p></div><div class="guide-card"><h3>איך מפעילים?</h3><div class="guide-list"><div class="guide-step"><span class="step-num">1</span><span>אוספים ובודקים תמונות גוף.</span></div><div class="guide-step"><span class="step-num">2</span><span>נדרשות לפחות 3 תמונות לאדם; מומלץ להוסיף אנשים ודוגמאות זרים לכיול אמין.</span></div><div class="guide-step"><span class="step-num">3</span><span>מאמנים ורק אז מפעילים את שכבת הגוף.</span></div></div></div></div>
+    <div class="summary-grid"><div class="summary-card"><span class="label">ממתינות לבדיקה</span><span class="value">${data.pending.length}</span></div><div class="summary-card"><span class="label">אנשים עם חומר מאושר</span><span class="value">${Object.keys(data.approved).length}</span></div><div class="summary-card"><span class="label">דוגמאות זרים</span><span class="value">${data.strangers}</span></div><div class="summary-card"><span class="label">מצב גוף</span><span class="value" style="font-size:20px">${s.enabled?'פעיל':s.armed?'מוכן':'טרם אומן'}</span></div></div>
+    <div class="welcome-card"><div><h3>מודל גוף מקומי DINOv2</h3><p>${s.armed?`אומן לסיווג ${s.classes.length} קבוצות · סף ${Math.round(s.threshold*100)}%`:'טרם מוכן. המערכת אינה לומדת שום תמונה לפני אישור מפורש.'}</p></div><div class="row"><button class="act" onclick="trainBody()">אמן מחדש</button><button class="ghost" onclick="toggleBody(${!s.enabled})">${s.enabled?'כבה שכבת גוף':'הפעל לאחר אימון'}</button></div></div>
+    <div class="section-head"><div><h2>חומר שממתין לאישור</h2><p>לחיצה על “נכון” מעבירה את התמונה למאגר האימון, לא לזהות פנים.</p></div></div><div class="sync-grid">${cards||'<div class="friendly-empty">אין כרגע תמונות לבדיקה. פתחו אירוע בפעילות ולחצו “הוסף לבדיקה ללימוד גוף”.</div>'}</div>
+    <div class="section-head"><div><h2>שקיפות טכנית</h2><p>מוצג מה באמת פעיל — לא מה הוגדר בלבד.</p></div></div><div class="people-dashboard"><div class="health-card"><h3>פענוח וידאו משותף</h3><p>${esc(frames.last_backend||'טרם הופעל')} · ${frames.cache_hits||0} שימושים חוזרים</p><p class="stat">מצב מבוקש ${esc(frames.requested_mode||'auto')} · ${frames.fallbacks||0} נפילות לתוכנה</p></div><div class="health-card"><h3>AI חזותי</h3><p>${vision.enabled?'פעיל':'כבוי'} · ${esc(vision.model||'')}</p><p class="stat">חקירה בלבד; לעולם אינו קובע זהות.</p></div></div></div>`;
+}
+async function reviewBody(id,action){const person=$(`#body-${id}`)?.value;await j(`api/body/material/${id}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,person})});toast('הבחירה נשמרה');renderAdvanced()}
+async function trainBody(){try{await j('api/body/train',{method:'POST'});toast('האימון הושלם');renderAdvanced()}catch(e){toast('עדיין אי אפשר לאמן: '+e.message)}}
+async function toggleBody(enabled){try{await j('api/body/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});renderAdvanced()}catch(e){toast(e.message)}}
 function closeEventDialog(){
   closeEventVideo();
   const dialog=$('#eventDialog');if(dialog?.open)dialog.close();
@@ -810,11 +854,12 @@ async function undoEvent(eventId){
 }
 async function renderHealthCenter(){
   const data=await j('api/system-report');if(tab!=='health-center')return;
-  const f=data.frigate;
+  const f=data.frigate,a=data.advanced||{},runtime=a.runtime||{},frames=a.frames||{},body=a.body||{};
   main.innerHTML=`<div class="dashboard" dir="rtl"><div class="section-head"><div><h2>בריאות המערכת</h2><p>הסבר פשוט למה כדאי לטפל — בלי לקרוא לוגים.</p></div></div>
     <div class="health-card ${f.secure_mode&&f.authenticated?'':'warning'}"><h3>חיבור ל־Frigate</h3>
       <p>${f.reachable?'מחובר':'לא ניתן להתחבר'} · ${f.secure_mode?'חיבור מאובטח':'פורט 5000 לא מאומת'} · ${f.authenticated?'משתמש מאומת':'ללא פרטי כניסה'} · ${f.tls_verified?'TLS נבדק':'בדיקת תעודה כבויה'}</p>
       <small>${esc(f.url)}</small>${!f.secure_mode?'<p class="stat">מומלץ לעבור ל־https://FRIGATE:8971 ולהגדיר משתמש viewer. פורט 5000 מיועד לרשת פנימית מוגבלת בלבד.</p>':''}</div>
+    <h2>בדיקות עצמיות</h2><div class="people-dashboard"><div class="health-card ${runtime.ok===false?'warning':''}"><h3>אחסון ותורים</h3><p>${runtime.ok===false?'דורש בדיקה':'תקין'} · ${runtime.checks?.data_mount||'לא ידוע'}</p><p class="stat">${(runtime.warnings||[]).map(esc).join(' · ')||'תיקיית הנתונים ניתנת לכתיבה והתור אינו עמוס.'}</p></div><div class="health-card"><h3>פענוח וידאו</h3><p>${esc(frames.last_backend||'טרם הופעל')}</p><p class="stat">${frames.fallbacks||0} נפילות לתוכנה · FFmpeg ${frames.ffmpeg_available?'זמין':'לא זמין'}</p></div><div class="health-card"><h3>שכבת גוף</h3><p>${body.enabled?'פעילה':body.armed?'אומנה אך כבויה':'טרם אומנה'}</p><p class="stat">ראיה מסייעת בלבד · סף ${Math.round((body.threshold||0)*100)}%</p></div></div>
     <h2>מצלמות · 7 ימים</h2><div class="people-dashboard">${data.cameras.map(c=>`<div class="health-card ${c.level}"><h3>${esc(c.camera)}</h3><p>${c.events} אירועים · ${c.recognized} זיהויים</p><p class="stat">ללא פנים ${confidence(c.no_face_rate)} · דורש בדיקה ${confidence(c.review_rate)} · ציון ממוצע ${confidence(c.avg_score)}</p>${c.level==='warning'?'<p style="color:var(--warn)">כדאי לבדוק תאורה, גובה מצלמה ורזולוציית detect.</p>':'<p style="color:var(--good)">המצלמה נראית תקינה.</p>'}</div>`).join('')||'<div class="friendly-empty">אין עדיין מספיק אירועים לבדיקה.</div>'}</div></div>`;
 }
 async function renderAutomations(){

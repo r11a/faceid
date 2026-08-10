@@ -20,6 +20,10 @@ from .integrations import IntegrationDispatcher
 from .ai_context import AIContextService
 from .media_store import EventMediaStore
 from .frigate_sync import FrigateGallerySync
+from .frame_distributor import FrameDistributor
+from .body_recognition import BodyRecognitionService
+from .vision_advisor import VisionAdvisor
+from .runtime_health import RuntimeHealth
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -31,6 +35,10 @@ log = logging.getLogger("faceid")
 def main():
     cfg = yaml.safe_load((BASE / "config.yaml").read_text())
     data_dir = BASE / "data"
+    pending_audit = data_dir / "audit.restore-pending"
+    if pending_audit.is_file():
+        pending_audit.replace(data_dir / "audit.db")
+        log.warning("restored audit history from the previous backup before opening the database")
     # Live-editierbare Einstellungen (Settings-Tab) liegen als Overlay in data/settings.json
     # und gewinnen über config.yaml — persistent auch beim Add-on (config.yaml wird dort
     # bei jedem Start neu generiert, /data überlebt).
@@ -62,6 +70,26 @@ def main():
         max_clip_bytes=int(cfg["faceid"].get("media_max_clip_mb") or 150) * 1_000_000,
         max_cache_bytes=int(cfg["faceid"].get("media_cache_mb") or 1000) * 1_000_000,
         retention_hours=float(cfg["faceid"].get("media_retention_hours") or 24),
+    )
+    frame_distributor = FrameDistributor(
+        data_dir, media_store,
+        decode_mode=str(cfg["faceid"].get("video_decode", "auto")),
+        max_frames=int(cfg["faceid"].get("clip_max_frames", 24)),
+    )
+    body_recognition = BodyRecognitionService(
+        data_dir,
+        model_path=str(cfg["faceid"].get("body_model_path") or "/opt/faceid/models/dinov2-small.onnx"),
+        enabled=bool(cfg["faceid"].get("body_enabled", False)),
+        threshold=float(cfg["faceid"].get("body_threshold", .72)),
+        confirmations=int(cfg["faceid"].get("body_confirmations", 3)),
+        consensus_window=float(cfg["faceid"].get("body_consensus_window", 300)),
+    )
+    vision_advisor = VisionAdvisor(
+        data_dir, frame_distributor,
+        enabled=bool(cfg["faceid"].get("vision_advisor_enabled", False)),
+        url=str(cfg["faceid"].get("ai_url", "http://localhost:11434")),
+        model=str(cfg["faceid"].get("ai_vision_model", "gemma3:4b")),
+        timeout=float(cfg["faceid"].get("ai_timeout", 60)),
     )
     audit = AuditStore(
         data_dir / "audit.db",
@@ -101,8 +129,11 @@ def main():
         cfg, engine, gallery, frigate, audit=audit,
         scenario_manager=scenario_manager, reid=reid,
         dispatcher=dispatcher, ai_context=ai_context, media_store=media_store,
+        frame_distributor=frame_distributor, body_recognition=body_recognition,
     )
     processor.frigate_sync = FrigateGallerySync(data_dir, gallery, engine, frigate)
+    processor.vision_advisor = vision_advisor
+    processor.runtime_health = RuntimeHealth(data_dir, processor)
     processor.start()
     start_auto_backup(cfg["faceid"], data_dir)
     app = build_app(cfg, engine, gallery, processor, data_dir, BASE / "static")

@@ -3,6 +3,25 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 3.0.0 — 2026-08-10
+
+- **Three evidence paths:** authoritative ArcFace identity, human-reviewed DINOv2
+  body appearance with multi-event consensus, and an optional local Vision advisor.
+  Body and Vision are advisory and can never establish identity or unlock a door.
+- **Guided body learning:** reviewed resident material, confirmed stranger negatives,
+  balanced SVM training and repeated stratified calibration reduce false matches.
+- **Shared video pipeline:** clips and decoded frames are reused by face, body and
+  Vision; configured hardware decode falls back safely and reports what actually ran.
+- **12-cell investigation tests:** compare face, body and AI against the exact numbered
+  historical frames while preserving clear evidence authority.
+- **Stronger Frigate sync:** durable dismissals, retry/failure details, deletion
+  awareness, connection diagnostics and serialized changes.
+- **Full operational backup:** gallery, reviewed body material/status, audit history, learning
+  runs, settings and sync state; credentials, clips and caches stay excluded.
+- **Self-checks and responsive UX:** persistent-storage, queue, decoder and model
+  health plus a granite advanced screen verified on desktop and mobile.
+
+
 ## 2.1.1 — 2026-08-10
 
 - **Safe upgrades:** existing Home Assistant installations now receive media-cache

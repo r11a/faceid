@@ -29,13 +29,15 @@ class EventProcessor:
     def __init__(
         self, cfg: dict, engine, gallery, frigate, audit=None, *,
         scenario_manager=None, reid=None, dispatcher=None, ai_context=None,
-        media_store=None,
+        media_store=None, frame_distributor=None, body_recognition=None,
     ):
         self.cfg = cfg
         self.engine = engine
         self.gallery = gallery
         self.frigate = frigate
         self.media_store = media_store
+        self.frame_distributor = frame_distributor
+        self.body_recognition = body_recognition
         self.audit = audit
         self.scenario_manager = scenario_manager
         self.reid = reid
@@ -89,6 +91,7 @@ class EventProcessor:
             media_store=media_store,
             min_face_px=self.min_face_px,
             min_quality=self.min_face_quality,
+            frame_distributor=frame_distributor,
         )
 
     def _update_policy(self):
@@ -331,6 +334,12 @@ class EventProcessor:
             log.info("event %s (%s): no snapshot from Frigate", eid, st["camera"])
             return
         st["context_frame"] = img
+        if self.body_recognition is not None:
+            try:
+                st["body"] = self.body_recognition.predict(img, eid)
+            except Exception as exc:
+                st["body"] = {"advisory": True, "error": str(exc)[:160]}
+                log.warning("event %s: advisory body path failed: %s", eid, exc)
         found = self.engine.faces(img)
         measured = [
             (measure_face_quality(
@@ -698,7 +707,25 @@ class EventProcessor:
             "probable_score": round(float(probable_score or 0), 4),
             "scenario_id": scenario["scenario_id"] if scenario else None,
             "scenario": scenario,
+            "body": st.get("body"),
         }
+        if self.client and st.get("body"):
+            self.client.publish(
+                f"{self.prefix}/body/advisory",
+                json.dumps({"event_id": eid, "camera": st["camera"], **st["body"]},
+                           ensure_ascii=False),
+                retain=False,
+            )
+        if (
+            self.body_recognition is not None and status == "recognized" and person
+            and st.get("context_frame") is not None
+        ):
+            try:
+                self.body_recognition.add_pending(
+                    eid, st["context_frame"], person, st["camera"], "confirmed-face"
+                )
+            except Exception:
+                log.exception("event %s: could not stage body material", eid)
         if self.dispatcher is not None:
             try:
                 self.dispatcher.dispatch(
@@ -972,6 +999,22 @@ class EventProcessor:
         self.client.publish(
             f"homeassistant/event/{self.prefix}_recognition_event/config",
             json.dumps(event_conf, ensure_ascii=False), retain=True,
+        )
+        body_conf = {
+            "name": "Body evidence (advisory)",
+            "unique_id": f"{self.prefix}_body_advisory",
+            "object_id": f"{self.prefix}_body_advisory",
+            "state_topic": f"{self.prefix}/body/advisory",
+            "value_template": "{{ value_json.person or value_json.candidate or 'none' }}",
+            "json_attributes_topic": f"{self.prefix}/body/advisory",
+            "availability_topic": f"{self.prefix}/status",
+            "icon": "mdi:account-search-outline",
+            "entity_category": "diagnostic",
+            "device": device,
+        }
+        self.client.publish(
+            f"homeassistant/sensor/{self.prefix}_body_advisory/config",
+            json.dumps(body_conf, ensure_ascii=False), retain=True,
         )
         for cam in cams:
             conf = {

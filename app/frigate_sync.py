@@ -69,6 +69,8 @@ class FrigateGallerySync:
         ledger = self._ledger()
         exported = ledger.get("exported", {})
         imported = ledger.get("imported", {})
+        dismissed = ledger.get("dismissed", {})
+        failures = ledger.get("failures", {})
         local_rows, remote_rows = [], []
         remote_names = {self._canonical_person(name) for name in remote}
         for slug, person in local.items():
@@ -79,13 +81,14 @@ class FrigateGallerySync:
                     digest = hashlib.sha256(path.read_bytes()).hexdigest()
                 except OSError:
                     continue
+                remote_exists = self._canonical_person(person["name"]) in remote_names
                 local_rows.append({
                     "slug": slug, "person": person["name"], "file": file,
                     "url": f"media/persons/{quote(slug)}/{quote(file)}",
-                    "exported": digest in exported,
-                    "remote_person_exists": (
-                        self._canonical_person(person["name"]) in remote_names
-                    ),
+                    "exported": digest in exported and remote_exists,
+                    "dismissed": f"export\0{slug}\0{file}" in dismissed,
+                    "failure": failures.get(f"export\0{slug}\0{file}"),
+                    "remote_person_exists": remote_exists,
                 })
         for person, files in remote.items():
             for file in files:
@@ -97,6 +100,8 @@ class FrigateGallerySync:
                         + "&file=" + quote(file, safe="")
                     ),
                     "imported": key in imported,
+                    "dismissed": f"import\0{key}" in dismissed,
+                    "failure": failures.get(f"import\0{key}"),
                     "local_person_exists": any(
                         self._canonical_person(p["name"])
                         == self._canonical_person(person)
@@ -108,10 +113,30 @@ class FrigateGallerySync:
             "summary": {
                 "local_people": len(local), "local_images": len(local_rows),
                 "frigate_people": len(remote), "frigate_images": len(remote_rows),
-                "export_candidates": sum(not row["exported"] for row in local_rows),
-                "import_candidates": sum(not row["imported"] for row in remote_rows),
+                "export_candidates": sum(not row["exported"] and not row["dismissed"] for row in local_rows),
+                "import_candidates": sum(not row["imported"] and not row["dismissed"] for row in remote_rows),
+                "dismissed": len(dismissed), "failures": len(failures),
+            },
+            "diagnostics": {
+                "connection": self.frigate.connection_status(),
+                "ledger_updated": self.ledger_path.stat().st_mtime if self.ledger_path.exists() else None,
+                "policy": "explicit-selection-only",
             },
         }
+
+    def dismiss(self, direction: str, items: list[dict]) -> dict:
+        if direction not in ("import", "export"):
+            raise ValueError("direction must be import or export")
+        with self._lock:
+            ledger = self._ledger(); dismissed = ledger.setdefault("dismissed", {})
+            for item in items[:500]:
+                if direction == "import":
+                    key = f"import\0{self._key(str(item.get('person') or ''), str(item.get('file') or ''))}"
+                else:
+                    key = f"export\0{str(item.get('slug') or '')}\0{str(item.get('file') or '')}"
+                dismissed[key] = {"ts": time.time()}
+            self._save_ledger(ledger)
+        return {"dismissed": len(items[:500])}
 
     def remote_image(self, person: str, file: str) -> bytes:
         if not person or not file or any(part in ("", ".", "..") for part in (person, file)):
@@ -127,6 +152,7 @@ class FrigateGallerySync:
         with self._lock:
             ledger = self._ledger()
             imported = ledger.setdefault("imported", {})
+            failures = ledger.setdefault("failures", {})
             for item in items[:200]:
                 person, file = str(item.get("person") or ""), str(item.get("file") or "")
                 key = self._key(person, file)
@@ -156,9 +182,13 @@ class FrigateGallerySync:
                                 "quality": quality.score},
                     )
                     imported[key] = {"ts": time.time(), "person": normalized}
+                    failures.pop(f"import\0{key}", None)
                     ok += 1
                 except Exception as exc:
-                    errors.append({"person": person, "file": file, "error": str(exc)[:180]})
+                    error = str(exc)[:180]
+                    errors.append({"person": person, "file": file, "error": error})
+                    failures[f"import\0{key}"] = {"ts": time.time(), "error": error,
+                                                    "attempts": int(failures.get(f"import\0{key}", {}).get("attempts", 0)) + 1}
             self._save_ledger(ledger)
         return {"imported": ok, "skipped": skipped, "errors": errors}
 
@@ -167,6 +197,7 @@ class FrigateGallerySync:
         with self._lock:
             ledger = self._ledger()
             exported = ledger.setdefault("exported", {})
+            failures = ledger.setdefault("failures", {})
             remote_names = self.remote_faces()
             known_remote = {
                 self._canonical_person(name): name for name in remote_names
@@ -206,8 +237,13 @@ class FrigateGallerySync:
                             f"register returned HTTP {registered.status_code}: {detail}"
                         )
                     exported[digest] = {"ts": time.time(), "person": name, "file": file}
+                    failures.pop(f"export\0{slug}\0{file}", None)
                     ok += 1
                 except Exception as exc:
-                    errors.append({"person": name, "file": file, "error": str(exc)[:180]})
+                    error = str(exc)[:180]
+                    errors.append({"person": name, "file": file, "error": error})
+                    failure_key = f"export\0{slug}\0{file}"
+                    failures[failure_key] = {"ts": time.time(), "error": error,
+                                             "attempts": int(failures.get(failure_key, {}).get("attempts", 0)) + 1}
             self._save_ledger(ledger)
         return {"exported": ok, "skipped": skipped, "errors": errors}
