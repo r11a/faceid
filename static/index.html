@@ -220,7 +220,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
 
 async function health(){try{const h=await j('api/health');
   if(typeof h.suggest_threshold==='number')suggestThr=h.suggest_threshold;
-  $('#health').textContent=`● מחובר · ${h.persons} אנשים · ${h.queue} לבדיקה · ${h.open_events} פעילים`}catch(e){$('#health').textContent='● לא מחובר'}}
+  $('#health').textContent=`● מחובר · v${h.version||'?'} · ${h.persons} אנשים · ${h.queue} לבדיקה · ${h.open_events} פעילים`}catch(e){$('#health').textContent='● לא מחובר'}}
 
 function personOptions(sel){
   const es=Object.entries(persons).sort((a,b)=>a[1].name.localeCompare(b[1].name,undefined,{sensitivity:'base'}));
@@ -777,7 +777,7 @@ async function openEvent(eventId){
       <select id="eventOther"><option value="">זה אדם אחר…</option>${names.map(n=>`<option>${esc(n)}</option>`).join('')}</select>
       <button class="ghost" onclick="const v=$('#eventOther').value;if(v)labelEvent('${eventId}',v)">שמור אדם אחר</button>
       <button class="ghost" onclick="undoEvent('${eventId}')">↶ בטל אימות אחרון</button>
-      ${predicted?`<button class="ghost" onclick="stageBody('${eventId}',${JSON.stringify(predicted).replace(/"/g,'&quot;')})">הוסף לבדיקה ללימוד גוף</button>`:''}
+      <button class="ghost" onclick="stageBodyFromDialog('${eventId}',${JSON.stringify(predicted||'').replace(/"/g,'&quot;')})">הוסף לבדיקה ללימוד גוף</button>
       <button class="ghost" onclick="testRecognition('${eventId}')">בדיקת פנים · גוף · AI</button>
     </div></div>`;
   dialog.showModal();
@@ -795,6 +795,11 @@ async function dismissFrigateSync(direction){
 async function stageBody(eventId,person){
   try{await j(`api/body/from-event/${encodeURIComponent(eventId)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({person})});toast('התמונה נוספה לבדיקה — היא עדיין לא נלמדה');}
   catch(e){toast('לא ניתן להוסיף: '+e.message)}
+}
+function stageBodyFromDialog(eventId,predicted){
+  const person=$('#eventOther')?.value||predicted;
+  if(!person){toast('בחר אדם מהרשימה לפני הוספה ללימוד גוף');return}
+  stageBody(eventId,person);
 }
 async function testRecognition(eventId){
   toast('מריץ בדיקה על שלוש השכבות…');

@@ -43,6 +43,8 @@ class WebUIClipTests(unittest.TestCase):
                 {"faceid": {"auth": {}}}, SimpleNamespace(), FakeGallery(),
                 processor, Path(tmp), Path(__file__).parents[1] / "static",
             )
+            index = TestClient(app).get("/")
+            self.assertEqual(index.headers["cache-control"], "no-store, max-age=0")
             response = TestClient(app).get(
                 "/api/activity/e1/clip", headers={"Range": "bytes=0-15"}
             )

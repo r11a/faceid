@@ -1,5 +1,5 @@
 name: FaceID
-version: "3.0.0"
+version: "3.0.1"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
