@@ -90,6 +90,27 @@ class FrigateAPI:
             log.warning("snapshot %s failed: %s", event_id, e)
             return None
 
+    def latest_frame_bytes(self, camera: str) -> bytes | None:
+        """Fetch Frigate's current camera frame without exposing its credentials."""
+        try:
+            encoded = quote(str(camera), safe="")
+            r = self.request("GET", f"/api/{encoded}/latest.jpg", timeout=self.timeout * 2)
+            if r.status_code != 200 or not r.content or len(r.content) > 20_000_000:
+                return None
+            return r.content
+        except requests.RequestException as exc:
+            log.debug("latest frame %s failed: %s", camera, exc)
+            return None
+
+    def cameras(self) -> list[str]:
+        try:
+            r = self.request("GET", "/api/config", timeout=self.timeout * 2)
+            if r.status_code != 200:
+                return []
+            return sorted((r.json().get("cameras") or {}).keys())
+        except (requests.RequestException, ValueError):
+            return []
+
     def event(self, event_id: str) -> dict | None:
         """Fetch canonical Frigate metadata used for media fallbacks and diagnostics."""
         try:

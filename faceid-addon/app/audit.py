@@ -568,6 +568,77 @@ class AuditStore:
             cameras.append(row)
         return {"window_days": 7, "cameras": cameras}
 
+    def recognized_timeline(
+        self, *, person: str | None = None, after_ts: float = 0
+    ) -> list[dict]:
+        """Chronological recognized events used to derive visits, not raw frame counts."""
+        where = ["status='recognized'", "person IS NOT NULL", "start_ts>=?"]
+        params: list = [float(after_ts)]
+        if person:
+            where.append("person=?")
+            params.append(person)
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            return [dict(row) for row in con.execute(
+                "SELECT event_id, camera, start_ts, end_ts, person, score, margin, "
+                "confirmations FROM events WHERE " + " AND ".join(where)
+                + " ORDER BY start_ts ASC",
+                params,
+            ).fetchall()]
+
+    def camera_funnels(self, days: int = 7) -> list[dict]:
+        """One row per camera showing where the recognition pipeline loses events."""
+        cutoff = time.time() - max(1, min(int(days), 90)) * 86400
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                """
+                WITH observation_summary AS (
+                  SELECT event_id, MAX(COALESCE(face_px,0)) face_px,
+                         MAX(COALESCE(quality,0)) quality
+                  FROM observations GROUP BY event_id
+                )
+                SELECT e.camera, COUNT(*) events,
+                  SUM(CASE WHEN o.face_px>0 THEN 1 ELSE 0 END) face_detected,
+                  SUM(CASE WHEN o.face_px>0 AND o.quality>=0.35
+                           THEN 1 ELSE 0 END) usable_face,
+                  SUM(CASE WHEN e.status='recognized' THEN 1 ELSE 0 END) recognized,
+                  SUM(CASE WHEN e.status IN ('unknown','ambiguous') THEN 1 ELSE 0 END) review,
+                  SUM(CASE WHEN e.status='no_face' THEN 1 ELSE 0 END) no_face,
+                  AVG(CASE WHEN o.face_px>0 THEN o.face_px END) avg_face_px,
+                  MAX(CASE WHEN o.face_px>0 THEN o.face_px END) max_face_px,
+                  AVG(CASE WHEN o.quality>0 THEN o.quality END) avg_quality
+                FROM events e LEFT JOIN observation_summary o ON o.event_id=e.event_id
+                WHERE e.status!='processing' AND e.start_ts>=?
+                GROUP BY e.camera ORDER BY events DESC
+                """, (cutoff,)
+            ).fetchall()
+        result = []
+        for raw in rows:
+            row = dict(raw)
+            for key in ("events", "face_detected", "usable_face", "recognized", "review", "no_face"):
+                row[key] = int(row.get(key) or 0)
+            row["avg_face_px"] = round(float(row.get("avg_face_px") or 0), 1)
+            row["max_face_px"] = int(row.get("max_face_px") or 0)
+            row["avg_quality"] = round(float(row.get("avg_quality") or 0), 3)
+            result.append(row)
+        return result
+
+    def camera_samples(self, camera: str, limit: int = 24) -> list[dict]:
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                """
+                SELECT e.event_id, e.start_ts, e.status, e.person, e.score,
+                       MAX(COALESCE(o.face_px,0)) face_px,
+                       MAX(COALESCE(o.quality,0)) quality
+                FROM events e LEFT JOIN observations o ON o.event_id=e.event_id
+                WHERE e.camera=? AND e.status!='processing'
+                GROUP BY e.event_id ORDER BY e.start_ts DESC LIMIT ?
+                """, (camera, max(1, min(int(limit), 100)))
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def prune_evidence(self, known_days: int, unknown_days: int) -> int:
         """Apply separate image retention without deleting recognition metadata."""
         now = time.time()

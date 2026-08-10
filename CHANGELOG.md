@@ -3,6 +3,26 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 3.1.0 — 2026-08-10
+
+- **Commercial-grade workspace UI:** daily operations, event investigation and
+  system/testing are separated into remembered workspaces with distinct, restrained
+  color accents on the granite interface.
+- **Clear actions and feedback:** action buttons explain their result, show a busy
+  state, prevent repeat clicks and report success or useful failure details.
+- **Visual camera studio:** a current Frigate frame, real face-size guide, manual
+  face analysis, historical accept/reject preview and an actionable quality funnel
+  make per-camera minimum face size understandable and immediately effective.
+- **Camera roles and honest visits:** cameras can be marked as observation, entry,
+  exit, entry/exit or restricted. Nearby recognition events are grouped into visits
+  and routes; arrival/departure is only claimed when the configured camera role
+  supports it.
+- **Home Assistant visit sensor:** every enrolled person gains a discovered 30-day
+  visit sensor, with arrival, departure, duration and common-hour statistics in its
+  attributes. Camera profiles are included in operational backups.
+- **Responsive UX:** camera tuning, funnels, visits and action controls were tested
+  at desktop and phone widths without horizontal overflow.
+
 ## 3.0.1 — 2026-08-10
 
 - **Fresh UI after update:** the main document is now served with `no-store`, avoiding

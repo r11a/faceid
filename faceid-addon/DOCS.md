@@ -50,6 +50,7 @@ Full documentation: https://github.com/r11a/faceid
 | `clip_analysis` / `clip_max_*` | sample diverse faces from the finished recording |
 | `cluster_eps` | how aggressively unknown faces are grouped in the review UI |
 | `presence_window` | camera sensor lists everyone seen within this many seconds |
+| `visit_gap_minutes` | gap after which repeated detections count as a new visit |
 | `calibration_target_far` | false-accept target for calibration recommendations |
 | `scenario_window` | maximum gap between identity-linked cross-camera events |
 | `camera_graph_json` | JSON camera adjacency map, e.g. `{"front":["hall"]}` |

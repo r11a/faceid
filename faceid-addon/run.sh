@@ -94,6 +94,7 @@ faceid:
   known_evidence_days: $(cfg '.known_evidence_days')
   unknown_evidence_days: $(cfg '.unknown_evidence_days')
   presence_window: $(cfg '.presence_window')
+  visit_gap_minutes: $(cfg '.visit_gap_minutes // 15')
   calibration_target_far: $(cfg '.calibration_target_far')
   scenario_window: $(cfg '.scenario_window')
   camera_graph: $(cfg '.camera_graph_json')

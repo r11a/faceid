@@ -21,6 +21,7 @@ from .gallery import _atomic_write_json
 from .backup_util import build_backup_gz, write_backup_file, prune_backups
 from .calibration import UNKNOWN_LABEL, build_calibration_report
 from .gallery_coach import gallery_coach_report
+from .quality import measure_face_quality
 from pathlib import Path as _P
 
 log = logging.getLogger("faceid.web")
@@ -521,7 +522,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 continue
             if norm.parts[0] == "system":
                 if len(norm.parts) != 2 or norm.parts[1] not in {
-                    "settings.json", "learning_runs.json", "frigate_sync.json", "audit.db"
+                    "settings.json", "learning_runs.json", "frigate_sync.json",
+                    "camera_profiles.json", "audit.db"
                 }:
                     continue
                 target = (data_dir / "audit.restore-pending" if norm.parts[1] == "audit.db"
@@ -972,6 +974,10 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         for slug, person in people.items():
             person_stats = stats.get(person["name"], {})
             files = person.get("files") or []
+            visit_stats = (
+                processor.visits.person_statistics(person["name"])
+                if getattr(processor, "visits", None) else {}
+            )
             cards.append({
                 "slug": slug,
                 "name": person["name"],
@@ -988,6 +994,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 "last_score": float(person_stats.get("last_score", 0)),
                 "top_camera": person_stats.get("top_camera"),
                 "cameras": person_stats.get("cameras", []),
+                "visit_statistics": visit_stats,
             })
         cards.sort(key=lambda item: (
             not item["favorite"], -(item["last_seen"] or 0), item["name"].casefold()
@@ -1000,6 +1007,110 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             "recent": (
                 processor.audit.recent(limit=8, status="recognized")
                 if processor.audit else []
+            ),
+        }
+
+    class CameraProfileBody(BaseModel):
+        min_face_px: int
+        role: str = "observation"
+
+    def _camera_names():
+        names = set(getattr(processor, "cameras", set()) or set())
+        profiles = getattr(processor, "camera_profiles", None)
+        if profiles:
+            names.update(profiles.all().keys())
+        if processor.audit:
+            names.update(item["camera"] for item in processor.audit.system_report()["cameras"])
+        names.update(processor.frigate.cameras())
+        return sorted(name for name in names if name)
+
+    @app.get("/api/cameras/studio")
+    def camera_studio(days: int = 7):
+        profiles = getattr(processor, "camera_profiles", None)
+        funnels = {
+            row["camera"]: row for row in (
+                processor.audit.camera_funnels(days) if processor.audit else []
+            )
+        }
+        cameras = []
+        for camera in _camera_names():
+            profile = profiles.get(camera) if profiles else {
+                "camera": camera, "min_face_px": processor.min_face_px,
+                "role": "observation",
+            }
+            samples = (
+                processor.audit.camera_samples(camera, 24) if processor.audit else []
+            )
+            threshold = profile["min_face_px"]
+            measurable = [row for row in samples if int(row.get("face_px") or 0) > 0]
+            accepted = sum(int(row["face_px"]) >= threshold for row in measurable)
+            cameras.append({
+                **profile, "funnel": funnels.get(camera, {}), "samples": samples,
+                "impact": {
+                    "measured": len(measurable), "accepted": accepted,
+                    "rejected": len(measurable) - accepted,
+                },
+            })
+        return {"window_days": max(1, min(days, 90)), "cameras": cameras}
+
+    @app.post("/api/cameras/{camera}/profile")
+    def save_camera_profile(camera: str, body: CameraProfileBody):
+        profiles = getattr(processor, "camera_profiles", None)
+        if profiles is None:
+            raise HTTPException(503, "Camera profiles are unavailable")
+        try:
+            return {"ok": True, "profile": profiles.update(
+                camera, min_face_px=body.min_face_px, role=body.role
+            )}
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/cameras/{camera}/frame")
+    def camera_frame(camera: str):
+        if camera not in _camera_names():
+            raise HTTPException(404, "Unknown camera")
+        content = processor.frigate.latest_frame_bytes(camera)
+        if not content:
+            raise HTTPException(404, "Frigate did not return a current frame")
+        return Response(
+            content=content, media_type="image/jpeg",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+
+    @app.get("/api/cameras/{camera}/analyze")
+    def analyze_camera_frame(camera: str):
+        if camera not in _camera_names():
+            raise HTTPException(404, "Unknown camera")
+        content = processor.frigate.latest_frame_bytes(camera)
+        image = cv2.imdecode(np.frombuffer(content or b"", np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(404, "Frigate did not return a readable frame")
+        profile = processor.camera_profiles.get(camera)
+        faces = []
+        for face in engine.faces(image):
+            quality = measure_face_quality(
+                image, face, min_face_px=profile["min_face_px"],
+                min_quality=processor.min_face_quality,
+            )
+            faces.append({
+                "box": [round(float(value), 1) for value in face.bbox],
+                **quality.to_dict(),
+            })
+        return {
+            "camera": camera, "width": int(image.shape[1]),
+            "height": int(image.shape[0]), "profile": profile, "faces": faces,
+        }
+
+    @app.get("/api/visits")
+    def visits(person: str = "", days: int = 30, limit: int = 200):
+        service = getattr(processor, "visits", None)
+        if service is None:
+            return {"visits": [], "camera_roles_configured": False}
+        role_profiles = processor.camera_profiles.all()
+        return {
+            "visits": service.list(person=person or None, days=days, limit=limit),
+            "camera_roles_configured": any(
+                item.get("role") != "observation" for item in role_profiles.values()
             ),
         }
 

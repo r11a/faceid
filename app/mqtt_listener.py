@@ -38,6 +38,7 @@ class EventProcessor:
         self.media_store = media_store
         self.frame_distributor = frame_distributor
         self.body_recognition = body_recognition
+        self.camera_profiles = None
         self.audit = audit
         self.scenario_manager = scenario_manager
         self.reid = reid
@@ -341,9 +342,13 @@ class EventProcessor:
                 st["body"] = {"advisory": True, "error": str(exc)[:160]}
                 log.warning("event %s: advisory body path failed: %s", eid, exc)
         found = self.engine.faces(img)
+        camera_min_face_px = (
+            self.camera_profiles.get(st["camera"])["min_face_px"]
+            if self.camera_profiles is not None else self.min_face_px
+        )
         measured = [
             (measure_face_quality(
-                img, item, min_face_px=self.min_face_px,
+                img, item, min_face_px=camera_min_face_px,
                 min_quality=self.min_face_quality,
             ), item)
             for item in found
@@ -862,6 +867,14 @@ class EventProcessor:
                 "state_topic": f"{self.prefix}/person/{slug}/appearances",
                 "icon": "mdi:account-eye",
             }),
+            ("sensor", "visits_30_days", {
+                **common,
+                "name": "ביקורים ב־30 ימים",
+                "unique_id": f"{self.prefix}_{slug}_visits_30_days",
+                "object_id": f"{self.prefix}_{slug}_visits_30_days",
+                "state_topic": f"{self.prefix}/person/{slug}/visits_30_days",
+                "icon": "mdi:door-open",
+            }),
         ]
         for component, key, config in entities:
             self.client.publish(
@@ -879,6 +892,10 @@ class EventProcessor:
         self._publish_person_discovery(slug, name)
         stats = (
             self.audit.person_statistics().get(name, {}) if self.audit else {}
+        )
+        visit_stats = (
+            self.visits.person_statistics(name)
+            if getattr(self, "visits", None) else {}
         )
         active_cameras = sorted(
             camera for camera, people in self.present.items() if name in people
@@ -901,6 +918,17 @@ class EventProcessor:
             "camera_breakdown": stats.get("cameras", []),
             "active_cameras": active_cameras,
             "presence_window_seconds": self.presence_window,
+            "visits_30_days": int(visit_stats.get("visits", 0)),
+            "confirmed_arrivals_30_days": int(
+                visit_stats.get("confirmed_arrivals", 0)
+            ),
+            "confirmed_departures_30_days": int(
+                visit_stats.get("confirmed_departures", 0)
+            ),
+            "average_visit_duration_seconds": visit_stats.get(
+                "average_duration_seconds"
+            ),
+            "common_arrival_hour": visit_stats.get("common_arrival_hour"),
         }
         self.client.publish(
             f"{self.prefix}/person/{slug}/location", last_camera, retain=True
@@ -935,6 +963,11 @@ class EventProcessor:
         self.client.publish(
             f"{self.prefix}/person/{slug}/appearances",
             str(attributes["appearances"]),
+            retain=True,
+        )
+        self.client.publish(
+            f"{self.prefix}/person/{slug}/visits_30_days",
+            str(attributes["visits_30_days"]),
             retain=True,
         )
         self._person_presence_state[name] = present
