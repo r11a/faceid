@@ -67,6 +67,23 @@ class AuditStoreTests(unittest.TestCase):
             summary = audit.dashboard_summary()
             self.assertEqual(summary["recognized_24h"], 3)
 
+    def test_camera_funnel_counts_events_not_observation_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            now = time.time()
+            audit.start_event("event-1", "front", now)
+            audit.observation("event-1", 1, "candidate", face_px=40, quality=.3)
+            audit.observation("event-1", 2, "recognized", face_px=80, quality=.8)
+            audit.finalize(
+                "event-1", "recognized", end_ts=now + 1, person="Alice",
+                score=.8, margin=.2, confirmations=2,
+            )
+            funnel = audit.camera_funnels()[0]
+            self.assertEqual(funnel["events"], 1)
+            self.assertEqual(funnel["face_detected"], 1)
+            self.assertEqual(funnel["usable_face"], 1)
+            self.assertEqual(funnel["recognized"], 1)
+
     def test_processing_event_cannot_be_labeled(self):
         with tempfile.TemporaryDirectory() as tmp:
             audit = AuditStore(Path(tmp) / "audit.db")

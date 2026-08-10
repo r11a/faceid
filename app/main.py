@@ -24,6 +24,8 @@ from .frame_distributor import FrameDistributor
 from .body_recognition import BodyRecognitionService
 from .vision_advisor import VisionAdvisor
 from .runtime_health import RuntimeHealth
+from .camera_profiles import CameraProfiles
+from .visits import VisitService
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -132,6 +134,13 @@ def main():
         frame_distributor=frame_distributor, body_recognition=body_recognition,
     )
     processor.frigate_sync = FrigateGallerySync(data_dir, gallery, engine, frigate)
+    processor.camera_profiles = CameraProfiles(
+        data_dir / "camera_profiles.json", default_min_face_px=processor.min_face_px
+    )
+    processor.visits = VisitService(
+        audit, processor.camera_profiles,
+        gap_minutes=int(f.get("visit_gap_minutes", 15)),
+    )
     processor.vision_advisor = vision_advisor
     processor.runtime_health = RuntimeHealth(data_dir, processor)
     processor.start()

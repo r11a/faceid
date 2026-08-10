@@ -1,5 +1,19 @@
 # FaceID — self-hosted face recognition for Frigate + Home Assistant
 
+## FaceID 3.1: camera studio and visits
+
+Version 3.1 adds a visual per-camera studio. It proxies the current Frigate frame
+without exposing Frigate credentials, lets an operator preview and save a minimum
+face size, and shows how that threshold would affect recent real events. The saved
+threshold is applied by the recognition pipeline to new events for that camera.
+
+Recognized events are also grouped into visits so one person standing in view does
+not look like many separate arrivals. Mark cameras as entry, exit, entry/exit,
+observation or restricted in the camera studio. FaceID only calls an arrival or
+departure confirmed when the configured camera role supports that conclusion.
+Home Assistant receives a 30-day visit sensor per enrolled person; raw recognition
+counts remain available separately as evidence totals.
+
 Version 3 adds three deliberately separated evidence paths: authoritative ArcFace
 identity, human-reviewed DINOv2 body appearance with multi-event consensus, and an
 optional local Vision advisor. A face decision or explicit operator review establishes

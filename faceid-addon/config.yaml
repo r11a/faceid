@@ -1,5 +1,5 @@
 name: FaceID
-version: "3.0.1"
+version: "3.1.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -64,6 +64,7 @@ options:
   known_evidence_days: 30
   unknown_evidence_days: 14
   presence_window: 120
+  visit_gap_minutes: 15
   calibration_target_far: 0.01
   scenario_window: 90
   camera_graph_json: "{}"
@@ -123,6 +124,7 @@ schema:
   known_evidence_days: int(1,3650)
   unknown_evidence_days: int(1,3650)
   presence_window: int(10,3600)
+  visit_gap_minutes: int(2,120)
   calibration_target_far: float(0.0,0.5)
   scenario_window: int(5,900)
   camera_graph_json: str
