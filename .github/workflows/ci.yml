@@ -18,7 +18,8 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # httpx is required by Starlette's TestClient, not by the FaceID runtime.
+        run: pip install -r requirements.txt httpx==0.28.1
 
       - name: Import smoke test (would have caught issue #1)
         run: python -c "import app.main; import app.backfill; import app.enroll"

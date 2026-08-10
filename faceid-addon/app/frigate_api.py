@@ -1,5 +1,6 @@
 """Minimaler Frigate-HTTP-Client: Snapshot-Crops holen, sub_label setzen."""
 import logging
+from urllib.parse import quote
 
 import cv2
 import numpy as np
@@ -89,6 +90,18 @@ class FrigateAPI:
             log.warning("snapshot %s failed: %s", event_id, e)
             return None
 
+    def event(self, event_id: str) -> dict | None:
+        """Fetch canonical Frigate metadata used for media fallbacks and diagnostics."""
+        try:
+            r = self.request("GET", f"/api/events/{quote(event_id, safe='')}")
+            if r.status_code != 200:
+                return None
+            value = r.json()
+            return value if isinstance(value, dict) else None
+        except (requests.RequestException, ValueError) as exc:
+            log.debug("event metadata %s failed: %s", event_id, exc)
+            return None
+
     def recording_frame(self, camera: str, ts: float) -> np.ndarray | None:
         """Frame aus der AUFNAHME holen (volle Kamera-Auflösung statt Detect-Stream).
         Deutlich schärfere Gesichter, dafür langsamer — nur fürs Enrollment gedacht."""
@@ -111,28 +124,46 @@ class FrigateAPI:
         Nur fürs Enrollment: ein Download deckt das ganze Ereignis ab, statt einzelne
         Zeitpunkte zu raten. ``max_bytes`` bricht überlange Clips ab.
         """
-        url = f"{self.base}/api/events/{event_id}/clip.mp4"
-        try:
-            with self.request(
-                "GET", f"/api/events/{event_id}/clip.mp4",
-                timeout=self.timeout * 6, stream=True,
-            ) as r:
-                if r.status_code != 200:
-                    return False
-                written = 0
-                with open(dest, "wb") as fh:
-                    for chunk in r.iter_content(chunk_size=1 << 18):
-                        if not chunk:
-                            continue
-                        written += len(chunk)
-                        if written > max_bytes:
-                            log.debug("clip %s aborted (> %d bytes)", event_id, max_bytes)
-                            return False
-                        fh.write(chunk)
-                return written > 1000
-        except (requests.RequestException, OSError) as e:
-            log.debug("clip %s failed: %s", event_id, e)
-            return False
+        encoded_id = quote(event_id, safe="")
+        paths = [f"/api/events/{encoded_id}/clip.mp4"]
+        metadata = None
+        last_status = None
+        for index, path in enumerate(paths):
+            try:
+                with self.request(
+                    "GET", path, timeout=self.timeout * 12, stream=True,
+                ) as r:
+                    last_status = r.status_code
+                    if r.status_code == 200:
+                        written = 0
+                        with open(dest, "wb") as fh:
+                            for chunk in r.iter_content(chunk_size=1 << 18):
+                                if not chunk:
+                                    continue
+                                written += len(chunk)
+                                if written > max_bytes:
+                                    log.warning("clip %s aborted (> %d bytes)", event_id, max_bytes)
+                                    return False
+                                fh.write(chunk)
+                        if written > 1000:
+                            return True
+            except (requests.RequestException, OSError) as exc:
+                log.debug("clip %s path %s failed: %s", event_id, path, exc)
+
+            # An event clip may be absent even while the underlying recordings still
+            # exist. Frigate officially exposes a camera/time recording endpoint.
+            if index == 0:
+                metadata = self.event(event_id)
+                if metadata and metadata.get("camera") and metadata.get("start_time"):
+                    start = max(0.0, float(metadata["start_time"]) - 2.0)
+                    end = float(metadata.get("end_time") or metadata["start_time"] + 12.0) + 2.0
+                    camera = quote(str(metadata["camera"]), safe="")
+                    paths.append(f"/api/{camera}/start/{start:.3f}/end/{end:.3f}/clip.mp4")
+        log.info(
+            "clip unavailable for %s (event has_clip=%s, last HTTP=%s)",
+            event_id, metadata.get("has_clip") if metadata else "unknown", last_status,
+        )
+        return False
 
     def set_sub_label(self, event_id: str, label: str, score: float):
         try:

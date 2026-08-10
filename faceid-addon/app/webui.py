@@ -20,6 +20,7 @@ from .engine import FaceEngine, crop_face, find_face_padded
 from .gallery import _atomic_write_json
 from .backup_util import build_backup_gz, write_backup_file, prune_backups
 from .calibration import UNKNOWN_LABEL, build_calibration_report
+from .gallery_coach import gallery_coach_report
 from pathlib import Path as _P
 
 log = logging.getLogger("faceid.web")
@@ -262,7 +263,21 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             gallery.discard_unknown(uid)
         return {"ok": True}
 
-    backfill_state = {"running": False, "processed": 0, "total": 0, "result": None, "days": 0}
+    backfill_file = data_dir / "learning_runs.json"
+    try:
+        backfill_state = json.loads(backfill_file.read_text("utf-8"))
+        if not isinstance(backfill_state, dict):
+            raise ValueError("not an object")
+    except (OSError, ValueError, json.JSONDecodeError):
+        backfill_state = {"running": False, "processed": 0, "total": 0,
+                          "result": None, "days": 0, "history": []}
+    if backfill_state.get("running"):
+        backfill_state.update(running=False, status="interrupted",
+                              result={"error": "FaceID restarted during this scan; start a new scan."})
+    backfill_cancel = threading.Event()
+
+    def save_backfill_state():
+        _atomic_write_json(backfill_file, backfill_state, indent=1)
 
     class BackfillBody(BaseModel):
         days: int = 14
@@ -272,10 +287,20 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         if backfill_state["running"]:
             raise HTTPException(409, "History scan already running")
         days = max(1, min(int(body.days), 60))
-        backfill_state.update(running=True, processed=0, total=0, result=None, days=days)
+        backfill_cancel.clear()
+        backfill_state.update(
+            running=True, status="running", processed=0, total=0, result=None,
+            days=days, run_id=f"learning-{int(time.time())}", started_ts=time.time(),
+            ended_ts=None,
+        )
+        save_backfill_state()
 
         def progress(i, total):
+            if backfill_cancel.is_set():
+                raise InterruptedError("Scan cancelled by the operator")
             backfill_state.update(processed=i, total=total)
+            if i % 10 == 0 or i == total:
+                save_backfill_state()
 
         def worker():
             from .backfill import run_backfill
@@ -293,11 +318,24 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                     progress=progress,
                     hires=bool(cfg["faceid"].get("hires_enroll", True)))
                 backfill_state["result"] = stats
+                backfill_state["status"] = "completed"
+            except InterruptedError as e:
+                backfill_state["status"] = "cancelled"
+                backfill_state["result"] = {"error": str(e)}
             except Exception as e:
                 log.exception("history scan failed")
+                backfill_state["status"] = "failed"
                 backfill_state["result"] = {"error": str(e)}
             finally:
                 backfill_state["running"] = False
+                backfill_state["ended_ts"] = time.time()
+                history = list(backfill_state.get("history") or [])
+                history.insert(0, {k: backfill_state.get(k) for k in (
+                    "run_id", "status", "days", "processed", "total", "result",
+                    "started_ts", "ended_ts",
+                )})
+                backfill_state["history"] = history[:10]
+                save_backfill_state()
 
         threading.Thread(target=worker, daemon=True, name="faceid-backfill").start()
         return {"started": True, "days": days}
@@ -305,6 +343,15 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     @app.get("/api/backfill")
     def backfill_status():
         return backfill_state
+
+    @app.post("/api/backfill/cancel")
+    def cancel_backfill():
+        if not backfill_state.get("running"):
+            raise HTTPException(409, "No history scan is running")
+        backfill_cancel.set()
+        backfill_state["status"] = "cancelling"
+        save_backfill_state()
+        return {"ok": True, "status": "cancelling"}
 
     # Live-editierbare Einstellungen (Settings-Tab). Overlay in data/settings.json.
     SETTINGS_SPEC = {
@@ -513,11 +560,48 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             headers={"Cache-Control": "private, max-age=86400"},
         )
 
-    @app.get("/api/activity/{event_id}/clip")
-    def activity_clip(event_id: str, request: Request):
-        """Stream a Frigate event clip through FaceID without leaking credentials."""
+    @app.get("/api/activity/{event_id}/clip/status")
+    def activity_clip_status(event_id: str, prepare: bool = False):
         if processor.audit is None or processor.audit.event_detail(event_id) is None:
             raise HTTPException(404, "Unknown event")
+        if processor.media_store is None:
+            return {"cached": False, "has_clip": None, "legacy_stream": True}
+        status = processor.media_store.status(event_id)
+        if prepare and not status["cached"]:
+            path = processor.media_store.clip_path(event_id)
+            status["cached"] = path is not None
+            status["ready"] = path is not None
+            if path is None:
+                raise HTTPException(
+                    404,
+                    "Frigate has no event clip and no recording could be built for this time window",
+                )
+        else:
+            status["ready"] = status["cached"]
+        return status
+
+    @app.get("/api/activity/{event_id}/clip")
+    def activity_clip(event_id: str, request: Request, download: bool = False):
+        """Serve a bounded local copy so browser byte ranges survive HA ingress."""
+        if processor.audit is None or processor.audit.event_detail(event_id) is None:
+            raise HTTPException(404, "Unknown event")
+        if processor.media_store is not None:
+            path = processor.media_store.clip_path(event_id)
+            if path is None:
+                raise HTTPException(
+                    404, "No event clip was found; the recording fallback also failed."
+                )
+            headers = {"Cache-Control": "private, max-age=300"}
+            disposition = "attachment" if download else "inline"
+            safe_event_id = "".join(
+                char for char in event_id if char.isalnum() or char in "-_"
+            )[:80] or "event"
+            headers["Content-Disposition"] = (
+                f'{disposition}; filename="faceid-{safe_event_id}.mp4"'
+            )
+            return FileResponse(path, media_type="video/mp4", headers=headers)
+
+        # Compatibility path for callers constructing EventProcessor without a media store.
         headers = {}
         if request.headers.get("range"):
             headers["Range"] = request.headers["range"]
@@ -608,6 +692,52 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             if getattr(processor, "dispatcher", None) else {}
         )
         return report
+
+    @app.get("/api/frigate-sync")
+    def frigate_sync_report():
+        service = getattr(processor, "frigate_sync", None)
+        if service is None:
+            raise HTTPException(503, "Frigate gallery sync is not available")
+        try:
+            return service.report()
+        except Exception as exc:
+            raise HTTPException(502, f"Could not read Frigate's face library: {exc}") from exc
+
+    @app.get("/api/frigate-sync/image")
+    def frigate_sync_image(person: str, file: str):
+        service = getattr(processor, "frigate_sync", None)
+        if service is None:
+            raise HTTPException(503, "Frigate gallery sync is not available")
+        try:
+            raw = service.remote_image(person, file)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return Response(raw, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+
+    @app.post("/api/frigate-sync/import")
+    def frigate_sync_import(body: dict):
+        service = getattr(processor, "frigate_sync", None)
+        if service is None:
+            raise HTTPException(503, "Frigate gallery sync is not available")
+        return service.import_selected(list(body.get("items") or []))
+
+    @app.post("/api/frigate-sync/export")
+    def frigate_sync_export(body: dict):
+        service = getattr(processor, "frigate_sync", None)
+        if service is None:
+            raise HTTPException(503, "Frigate gallery sync is not available")
+        return service.export_selected(list(body.get("items") or []))
+
+    @app.get("/api/gallery-coach")
+    def gallery_coach():
+        return gallery_coach_report(gallery)
+
+    @app.post("/api/gallery-coach/set-aside")
+    def gallery_coach_set_aside(body: dict):
+        slug, file = str(body.get("slug") or ""), str(body.get("file") or "")
+        if not gallery.set_aside_face(slug, file, str(body.get("reason") or "")):
+            raise HTTPException(404, "Reference image was not found")
+        return {"ok": True, "slug": slug, "file": file}
 
     @app.get("/api/daily-summary")
     def daily_summary():
@@ -794,6 +924,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                        if getattr(processor, "ai_context", None) else {"enabled": False}),
                 "integrations": (processor.dispatcher.health()
                                  if getattr(processor, "dispatcher", None) else {}),
+                "media": (processor.media_store.report()
+                          if getattr(processor, "media_store", None) else None),
                 "frigate": {
                     "secure_mode": processor.frigate.secure_mode,
                     "authenticated": bool(processor.frigate.username),

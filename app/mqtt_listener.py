@@ -29,11 +29,13 @@ class EventProcessor:
     def __init__(
         self, cfg: dict, engine, gallery, frigate, audit=None, *,
         scenario_manager=None, reid=None, dispatcher=None, ai_context=None,
+        media_store=None,
     ):
         self.cfg = cfg
         self.engine = engine
         self.gallery = gallery
         self.frigate = frigate
+        self.media_store = media_store
         self.audit = audit
         self.scenario_manager = scenario_manager
         self.reid = reid
@@ -84,6 +86,7 @@ class EventProcessor:
             engine, frigate,
             max_frames=int(f.get("clip_max_frames", 24)),
             max_samples=int(f.get("clip_max_samples", 8)),
+            media_store=media_store,
             min_face_px=self.min_face_px,
             min_quality=self.min_face_quality,
         )

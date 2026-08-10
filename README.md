@@ -1,8 +1,10 @@
 # FaceID — self-hosted face recognition for Frigate + Home Assistant
 
-Version 2.0 adds a complete investigation center: date/person/camera search, event
-images and Frigate clips, auditable review, person profiles, camera health, HA
-automation tools and explicit privacy retention.
+Version 2.1 adds a guided Learning Center, explainable gallery quality checks,
+explicit two-way Frigate face-library sync and a bounded local media cache that makes
+event clips reliable through Home Assistant ingress and mobile browsers. The complete
+investigation center still provides date/person/camera search, auditable review,
+person profiles, camera health, HA automation tools and explicit privacy retention.
 
 **Recommended Frigate connection:** use `https://FRIGATE_IP:8971` with a dedicated
 Frigate `viewer` account. FaceID logs in server-side and renews the session; credentials

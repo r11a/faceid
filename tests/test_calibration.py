@@ -61,3 +61,13 @@ class CalibrationTests(unittest.TestCase):
         )
         self.assertEqual(report["current"]["far"], 0.0)
         self.assertEqual(report["current"]["false_identification_rate"], 1.0)
+
+    def test_preliminary_tuning_is_not_claimed_as_security_validation(self):
+        rows = [event(f"known-{i}", "Alice", []) for i in range(15)]
+        rows += [event(f"unknown-{i}", UNKNOWN_LABEL, []) for i in range(5)]
+        report = build_calibration_report(
+            rows, current_threshold=.5, current_margin=.08, confirmations=2,
+        )
+        self.assertTrue(report["ready"])
+        self.assertFalse(report["security_ready"])
+        self.assertIsNotNone(report["security_warning"])
