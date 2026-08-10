@@ -3,6 +3,17 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 3.1.3 — 2026-08-10
+
+- **Fresh UI in normal Home Assistant sessions:** the add-on opens a new Ingress
+  document URL for this release, bypassing the stale iframe document cache that
+  did not affect private browsing sessions.
+- **Safe versioned entry:** the backend accepts any versioned UI alias, so an
+  updated manifest cannot produce the 3.1.1 `Not Found` regression when the
+  Supervisor momentarily retains the previous 3.1.2 container image.
+- **Release guard:** CI now verifies that the manifest version, Ingress entry,
+  backend version and embedded UI version remain synchronized.
+
 ## 3.1.2 — 2026-08-10
 
 - **Ingress startup regression fixed:** Home Assistant opens the stable root path

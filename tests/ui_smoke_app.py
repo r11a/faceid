@@ -29,7 +29,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"version": "3.1.2", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
+    return {"version": "3.1.3", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
                        "requested_mode": "auto", "fallbacks": 1},

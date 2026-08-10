@@ -79,11 +79,22 @@ jobs:
       - name: Version consistency (manifest version has a changelog entry)
         run: |
           python - << 'EOF'
-          import sys, yaml
+          import re, sys, yaml
+          from pathlib import Path
           version = yaml.safe_load(open("faceid-addon/config.yaml"))["version"]
           changelog = open("CHANGELOG.md").read()
           if f"## {version}" not in changelog:
               print(f"version {version} has no CHANGELOG.md entry"); sys.exit(1)
+          manifest = yaml.safe_load(open("faceid-addon/config.yaml"))
+          expected_entry = f"/ui-{version}"
+          if manifest.get("ingress_entry") != expected_entry:
+              print(f"ingress_entry must be {expected_entry}"); sys.exit(1)
+          backend = Path("app/__init__.py").read_text()
+          ui = Path("static/index.html").read_text()
+          if f'VERSION = "{version}"' not in backend:
+              print("backend version is out of sync"); sys.exit(1)
+          if f"const UI_VERSION='{version}'" not in ui:
+              print("embedded UI version is out of sync"); sys.exit(1)
           print(f"version {version} OK")
           EOF
 
