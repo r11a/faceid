@@ -572,12 +572,18 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 "note": "Reference examples, not additional event frames."}
 
     @app.get("/api/persons/{slug}/profile")
-    def person_profile(slug: str):
+    def person_profile(
+        slug: str, timezone: str | None = None,
+        timezone_offset: int | None = None,
+    ):
         person = gallery.persons().get(slug)
         if person is None:
             raise HTTPException(404, "Unknown person")
         profile = (
-            processor.audit.person_profile(person["name"])
+            processor.audit.person_profile(
+                person["name"], timezone_name=timezone,
+                timezone_offset_minutes=timezone_offset,
+            )
             if processor.audit else {"person": person["name"], "events": []}
         )
         profile["gallery"] = {

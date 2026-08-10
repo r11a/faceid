@@ -471,21 +471,34 @@ class AuditStore:
         self.set_ground_truth(event_id, previous, reviewer, action="undo")
         return previous
 
-    def person_profile(self, person: str, limit: int = 100):
+    def person_profile(
+        self, person: str, limit: int = 100,
+        timezone_name: str | None = None,
+        timezone_offset_minutes: int | None = None,
+    ):
+        from collections import Counter
+        from datetime import datetime, timedelta, timezone as datetime_timezone
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            tzinfo = (
+                datetime_timezone.utc if timezone_name == "UTC"
+                else ZoneInfo(timezone_name) if timezone_name
+                else datetime.now().astimezone().tzinfo
+            )
+        except (ZoneInfoNotFoundError, ValueError):
+            tzinfo = (
+                datetime_timezone(timedelta(minutes=timezone_offset_minutes))
+                if timezone_offset_minutes is not None
+                else datetime.now().astimezone().tzinfo
+            )
         result = self.search_events(person=person, limit=limit)
         with self._lock, self._connection() as con:
             con.row_factory = sqlite3.Row
-            hourly = con.execute(
-                "SELECT CAST(strftime('%H', start_ts, 'unixepoch', 'localtime') "
-                "AS INTEGER) hour, COUNT(*) count FROM events "
-                "WHERE status='recognized' AND person=? GROUP BY hour ORDER BY hour",
+            recognition_times = con.execute(
+                "SELECT start_ts FROM events WHERE status='recognized' "
+                "AND person=? AND start_ts IS NOT NULL",
                 (person,),
-            ).fetchall()
-            daily = con.execute(
-                "SELECT date(start_ts, 'unixepoch', 'localtime') day, COUNT(*) count "
-                "FROM events WHERE status='recognized' AND person=? "
-                "AND start_ts>=? GROUP BY day ORDER BY day",
-                (person, time.time() - 30 * 86400),
             ).fetchall()
             verified = con.execute(
                 "SELECT COUNT(*) total, "
@@ -499,14 +512,29 @@ class AuditStore:
                 "AND (score<0.6 OR status='ambiguous') "
                 "ORDER BY start_ts DESC LIMIT 20", (person, person)
             ).fetchall()
+        hourly_counts = Counter()
+        daily_counts = Counter()
+        cutoff = time.time() - 30 * 86400
+        for row in recognition_times:
+            timestamp = float(row["start_ts"])
+            local_time = datetime.fromtimestamp(timestamp, tzinfo)
+            hourly_counts[local_time.hour] += 1
+            if timestamp >= cutoff:
+                daily_counts[local_time.date().isoformat()] += 1
         stats = self.person_statistics().get(person, {})
         total = int(verified["total"] or 0)
         correct = int(verified["correct"] or 0)
         return {
             "person": person, "statistics": stats,
             "events": result["events"],
-            "hourly": [dict(row) for row in hourly],
-            "daily": [dict(row) for row in daily],
+            "hourly": [
+                {"hour": hour, "count": hourly_counts.get(hour, 0)}
+                for hour in range(24)
+            ],
+            "daily": [
+                {"day": day, "count": count}
+                for day, count in sorted(daily_counts.items())
+            ],
             "verified": {"total": total, "correct": correct,
                          "accuracy": correct / total if total else None},
             "weak_events": [dict(row) for row in weak],

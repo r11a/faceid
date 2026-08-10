@@ -3,6 +3,16 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 2.0.1 — 2026-08-10
+
+- **Correct local-time activity chart:** hourly person statistics now use the
+  browser's IANA timezone (including daylight-saving rules) instead of the add-on
+  container timezone. Bar direction is isolated from the Hebrew RTL layout, so bar
+  length always grows consistently with the displayed count.
+- **Mobile clip player:** event clips now open from an explicit play button in a
+  second top-layer modal above the event image. Closing pauses playback, removes the
+  media source and leaves the event review open underneath.
+
 ## 2.0.0 — 2026-07-27
 
 - **Investigation center:** filter all recognition events by text, person, decision,
