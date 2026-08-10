@@ -3,6 +3,13 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 3.0.1 — 2026-08-10
+
+- Prevent stale Home Assistant ingress/WebView caching from hiding the new UI.
+- Show the body-learning action for every completed activity event; select a person
+  first when the face engine did not suggest one.
+- Show the running backend version in the header for straightforward verification.
+
 ## 3.0.0 — 2026-08-10
 
 - **Three evidence paths:** authoritative ArcFace identity, human-reviewed DINOv2

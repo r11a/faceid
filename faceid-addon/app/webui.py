@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from . import logbuffer
+from . import logbuffer, VERSION
 from .engine import FaceEngine, crop_face, find_face_padded
 from .gallery import _atomic_write_json
 from .backup_util import build_backup_gz, write_backup_file, prune_backups
@@ -67,7 +67,10 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
 
     @app.get("/")
     def index():
-        return FileResponse(static_dir / "index.html")
+        return FileResponse(
+            static_dir / "index.html",
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
 
     @app.get("/api/persons")
     def persons():
@@ -1074,7 +1077,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         # "queue" ist die Review-Queue — das ist es, was der Header zeigt. Die interne
         # Verarbeitungs-Warteschlange steht separat unter "processing".
         jobs = processor.audit.pending_jobs() if processor.audit else []
-        return {"status": "ok", "persons": len(gallery.persons()),
+        return {"status": "ok", "version": VERSION,
+                "persons": len(gallery.persons()),
                 "queue": len(list((data_dir / "unknowns").glob("*.json"))),
                 "processing": processor.queue.qsize(),
                 "open_events": len(processor.events),
