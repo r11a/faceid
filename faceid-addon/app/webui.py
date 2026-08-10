@@ -353,6 +353,18 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         save_backfill_state()
         return {"ok": True, "status": "cancelling"}
 
+    @app.delete("/api/backfill/runs/{run_id}")
+    def delete_backfill_run(run_id: str):
+        if backfill_state.get("run_id") == run_id and backfill_state.get("running"):
+            raise HTTPException(409, "A running scan cannot be deleted")
+        history = list(backfill_state.get("history") or [])
+        kept = [row for row in history if row.get("run_id") != run_id]
+        if len(kept) == len(history):
+            raise HTTPException(404, "Learning run was not found")
+        backfill_state["history"] = kept
+        save_backfill_state()
+        return {"ok": True}
+
     # Live-editierbare Einstellungen (Settings-Tab). Overlay in data/settings.json.
     SETTINGS_SPEC = {
         "match_threshold": (0.2, 0.9),
@@ -478,13 +490,17 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         except tarfile.TarError:
             raise HTTPException(400, "Not a valid .tar.gz backup")
         members = tar.getmembers()
-        # Sicherheit: keine absoluten Pfade / path traversal, nur persons/ und ignored/
+        allowed_roots = {"persons", "ignored", "body", "system", "manifest.json"}
         for m in members:
             norm = Path(m.name)
-            if m.name.startswith("/") or ".." in norm.parts or (norm.parts and norm.parts[0] not in ("persons", "ignored")):
+            if (m.name.startswith("/") or ".." in norm.parts or
+                    (norm.parts and norm.parts[0] not in allowed_roots)):
                 raise HTTPException(400, f"Refusing unsafe path in archive: {m.name}")
+            if norm.name == "classifier.pkl":
+                raise HTTPException(400, "Executable body models are never accepted from backups; restore material and retrain")
         if not merge:
-            for sub in ("persons", "ignored"):
+            write_backup_file(data_dir, data_dir / "backups" / "before-restore")
+            for sub in ("persons", "ignored", "body"):
                 d = data_dir / sub
                 if d.exists():
                     for f in d.rglob("*"):
@@ -497,7 +513,18 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         for m in members:
             if not m.isfile():
                 continue
-            target = data_dir / m.name
+            norm = Path(m.name)
+            if norm.parts[0] == "manifest.json":
+                continue
+            if norm.parts[0] == "system":
+                if len(norm.parts) != 2 or norm.parts[1] not in {
+                    "settings.json", "learning_runs.json", "frigate_sync.json", "audit.db"
+                }:
+                    continue
+                target = (data_dir / "audit.restore-pending" if norm.parts[1] == "audit.db"
+                          else data_dir / norm.parts[1])
+            else:
+                target = data_dir / m.name
             if merge and target.exists():
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -507,7 +534,9 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         tar.close()
         gallery.reload()
         return {"restored_files": added, "mode": "merge" if merge else "replace",
-                "persons": len(gallery.persons())}
+                "persons": len(gallery.persons()),
+                "restart_required": (data_dir / "audit.restore-pending").is_file(),
+                "safety_backup": "data/backups/before-restore"}
 
     @app.get("/api/logs")
     def logs(limit: int = 300, level: str | None = None):
@@ -691,6 +720,16 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             processor.dispatcher.health()
             if getattr(processor, "dispatcher", None) else {}
         )
+        report["advanced"] = {
+            "runtime": (processor.runtime_health.report()
+                        if getattr(processor, "runtime_health", None) else None),
+            "frames": (processor.frame_distributor.report()
+                       if getattr(processor, "frame_distributor", None) else None),
+            "body": (processor.body_recognition.status()
+                     if getattr(processor, "body_recognition", None) else None),
+            "vision": (processor.vision_advisor.status()
+                       if getattr(processor, "vision_advisor", None) else None),
+        }
         return report
 
     @app.get("/api/frigate-sync")
@@ -727,6 +766,127 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         if service is None:
             raise HTTPException(503, "Frigate gallery sync is not available")
         return service.export_selected(list(body.get("items") or []))
+
+    @app.post("/api/frigate-sync/dismiss")
+    def frigate_sync_dismiss(body: dict):
+        service = getattr(processor, "frigate_sync", None)
+        if service is None:
+            raise HTTPException(503, "Frigate gallery sync is not available")
+        try:
+            return service.dismiss(str(body.get("direction") or ""), list(body.get("items") or []))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/body")
+    def body_materials():
+        service = getattr(processor, "body_recognition", None)
+        if service is None:
+            raise HTTPException(503, "Body recognition is not available")
+        return service.materials()
+
+    @app.get("/api/body/material/{sample_id}/image")
+    def body_material_image(sample_id: str):
+        service = getattr(processor, "body_recognition", None)
+        if service is None or not sample_id.isalnum():
+            raise HTTPException(404, "Unknown material")
+        path = service.pending / f"{sample_id}.jpg"
+        if not path.is_file():
+            raise HTTPException(404, "Unknown material")
+        return FileResponse(path, media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=300"})
+
+    @app.post("/api/body/material/{sample_id}/review")
+    def body_material_review(sample_id: str, body: dict):
+        service = getattr(processor, "body_recognition", None)
+        action, person = str(body.get("action") or ""), body.get("person")
+        known = {row["name"] for row in gallery.persons().values()}
+        if action == "approve" and person not in known:
+            raise HTTPException(400, "Choose an existing person")
+        if service is None or not service.review(sample_id, action, person):
+            raise HTTPException(404, "Material was not found or the action is invalid")
+        return {"ok": True}
+
+    @app.post("/api/body/train")
+    def body_train():
+        service = getattr(processor, "body_recognition", None)
+        if service is None:
+            raise HTTPException(503, "Body recognition is not available")
+        try:
+            return service.train()
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/body/from-event/{event_id}")
+    def body_from_event(event_id: str, body: dict):
+        service = getattr(processor, "body_recognition", None)
+        detail = processor.audit.event_detail(event_id) if processor.audit else None
+        person = str(body.get("person") or "")
+        if service is None or detail is None:
+            raise HTTPException(404, "Event or body service is not available")
+        if person not in {row["name"] for row in gallery.persons().values()}:
+            raise HTTPException(400, "Choose an existing person")
+        image = processor.frigate.snapshot(event_id, crop=True)
+        if image is None:
+            raise HTTPException(404, "Frigate no longer has this event snapshot")
+        result = service.add_pending(event_id, image, person,
+                                     detail["event"].get("camera") or "", "human-selected")
+        if not result.get("added"):
+            raise HTTPException(409, "The image is too small, dark or blurred for body learning")
+        return result
+
+    @app.post("/api/body/enabled")
+    def body_enabled(body: dict):
+        service = getattr(processor, "body_recognition", None)
+        if service is None:
+            raise HTTPException(503, "Body recognition is not available")
+        requested = bool(body.get("enabled"))
+        if requested and not service.status()["armed"]:
+            raise HTTPException(409, "Review material and train the body model before enabling it")
+        service.enabled = requested
+        cfg["faceid"]["body_enabled"] = requested
+        overlay = {}
+        if settings_file.exists():
+            try: overlay = json.loads(settings_file.read_text())
+            except (json.JSONDecodeError, OSError): pass
+        overlay["body_enabled"] = requested
+        _atomic_write_json(settings_file, overlay, indent=1)
+        return service.status()
+
+    @app.post("/api/recognition-test/{event_id}")
+    def recognition_test(event_id: str):
+        if processor.audit is None:
+            raise HTTPException(404, "Audit is not available")
+        detail = processor.audit.event_detail(event_id)
+        if detail is None:
+            raise HTTPException(404, "Unknown event")
+        image = processor.frigate.snapshot(event_id, crop=True)
+        if image is None:
+            cached = processor.audit.evidence_path(event_id)
+            image = cv2.imread(str(cached)) if cached.is_file() else None
+        event = detail["event"]
+        body_result = ({"status": "no-image", "advisory": True} if image is None else
+                       processor.body_recognition.predict(image, event_id)
+                       if getattr(processor, "body_recognition", None) else {"enabled": False})
+        candidates = [name for name in (event.get("person"), body_result.get("candidate")) if name]
+        vision = (processor.vision_advisor.inspect(event_id, list(dict.fromkeys(candidates)))
+                  if getattr(processor, "vision_advisor", None) else {"enabled": False})
+        return {"event_id": event_id,
+                "face": {"decision": event.get("status"), "person": event.get("person"),
+                         "score": event.get("score"), "margin": event.get("margin"),
+                         "authority": "identity"},
+                "body": body_result, "vision": vision,
+                "policy": "Only the face result or an explicit human review establishes identity."}
+
+    @app.get("/api/recognition-test/{event_id}/grid")
+    def recognition_test_grid(event_id: str):
+        service = getattr(processor, "vision_advisor", None)
+        if service is None:
+            raise HTTPException(404, "Vision advisor is not available")
+        path = service.candidate_grid(event_id)
+        if path is None:
+            raise HTTPException(404, "No event frames are available")
+        return FileResponse(path, media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=300"})
 
     @app.get("/api/gallery-coach")
     def gallery_coach():
@@ -926,6 +1086,14 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                                  if getattr(processor, "dispatcher", None) else {}),
                 "media": (processor.media_store.report()
                           if getattr(processor, "media_store", None) else None),
+                "frames": (processor.frame_distributor.report()
+                           if getattr(processor, "frame_distributor", None) else None),
+                "body": (processor.body_recognition.status()
+                         if getattr(processor, "body_recognition", None) else None),
+                "vision": (processor.vision_advisor.status()
+                           if getattr(processor, "vision_advisor", None) else None),
+                "watchdog": (processor.runtime_health.report()
+                             if getattr(processor, "runtime_health", None) else None),
                 "frigate": {
                     "secure_mode": processor.frigate.secure_mode,
                     "authenticated": bool(processor.frigate.username),

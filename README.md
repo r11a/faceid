@@ -1,10 +1,18 @@
 # FaceID — self-hosted face recognition for Frigate + Home Assistant
 
-Version 2.1 adds a guided Learning Center, explainable gallery quality checks,
-explicit two-way Frigate face-library sync and a bounded local media cache that makes
-event clips reliable through Home Assistant ingress and mobile browsers. The complete
-investigation center still provides date/person/camera search, auditable review,
-person profiles, camera health, HA automation tools and explicit privacy retention.
+Version 3 adds three deliberately separated evidence paths: authoritative ArcFace
+identity, human-reviewed DINOv2 body appearance with multi-event consensus, and an
+optional local Vision advisor. A face decision or explicit operator review establishes
+identity; body and Vision are supporting signals and must never unlock a door alone.
+
+Open **Advanced recognition** in the web UI to review Frigate person crops, approve or
+reject body material, train the local model and run a historical three-way test. Start
+with at least three varied full-person images per resident and add confirmed stranger
+examples. Both `body_enabled` and `vision_advisor_enabled` remain off by default.
+
+The image bundles a checksum-pinned DINOv2-small ONNX model and FFmpeg. Video decode
+can be `auto`, `software`, `vaapi` or `cuda`; Health reports the backend that really
+worked and every fallback instead of presenting configured acceleration as fact.
 
 **Recommended Frigate connection:** use `https://FRIGATE_IP:8971` with a dedicated
 Frigate `viewer` account. FaceID logs in server-side and renews the session; credentials

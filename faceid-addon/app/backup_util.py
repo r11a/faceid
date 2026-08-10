@@ -4,12 +4,41 @@ import logging
 import tarfile
 import threading
 import time
+import json
+import os
+import sqlite3
+import tempfile
 from pathlib import Path
 
 log = logging.getLogger("faceid.backup")
 
 # Nur die unersetzliche Handarbeit sichern — nicht die Unknown-Queue oder Frigate-Vollbilder.
-BACKUP_SUBDIRS = ("persons", "ignored")
+BACKUP_SUBDIRS = ("persons", "ignored", "body")
+BACKUP_FILES = ("settings.json", "learning_runs.json", "frigate_sync.json")
+
+
+def _safe_backup_member(info: tarfile.TarInfo):
+    # sklearn's pickle is executable on load. Preserve reviewed material and status,
+    # then retrain after restore instead of accepting an executable model in uploads.
+    if info.name.endswith("/classifier.pkl"):
+        return None
+    return info
+
+
+def _add_audit_snapshot(tar: tarfile.TarFile, audit: Path):
+    """Use SQLite's online backup API so WAL-resident events are included."""
+    descriptor, temporary = tempfile.mkstemp(prefix="faceid-audit-", suffix=".db")
+    os.close(descriptor)
+    try:
+        source = sqlite3.connect(f"file:{audit.resolve()}?mode=ro", uri=True, timeout=15)
+        destination = sqlite3.connect(temporary)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close(); source.close()
+        tar.add(temporary, arcname="system/audit.db")
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def build_backup_gz(data_dir: Path) -> bytes:
@@ -19,7 +48,23 @@ def build_backup_gz(data_dir: Path) -> bytes:
         for sub in BACKUP_SUBDIRS:
             d = data_dir / sub
             if d.exists():
-                tar.add(d, arcname=sub)
+                tar.add(d, arcname=sub, filter=_safe_backup_member)
+        for name in BACKUP_FILES:
+            path = data_dir / name
+            if path.is_file():
+                tar.add(path, arcname=f"system/{name}")
+        audit = data_dir / "audit.db"
+        if audit.is_file():
+            _add_audit_snapshot(tar, audit)
+        manifest = json.dumps({
+            "format": 3, "created": time.time(),
+            "includes": [*BACKUP_SUBDIRS, "settings", "learning-runs", "sync-ledger", "audit-history"],
+            "excludes": ["frigate-credentials", "mqtt-credentials", "clips", "media-cache"],
+            "restore_note": "body classifier is rebuilt from reviewed material after restore",
+        }, indent=2).encode("utf-8")
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(manifest); info.mtime = int(time.time())
+        tar.addfile(info, io.BytesIO(manifest))
     return buf.getvalue()
 
 

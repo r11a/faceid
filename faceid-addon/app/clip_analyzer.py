@@ -23,7 +23,7 @@ class ClipAnalyzer:
         self, engine, frigate, *, max_frames: int = 24, max_samples: int = 8,
         min_face_px: int = 48, min_quality: float = 0.35,
         track_similarity: float = 0.55, diversity_similarity: float = 0.995,
-        media_store=None, max_faces_per_frame: int = 4,
+        media_store=None, max_faces_per_frame: int = 4, frame_distributor=None,
     ):
         self.engine = engine
         self.frigate = frigate
@@ -35,8 +35,14 @@ class ClipAnalyzer:
         self.diversity_similarity = float(diversity_similarity)
         self.media_store = media_store
         self.max_faces_per_frame = max(1, min(int(max_faces_per_frame), 12))
+        self.frame_distributor = frame_distributor
 
     def analyze(self, event_id: str, reference_embedding=None) -> list[FaceSample]:
+        if self.frame_distributor is not None:
+            return self._analyze_frames(
+                self.frame_distributor.frames(event_id, limit=self.max_frames),
+                reference_embedding,
+            )
         if self.media_store is not None:
             path = self.media_store.clip_path(event_id)
             return self._analyze_file(str(path), reference_embedding) if path else []
@@ -124,6 +130,34 @@ class ClipAnalyzer:
             )
         finally:
             cap.release()
+
+    def _analyze_frames(self, frames, reference_embedding=None) -> list[FaceSample]:
+        tracks: list[dict] = []
+        for frame_index, frame in frames:
+            measured = []
+            for face in self.engine.faces(frame):
+                quality = measure_face_quality(frame, face, min_face_px=self.min_face_px,
+                                               min_quality=self.min_quality)
+                if quality.usable:
+                    measured.append((quality.score, quality, face))
+            measured.sort(key=lambda item: item[0], reverse=True)
+            for _, quality, face in measured[:self.max_faces_per_frame]:
+                track = self._track_for(tracks, face.normed_embedding)
+                tracks[track]["embeddings"].append(face.normed_embedding)
+                tracks[track]["samples"].append(FaceSample(frame.copy(), face, quality, int(frame_index), track))
+        if not tracks:
+            return []
+        selected = self._select_track(tracks, reference_embedding)
+        samples = sorted(tracks[selected]["samples"], key=lambda row: row.quality.score, reverse=True)
+        diverse = []
+        for sample in samples:
+            if any(float(sample.face.normed_embedding @ kept.face.normed_embedding) >= self.diversity_similarity
+                   for kept in diverse):
+                continue
+            diverse.append(sample)
+            if len(diverse) >= self.max_samples:
+                break
+        return sorted(diverse, key=lambda row: row.frame_index)
 
     def _track_for(self, tracks: list[dict], embedding) -> int:
         best_idx, best_score = None, -1.0
