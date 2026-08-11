@@ -26,6 +26,9 @@ from .vision_advisor import VisionAdvisor
 from .runtime_health import RuntimeHealth
 from .camera_profiles import CameraProfiles
 from .visits import VisitService
+from .animals import AnimalService
+from .access_control import AccessControl
+from .migrations import run_migrations
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -41,6 +44,9 @@ def main():
     if pending_audit.is_file():
         pending_audit.replace(data_dir / "audit.db")
         log.warning("restored audit history from the previous backup before opening the database")
+    migration = run_migrations(data_dir)
+    if migration["changed"]:
+        log.warning("data migration completed; recovery backup: %s", migration["backup"])
     # Live-editierbare Einstellungen (Settings-Tab) liegen als Overlay in data/settings.json
     # und gewinnen über config.yaml — persistent auch beim Add-on (config.yaml wird dort
     # bei jedem Start neu generiert, /data überlebt).
@@ -141,6 +147,15 @@ def main():
         audit, processor.camera_profiles,
         gap_minutes=int(f.get("visit_gap_minutes", 15)),
     )
+    processor.animals = AnimalService(
+        data_dir, frigate,
+        retention_days=int(f.get("animal_retention_days", 30)),
+    )
+    processor.access_control = AccessControl(
+        data_dir / "access_control.json",
+        enabled=bool(f.get("access_control_enabled", False)),
+    )
+    processor.migration = migration
     processor.vision_advisor = vision_advisor
     processor.runtime_health = RuntimeHealth(data_dir, processor)
     processor.start()

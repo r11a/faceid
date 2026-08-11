@@ -1,5 +1,5 @@
 name: FaceID
-version: "3.1.4"
+version: "5.0.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -12,7 +12,7 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8600
-ingress_entry: ui-3.1.4
+ingress_entry: ui-5.0.0
 panel_icon: mdi:face-recognition
 panel_title: FaceID
 ports:
@@ -64,6 +64,7 @@ options:
   audit_retention_days: 90
   known_evidence_days: 30
   unknown_evidence_days: 14
+  animal_retention_days: 30
   presence_window: 120
   visit_gap_minutes: 15
   calibration_target_far: 0.01
@@ -79,6 +80,7 @@ options:
   ai_vision_model: gemma3:4b
   ai_embedding_model: embeddinggemma
   set_sub_label: false
+  access_control_enabled: false
   cameras: []
   discovery_cameras: []
 schema:
@@ -124,6 +126,7 @@ schema:
   audit_retention_days: int(0,3650)
   known_evidence_days: int(1,3650)
   unknown_evidence_days: int(1,3650)
+  animal_retention_days: int(1,3650)
   presence_window: int(10,3600)
   visit_gap_minutes: int(2,120)
   calibration_target_far: float(0.0,0.5)
@@ -140,6 +143,7 @@ schema:
   ai_vision_model: str
   ai_embedding_model: str
   set_sub_label: bool
+  access_control_enabled: bool
   cameras:
     - str
   discovery_cameras:

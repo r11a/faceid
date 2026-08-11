@@ -4,7 +4,8 @@ import threading
 from pathlib import Path
 
 
-ROLES = {"observation", "entry", "exit", "entry_exit", "restricted"}
+ROLES = {"observation", "entry", "exit", "entry_exit", "restricted", "intercom"}
+MODES = {"standard", "intercom"}
 
 
 class CameraProfiles:
@@ -27,13 +28,25 @@ class CameraProfiles:
 
     def get(self, camera: str) -> dict:
         stored = self.all().get(camera) or {}
+        mode = stored.get("mode", "intercom" if stored.get("role") == "intercom" else "standard")
         return {
             "camera": camera,
             "min_face_px": int(stored.get("min_face_px", self.default_min_face_px)),
             "role": stored.get("role", "observation"),
+            "mode": mode if mode in MODES else "standard",
+            "night_min_face_px": int(stored.get("night_min_face_px", stored.get("min_face_px", self.default_min_face_px))),
+            "burst_frames": int(stored.get("burst_frames", 8)),
+            "high_resolution": bool(stored.get("high_resolution", mode == "intercom")),
+            "require_second_factor": bool(stored.get("require_second_factor", mode == "intercom")),
+            "roi": stored.get("roi") if isinstance(stored.get("roi"), list) else [0.0, 0.0, 1.0, 1.0],
         }
 
-    def update(self, camera: str, *, min_face_px: int, role: str) -> dict:
+    def update(
+        self, camera: str, *, min_face_px: int, role: str,
+        mode: str = "standard", night_min_face_px: int | None = None,
+        burst_frames: int = 8, high_resolution: bool = False,
+        require_second_factor: bool = True, roi: list | None = None,
+    ) -> dict:
         camera = str(camera).strip()
         if not camera:
             raise ValueError("camera is required")
@@ -43,9 +56,27 @@ class CameraProfiles:
         role = str(role)
         if role not in ROLES:
             raise ValueError("unknown camera role")
+        mode = str(mode)
+        if mode not in MODES:
+            raise ValueError("unknown camera mode")
+        night_min_face_px = int(night_min_face_px or min_face_px)
+        if not 24 <= night_min_face_px <= 320:
+            raise ValueError("night_min_face_px must be between 24 and 320")
+        burst_frames = max(3, min(int(burst_frames), 30))
+        roi = roi if isinstance(roi, list) and len(roi) == 4 else [0.0, 0.0, 1.0, 1.0]
+        roi = [max(0.0, min(float(value), 1.0)) for value in roi]
+        if roi[2] <= roi[0] or roi[3] <= roi[1]:
+            raise ValueError("roi must describe a non-empty normalized rectangle")
         with self._lock:
             profiles = self._read()
-            profiles[camera] = {"min_face_px": min_face_px, "role": role}
+            profiles[camera] = {
+                "min_face_px": min_face_px, "role": role, "mode": mode,
+                "night_min_face_px": night_min_face_px,
+                "burst_frames": burst_frames,
+                "high_resolution": bool(high_resolution),
+                "require_second_factor": bool(require_second_factor),
+                "roi": roi,
+            }
             temporary = self.path.with_suffix(".tmp")
             temporary.write_text(
                 json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8"

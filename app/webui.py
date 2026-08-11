@@ -36,6 +36,10 @@ class NameBody(BaseModel):
     name: str
 
 
+class RenameBody(BaseModel):
+    name: str
+
+
 def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path) -> FastAPI:
     app = FastAPI(title="FaceID")
 
@@ -53,10 +57,23 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 return await call_next(request)
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="FaceID"'})
 
+    access_control = getattr(processor, "access_control", None)
+    if access_control is not None:
+        @app.middleware("http")
+        async def role_guard(request, call_next):
+            if not access_control.allowed(
+                request.headers, path=request.url.path, method=request.method,
+            ):
+                return JSONResponse(
+                    {"detail": "Your FaceID role does not allow this action"},
+                    status_code=403,
+                )
+            return await call_next(request)
+
     @app.get("/media/{kind}/{item_path:path}")
     def media(kind: str, item_path: str):
         """Serve only gallery JPEGs; never expose embeddings, settings or backups."""
-        if kind not in {"persons", "unknowns", "ignored"}:
+        if kind not in {"persons", "unknowns", "ignored", "animals"}:
             raise HTTPException(404, "Unknown media collection")
         base = (data_dir / kind).resolve()
         target = (base / item_path).resolve()
@@ -98,7 +115,51 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
 
     @app.post("/api/persons")
     def create_person(body: NameBody):
-        return {"slug": gallery.create_person(body.name)}
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "יש להזין שם")
+        if any(person["name"].casefold() == name.casefold() for person in gallery.persons().values()):
+            raise HTTPException(409, "כבר קיים אדם בשם הזה")
+        return {"slug": gallery.create_person(name)}
+
+    @app.patch("/api/persons/{slug}")
+    def rename_person(slug: str, body: RenameBody):
+        try:
+            if not gallery.rename_person(slug, body.name):
+                raise HTTPException(404, "Unknown person")
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"ok": True, "slug": slug, "name": body.name.strip()}
+
+    @app.get("/api/users")
+    def users_overview():
+        coach = {
+            item["slug"]: item for item in gallery_coach_report(gallery)["people"]
+        }
+        statistics = processor.audit.person_statistics() if processor.audit else {}
+        rows = []
+        for slug, person in gallery.persons().items():
+            report = coach.get(slug, {})
+            count = int(person.get("count", 0))
+            if count < 3:
+                state, label = "new", "צריך עוד תמונות"
+            elif report.get("review_count", 0):
+                state, label = "review", "כדאי לשפר תמונות"
+            else:
+                state, label = "ready", "מוכן לזיהוי"
+            files = person.get("files") or []
+            rows.append({
+                "slug": slug, "name": person["name"], "count": count,
+                "photo": f"media/persons/{slug}/{files[0]}" if files else None,
+                "favorite": bool(person.get("favorite")), "state": state,
+                "state_label": label, "advice": report.get("advice", []),
+                "statistics": statistics.get(person["name"], {}),
+            })
+        rows.sort(key=lambda item: (not item["favorite"], item["name"].casefold()))
+        return {
+            "users": rows, "recommended_photos": {"minimum": 5, "maximum": 10},
+            "privacy": "Photos and face templates stay on this FaceID installation.",
+        }
 
     @app.delete("/api/persons/{slug}")
     def delete_person(slug: str, purge_history: bool = False):
@@ -168,12 +229,13 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         """Fotos (z. B. aus der Foto-Library) hochladen: Gesicht extrahieren + einlernen."""
         if slug not in gallery.persons():
             raise HTTPException(404, "Unknown person")
-        added, skipped = 0, []
+        added, skipped, details = 0, [], []
         for uf in files:
             raw = await uf.read()
             img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
             if img is None:
                 skipped.append(f"{uf.filename}: not an image")
+                details.append({"file": uf.filename, "status": "rejected", "message": "הקובץ אינו תמונה תקינה"})
                 continue
             if max(img.shape[:2]) > 2000:  # Foto-Library-Bilder einkürzen, Detection reicht so
                 s = 2000 / max(img.shape[:2])
@@ -181,11 +243,37 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             face, img = find_face_padded(engine, img, min_px=60)
             if face is None:
                 skipped.append(f"{uf.filename}: no face found")
+                details.append({"file": uf.filename, "status": "rejected", "message": "לא נמצאו פנים ברורות"})
+                continue
+            quality = measure_face_quality(
+                img, face, min_face_px=60,
+                min_quality=max(0.32, processor.min_face_quality),
+            )
+            if not quality.usable:
+                if quality.face_px < 60:
+                    message = "הפנים קטנות מדי; השתמשו בתמונה קרובה יותר"
+                elif quality.sharpness < .25:
+                    message = "התמונה מטושטשת; נסו תמונה חדה יותר"
+                elif quality.illumination < .25:
+                    message = "התאורה קיצונית; נסו אור אחיד על הפנים"
+                else:
+                    message = "זווית הפנים או איכות התמונה אינן מתאימות"
+                skipped.append(f"{uf.filename}: low quality")
+                details.append({"file": uf.filename, "status": "rejected", "message": message, "quality": quality.to_dict()})
                 continue
             gallery.add_face(slug, crop_face(img, face.bbox), face.normed_embedding,
                              source={"camera": "upload"})
             added += 1
-        return {"added": added, "skipped": skipped}
+            details.append({"file": uf.filename, "status": "added", "message": "התמונה נוספה", "quality": quality.to_dict()})
+        count = gallery.persons().get(slug, {}).get("count", 0)
+        return {
+            "added": added, "skipped": skipped, "details": details, "count": count,
+            "ready": count >= 5,
+            "next_step": (
+                "יש מספיק תמונות בסיסיות; עברו מול מצלמה ובדקו זיהויים"
+                if count >= 5 else f"מומלץ להוסיף עוד {5 - count} תמונות מזוויות שונות"
+            ),
+        }
 
     @app.get("/api/unknowns")
     def unknowns():
@@ -513,7 +601,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         except tarfile.TarError:
             raise HTTPException(400, "Not a valid .tar.gz backup")
         members = tar.getmembers()
-        allowed_roots = {"persons", "ignored", "body", "system", "manifest.json"}
+        allowed_roots = {"persons", "ignored", "body", "animals", "system", "manifest.json"}
         for m in members:
             norm = Path(m.name)
             if (m.name.startswith("/") or ".." in norm.parts or
@@ -523,7 +611,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 raise HTTPException(400, "Executable body models are never accepted from backups; restore material and retrain")
         if not merge:
             write_backup_file(data_dir, data_dir / "backups" / "before-restore")
-            for sub in ("persons", "ignored", "body"):
+            for sub in ("persons", "ignored", "body", "animals"):
                 d = data_dir / sub
                 if d.exists():
                     for f in d.rglob("*"):
@@ -542,7 +630,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             if norm.parts[0] == "system":
                 if len(norm.parts) != 2 or norm.parts[1] not in {
                     "settings.json", "learning_runs.json", "frigate_sync.json",
-                    "camera_profiles.json", "audit.db"
+                    "camera_profiles.json", "access_control.json", "schema.json",
+                    "audit.db"
                 }:
                     continue
                 target = (data_dir / "audit.restore-pending" if norm.parts[1] == "audit.db"
@@ -972,6 +1061,69 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             ),
         }
 
+    @app.get("/api/session")
+    def session(request: Request):
+        service = getattr(processor, "access_control", None)
+        return service.session(request.headers) if service else {
+            "id": "local", "name": "Home Assistant", "role": "admin",
+            "tabs": ["*"], "enforced": False,
+        }
+
+    @app.get("/api/access-policy")
+    def access_policy():
+        service = getattr(processor, "access_control", None)
+        return service.policy() if service else {"enabled": False, "roles": {}}
+
+    class PetBody(BaseModel):
+        name: str
+        species: str
+        frigate_name: str = ""
+
+    @app.get("/api/pets")
+    def pets():
+        service = getattr(processor, "animals", None)
+        return service.summary() if service else {"profiles": {}, "events": [], "supported": []}
+
+    @app.post("/api/pets")
+    def create_pet(body: PetBody):
+        service = getattr(processor, "animals", None)
+        if service is None:
+            raise HTTPException(503, "Animal service is unavailable")
+        try:
+            return {"ok": True, "profile": service.save_profile(
+                name=body.name, species=body.species,
+                frigate_name=body.frigate_name,
+            )}
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.put("/api/pets/{slug}")
+    def update_pet(slug: str, body: PetBody):
+        service = getattr(processor, "animals", None)
+        if service is None:
+            raise HTTPException(503, "Animal service is unavailable")
+        try:
+            return {"ok": True, "profile": service.save_profile(
+                slug=slug, name=body.name, species=body.species,
+                frigate_name=body.frigate_name,
+            )}
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.delete("/api/pets/{slug}")
+    def delete_pet(slug: str):
+        service = getattr(processor, "animals", None)
+        if service is None or not service.delete_profile(slug):
+            raise HTTPException(404, "Unknown pet")
+        return {"ok": True}
+
+    @app.get("/api/animals/events")
+    def animal_events(species: str = "", pet_slug: str = "", limit: int = 200):
+        service = getattr(processor, "animals", None)
+        return {"events": service.events(
+            species=species, pet_slug=pet_slug, limit=limit,
+        ) if service else []}
+
     class PrivacyBody(BaseModel):
         known_days: int = 30
         unknown_days: int = 14
@@ -1032,6 +1184,12 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     class CameraProfileBody(BaseModel):
         min_face_px: int
         role: str = "observation"
+        mode: str = "standard"
+        night_min_face_px: int | None = None
+        burst_frames: int = 8
+        high_resolution: bool = False
+        require_second_factor: bool = True
+        roi: list[float] | None = None
 
     def _camera_names():
         names = set(getattr(processor, "cameras", set()) or set())
@@ -1079,7 +1237,12 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             raise HTTPException(503, "Camera profiles are unavailable")
         try:
             return {"ok": True, "profile": profiles.update(
-                camera, min_face_px=body.min_face_px, role=body.role
+                camera, min_face_px=body.min_face_px, role=body.role,
+                mode=body.mode, night_min_face_px=body.night_min_face_px,
+                burst_frames=body.burst_frames,
+                high_resolution=body.high_resolution,
+                require_second_factor=body.require_second_factor,
+                roi=body.roi,
             )}
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -1118,6 +1281,77 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         return {
             "camera": camera, "width": int(image.shape[1]),
             "height": int(image.shape[0]), "profile": profile, "faces": faces,
+        }
+
+    @app.get("/api/intercom")
+    def intercom_overview():
+        profiles = getattr(processor, "camera_profiles", None)
+        rows = []
+        for camera in _camera_names():
+            profile = profiles.get(camera) if profiles else {}
+            if profile.get("mode") == "intercom" or profile.get("role") == "intercom":
+                rows.append(profile)
+        return {
+            "cameras": rows,
+            "policy": "Face recognition alone never authorizes an unlock.",
+            "recommended": {
+                "reference_photos": "5-10 diverse clear photos",
+                "face_size": "Use the visual test; 120px or more is a strong starting point",
+                "second_factor": True,
+            },
+        }
+
+    @app.post("/api/intercom/{camera}/capture")
+    def test_intercom_capture(camera: str):
+        if camera not in _camera_names():
+            raise HTTPException(404, "Unknown camera")
+        profile = processor.camera_profiles.get(camera)
+        left, top, right, bottom = profile.get("roi", [0, 0, 1, 1])
+        candidates, frame_count, w, h = [], 0, 0, 0
+        for index in range(min(int(profile.get("burst_frames", 3)), 8)):
+            if index:
+                time.sleep(0.08)
+            content = processor.frigate.latest_frame_bytes(camera)
+            image = cv2.imdecode(np.frombuffer(content or b"", np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                continue
+            frame_count += 1
+            h, w = image.shape[:2]
+            for face in engine.faces(image):
+                cx = float(face.bbox[0] + face.bbox[2]) / 2 / max(w, 1)
+                cy = float(face.bbox[1] + face.bbox[3]) / 2 / max(h, 1)
+                if not (left <= cx <= right and top <= cy <= bottom):
+                    continue
+                quality = measure_face_quality(
+                    image, face, min_face_px=profile["min_face_px"],
+                    min_quality=processor.min_face_quality,
+                )
+                matches = gallery.match_candidates(face.normed_embedding, limit=2)
+                best_match = matches[0] if matches else (None, None, 0.0)
+                runner_score = matches[1][2] if len(matches) > 1 else 0.0
+                candidates.append({
+                    "frame": index,
+                    "box": [round(float(value), 1) for value in face.bbox],
+                    "person": best_match[1], "match_score": best_match[2],
+                    "match_margin": best_match[2] - runner_score,
+                    **quality.to_dict(),
+                })
+        if not frame_count:
+            raise HTTPException(404, "Frigate did not return a high-resolution frame")
+        best = max(candidates, key=lambda row: row["score"], default=None)
+        if not best:
+            state, message = "no_face", "לא נמצאו פנים באזור האינטרקום"
+        elif not best["usable"]:
+            state, message = "improve", "נמצאו פנים, אך כדאי לשפר מרחק, תאורה או חדות"
+        elif best["face_px"] < 120:
+            state, message = "acceptable", "הצילום מתאים, אך התקרבות נוספת תשפר אמינות"
+        else:
+            state, message = "excellent", "התמונה מתאימה מאוד לזיהוי באינטרקום"
+        return {
+            "camera": camera, "width": w, "height": h, "profile": profile,
+            "faces": candidates, "best": best, "frames_checked": frame_count,
+            "state": state, "message": message,
+            "unlock_policy": "second_factor_required" if profile["require_second_factor"] else "face_only_blocked",
         }
 
     @app.get("/api/visits")
@@ -1226,6 +1460,14 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                          if getattr(processor, "body_recognition", None) else None),
                 "vision": (processor.vision_advisor.status()
                            if getattr(processor, "vision_advisor", None) else None),
+                "animals": {
+                    "profiles": len(processor.animals.profiles()),
+                    "events": len(processor.animals.events(limit=1000)),
+                    "retention_days": processor.animals.retention_days,
+                } if getattr(processor, "animals", None) else None,
+                "access": (processor.access_control.policy()
+                           if getattr(processor, "access_control", None) else None),
+                "schema": getattr(processor, "migration", None),
                 "watchdog": (processor.runtime_health.report()
                              if getattr(processor, "runtime_health", None) else None),
                 "frigate": {

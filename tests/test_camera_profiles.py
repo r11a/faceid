@@ -19,6 +19,15 @@ class CameraProfilesTests(unittest.TestCase):
                 profiles.update("front", min_face_px=12, role="entry")
             with self.assertRaises(ValueError):
                 profiles.update("front", min_face_px=72, role="magic")
+            intercom = profiles.update(
+                "door", min_face_px=120, night_min_face_px=96,
+                role="intercom", mode="intercom", burst_frames=10,
+                high_resolution=True, require_second_factor=True,
+                roi=[.2, .1, .8, .95],
+            )
+            self.assertEqual(intercom["mode"], "intercom")
+            self.assertEqual(intercom["burst_frames"], 10)
+            self.assertEqual(intercom["roi"], [.2, .1, .8, .95])
 
 
 if __name__ == "__main__":

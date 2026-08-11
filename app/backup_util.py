@@ -13,10 +13,10 @@ from pathlib import Path
 log = logging.getLogger("faceid.backup")
 
 # Nur die unersetzliche Handarbeit sichern — nicht die Unknown-Queue oder Frigate-Vollbilder.
-BACKUP_SUBDIRS = ("persons", "ignored", "body")
+BACKUP_SUBDIRS = ("persons", "ignored", "body", "animals")
 BACKUP_FILES = (
     "settings.json", "learning_runs.json", "frigate_sync.json",
-    "camera_profiles.json",
+    "camera_profiles.json", "access_control.json", "schema.json",
 )
 
 
@@ -60,8 +60,8 @@ def build_backup_gz(data_dir: Path) -> bytes:
         if audit.is_file():
             _add_audit_snapshot(tar, audit)
         manifest = json.dumps({
-            "format": 3, "created": time.time(),
-            "includes": [*BACKUP_SUBDIRS, "settings", "learning-runs", "sync-ledger", "camera-profiles", "audit-history"],
+            "format": 5, "created": time.time(),
+            "includes": [*BACKUP_SUBDIRS, "settings", "learning-runs", "sync-ledger", "camera-profiles", "access-policy", "schema", "audit-history"],
             "excludes": ["frigate-credentials", "mqtt-credentials", "clips", "media-cache"],
             "restore_note": "body classifier is rebuilt from reviewed material after restore",
         }, indent=2).encode("utf-8")

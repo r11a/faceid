@@ -3,6 +3,31 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.0.0 — 2026-08-11
+
+- **Friendly user management:** a dedicated everyday Users tab guides creation,
+  photo selection, quality feedback, renaming and deletion. The advanced reference
+  gallery remains available in the System workspace for expert maintenance.
+- **Intercom mode:** configure an entrance camera from a focused screen, preview its
+  current Frigate frame, require a larger face, test sharpness/lighting live and keep
+  a second factor mandatory for door-control automations. Face recognition alone is
+  deliberately never treated as authorization to unlock.
+- **Animals and pets:** Frigate animal events receive a visual timeline, local
+  retention and MQTT-discovered Home Assistant sensors for named pets. Species
+  detection works from Frigate labels; naming an individual pet requires a matching
+  Frigate classifier/sub-label and is never guessed from species alone.
+- **Upgrade-safe data schema:** first startup creates an automatic pre-migration
+  backup, applies idempotent schema migrations and reports the schema in Health.
+  Backups now include animals, camera profiles and the access-policy foundation.
+- **Future role foundation:** Admin, Operator and Viewer tab policies are present and
+  derived from Home Assistant Ingress identity headers. Enforcement stays disabled by
+  default in 5.0 while the later user/permission editor is deliberately not exposed.
+- **Safer Frigate operation:** the Health report highlights unauthenticated port 5000,
+  missing credentials or disabled TLS verification; authenticated port 8971 remains
+  the recommended connection.
+- **Cache-safe Home Assistant update:** the versioned entry is `ui-5.0.0`, preserving
+  the corrected no-leading-slash Ingress behavior introduced in 3.1.4.
+
 ## 3.1.4 — 2026-08-10
 
 - **Versioned Ingress path corrected:** the entry no longer starts with `/`.

@@ -198,9 +198,11 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 .sync-card img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:9px;background:var(--panel2)}
 .sync-card input{position:absolute;top:14px;right:14px;z-index:2;width:20px;height:20px}
 .sync-card.done{opacity:.55}.progress-note{padding:12px;border-right:3px solid var(--acc);background:var(--panel);color:var(--dim)}
+.product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr));gap:14px}.product-card{border:1px solid var(--line);border-radius:20px;background:linear-gradient(150deg,#24272a,#181a1c);padding:17px;box-shadow:0 12px 34px #0004}.product-card.ready{border-color:#50785a}.product-card.review{border-color:#78613e}.product-card.new{border-style:dashed}.product-card .card-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.state-chip{display:inline-flex;border-radius:99px;padding:4px 9px;font-size:11px;font-weight:800;background:var(--panel2);color:var(--dim)}.state-chip.ready{color:#aee6b8}.state-chip.review{color:#f2cb8c}.wizard{border:1px solid color-mix(in oklab,var(--acc) 55%,var(--line));border-radius:22px;background:linear-gradient(135deg,color-mix(in oklab,var(--panel) 88%,var(--acc) 12%),var(--panel));padding:22px;margin-bottom:22px}.wizard h2{font:800 24px var(--sans);color:var(--fg);text-transform:none;letter-spacing:0}.wizard-flow{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}.wizard-flow div{display:flex;gap:9px;align-items:center;color:var(--dim)}.wizard-flow b{width:28px;height:28px;border-radius:9px;background:var(--acc);color:#152018;display:grid;place-items:center}.pet-icon{width:66px;height:66px;border-radius:18px;display:grid;place-items:center;background:#2d2832;font-size:28px}.intercom-preview{position:relative;border-radius:18px;overflow:hidden;background:#08090a;min-height:280px;display:grid;place-items:center}.intercom-preview img{width:100%;max-height:62vh;object-fit:contain}.intercom-guide{position:absolute;border:3px solid #74cbe8;border-radius:42% 42% 48% 48%;box-shadow:0 0 0 9999px #0004;pointer-events:none}.result-banner{padding:13px 16px;border-radius:14px;background:var(--panel2);border-right:4px solid var(--accent2);margin:12px 0}.result-banner.excellent{border-color:var(--good)}.result-banner.improve,.result-banner.acceptable{border-color:var(--warn)}.result-banner.no_face{border-color:var(--bad)}.danger{color:#ffd1d5!important;border-color:#824a50!important}.user-dialog-grid{display:grid;grid-template-columns:180px 1fr;gap:18px}.user-dialog-grid .avatar{width:180px;height:180px}.upload-report{display:grid;gap:7px;margin-top:12px}.upload-report div{padding:9px;border-radius:10px;background:var(--panel2)}
 @media(max-width:850px){.hero{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}nav{top:64px}}
 @media(max-width:850px){.filters{grid-template-columns:1fr 1fr}.event-media{grid-template-columns:1fr}}
 @media(max-width:700px){.evidence-grid{grid-template-columns:1fr}.sync-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.wizard-flow{grid-template-columns:1fr}.user-dialog-grid{grid-template-columns:1fr}.user-dialog-grid .avatar{width:100%;height:220px}.product-grid{grid-template-columns:1fr}}
 @media(max-width:520px){header{padding:12px 14px;align-items:flex-start}header h1{font-size:16px}header .stat{font-size:10px}nav{top:58px}.summary-grid{grid-template-columns:1fr 1fr}.people-dashboard{grid-template-columns:1fr}.hero-main,.guide-card{padding:18px}.welcome-card{align-items:flex-start;flex-direction:column}.filters{grid-template-columns:1fr}}
 @media(max-width:520px){
   .activity-scroll{overflow:visible!important}.activity-table,.activity-table tbody,.activity-table tr,.activity-table td{display:block;width:100%}
@@ -232,7 +234,9 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 <nav>
   <button data-t="dashboard" data-workspace="operate" class="on" title="סיכום פשוט של המערכת">⌂ בית</button>
   <button data-t="unknowns" data-workspace="operate" title="פנים שממתינות לזיהוי">? אימות פנים</button>
-  <button data-t="persons" data-workspace="operate" title="אנשים מוכרים ותמונות הייחוס שלהם">☺ אנשים</button>
+  <button data-t="users" data-workspace="operate" title="הוספה וניהול פשוט של אנשים מוכרים">☺ משתמשים</button>
+  <button data-t="intercom" data-workspace="operate" title="צילום איכותי וזיהוי בנקודת הכניסה">▣ אינטרקום</button>
+  <button data-t="animals" data-workspace="operate" title="חיות וחיות מחמד שנראו במצלמות">♞ חיות</button>
   <button data-t="visits" data-workspace="operate" title="ביקורים ומעברים בין מצלמות">↝ ביקורים</button>
   <button data-t="cameras" data-workspace="operate" title="כוונון חזותי לכל מצלמה">▣ מצלמות</button>
   <button data-t="automations" data-workspace="operate" title="בניית אוטומציות ל־Home Assistant">⌁ אוטומציות</button>
@@ -241,6 +245,7 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
   <button data-t="privacy" data-workspace="investigate" title="שמירת מידע ופרטיות">◈ שמירת ראיות</button>
   <button data-t="learning" data-workspace="system" title="שיפור הגלריה וסנכרון מבוקר עם Frigate">✦ שיפור תמונות</button>
   <button data-t="advanced" data-workspace="system" title="זיהוי גוף ובדיקת שלוש שכבות">◇ זיהוי גוף ו־AI</button>
+  <button data-t="persons" data-workspace="system" title="ניהול טכני של תמונות ייחוס וכפילויות">▦ גלריה מתקדמת</button>
   <button data-t="health-center" data-workspace="system" title="בדיקת מצלמות וחיבורים">♡ תקינות המערכת</button>
   <button data-t="ignored" data-workspace="system" title="אנשים שהמערכת מתעלמת מהם">⊘ רשימת התעלמות</button>
   <button data-t="settings" data-workspace="system" title="הגדרות וגיבויים">⚙ הגדרות וגיבוי</button>
@@ -253,9 +258,9 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 <dialog id="videoOverlay" class="video-overlay" onclick="if(event.target===this)closeEventVideo()"><div class="video-panel" onclick="event.stopPropagation()"><button class="ghost video-close" onclick="closeEventVideo()">✕ סגור</button><video id="eventVideo" controls playsinline preload="metadata"></video><div id="videoMessage" class="stat" style="display:none;padding:18px;text-align:center"></div></div></dialog>
 
 <script>
-const UI_VERSION='3.1.4';
+const UI_VERSION='5.0.0';
 const $=s=>document.querySelector(s), main=$('#main');
-let tab='dashboard', persons={}, selected=new Set(), suggestThr=0.40;
+let tab='dashboard', persons={}, selected=new Set(), suggestThr=0.40,currentSession={role:'admin',tabs:['*'],enforced:false};
 let workspace=localStorage.getItem('faceid-workspace')||'operate';
 
 async function j(url,opt={}){
@@ -295,6 +300,8 @@ function setWorkspace(next,chooseFirst=true){
 document.querySelectorAll('.workspace-switch button').forEach(b=>b.onclick=()=>setWorkspace(b.dataset.workspace));
 setWorkspace(workspace,false);
 
+async function loadSession(){try{currentSession=await j('api/session');const allowed=currentSession.tabs||['*'];if(!allowed.includes('*'))document.querySelectorAll('nav button').forEach(b=>b.hidden=!allowed.includes(b.dataset.t));}catch{}}
+
 async function health(){try{const h=await j('api/health');
   if(h.version&&h.version!==UI_VERSION){
     const reloadKey=`faceid-ui-reload-${h.version}`;
@@ -328,6 +335,9 @@ async function render(){
   persons=await j('api/persons');
   if(t!==tab)return;
   if(tab==='dashboard')return renderDashboard();
+  if(tab==='users')return renderUsers();
+  if(tab==='intercom')return renderIntercom();
+  if(tab==='animals')return renderAnimals();
   if(tab==='unknowns')return renderUnknowns();
   if(tab==='persons')return renderPersons();
   if(tab==='learning')return renderLearning();
@@ -411,7 +421,7 @@ async function renderDashboard(){
       <div class="summary-card"><span class="label">ללא פנים ברורות</span><span class="value">${s.no_face_24h||0}</span></div>
       <div class="summary-card"><span class="label">אירועים פעילים עכשיו</span><span class="value" style="color:var(--accent2)">${s.processing||0}</span></div>
     </section>
-    <div class="section-head"><div><h2>אנשים מוכרים</h2><p>לחיצה על אדם תציג את הפעילות שלו</p></div><button class="ghost" onclick="setTab('persons')">ניהול אנשים</button></div>
+    <div class="section-head"><div><h2>אנשים מוכרים</h2><p>לחיצה על אדם תציג את הפעילות שלו</p></div><button class="ghost" onclick="setTab('users')">ניהול משתמשים</button></div>
     <section class="people-dashboard">${people||'<div class="friendly-empty">עדיין אין אנשים בגלריה. הוסיפו אדם ותמונות כדי להתחיל.</div>'}</section>
     <div class="section-head"><div><h2>זיהויים אחרונים</h2><p>זיהויים שהשלימו את כל בדיקות הבטיחות</p></div></div>
     <section class="recent-list">${recent||'<div class="friendly-empty">עדיין אין זיהויים מאומתים חדשים.</div>'}</section>
@@ -1262,6 +1272,106 @@ async function restore(inp,merge){
   }catch(e){toast('השחזור נכשל: '+String(e.message).slice(0,80),'error');}
   inp.value=''; persons=await j('api/persons'); if(tab==='settings')renderSettings();
 }
+
+async function renderUsers(){
+  const data=await j('api/users');if(tab!=='users')return;
+  const cards=data.users.map(u=>{const s=u.statistics||{};return `<article class="product-card">
+    <div class="person-top">
+      ${u.photo?`<img class="avatar" src="${u.photo}" alt="${esc(u.name)}">`:`<div class="avatar avatar-fallback">☺</div>`}
+      <div><div class="person-title">${esc(u.name)}</div><div class="person-sub"><span class="badge ${u.state==='ready'?'score-good':u.state==='review'?'score-mid':'score-low'}">${esc(u.state_label)}</span> · ${u.count} תמונות</div></div>
+    </div>
+    <div class="mini-stats">
+      <div class="mini-stat"><b>${s.appearances||0}</b><span>זיהויים</span></div>
+      <div class="mini-stat"><b>${s.last_camera?esc(s.last_camera):'—'}</b><span>נראה לאחרונה</span></div>
+      <div class="mini-stat"><b>${confidence(s.avg_score)}</b><span>ביטחון ממוצע</span></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <label class="act" style="cursor:pointer">＋ הוספת תמונות<input type="file" multiple accept="image/*" capture="user" style="display:none" onchange="uploadUserPhotos('${u.slug}',this)"></label>
+      <button class="ghost" onclick="openUserEditor('${u.slug}')">✎ עריכת פרטים</button>
+    </div>
+  </article>`}).join('');
+  main.innerHTML=`<div class="dashboard" dir="rtl">
+    <section class="hero"><div class="hero-main"><div class="eyebrow">ניהול אנשים פשוט</div><h1>מי המערכת צריכה להכיר?</h1><p>יוצרים אדם, מוסיפים 5–10 תמונות ברורות, והמערכת בודקת כל תמונה ומסבירה מה כדאי לשפר.</p></div></section>
+    <section class="wizard"><div><b>1. כתבו שם</b><span>שם קצר וברור, למשל רונן</span></div><div><b>2. הוסיפו תמונות</b><span>פנים מקרוב, מכמה זוויות ובתאורה שונה</span></div><div><b>3. בדקו במצלמה</b><span>עברו מול מצלמה ואמתו את התוצאה</span></div></section>
+    <section class="welcome-card"><div><h3>הוספת אדם חדש</h3><p>אפשר לבחור כמה תמונות יחד מהטלפון או מהמחשב.</p></div><div class="row"><input id="newUserName" placeholder="שם האדם" maxlength="60"><button class="act" onclick="createUser()">＋ יצירת אדם</button></div></section>
+    <div class="section-head"><div><h2>האנשים שלי</h2><p>${data.users.length} אנשים שמורים במערכת</p></div><button class="ghost" onclick="setTab('persons')">כלים מתקדמים</button></div>
+    <div class="product-grid">${cards||'<div class="friendly-empty">עדיין לא הוספתם אף אדם. התחילו בשם ותמונה ברורה אחת.</div>'}</div>
+    <div class="tip"><b>פרטיות:</b> התמונות ותבניות הפנים נשמרות בהתקנת FaceID המקומית.</div>
+  </div>`;
+}
+async function createUser(){
+  const input=$('#newUserName'),name=input?.value.trim();if(!name){toast('כתבו את שם האדם','error');input?.focus();return}
+  const r=await j('api/persons',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  persons=await j('api/persons');await renderUsers();openUserEditor(r.slug,true);
+}
+function openUserEditor(slug,isNew=false){
+  const p=persons[slug];if(!p)return;
+  const files=p.files||[];
+  $('#eventDialogContent').innerHTML=`<div dir="rtl" class="user-dialog-grid">
+    <div class="section-head"><div><div class="eyebrow">${isNew?'שלב 2 מתוך 3':'עריכת אדם'}</div><h2>${esc(p.name)}</h2><p>${p.count||files.length} תמונות שמורות</p></div><button class="ghost" onclick="eventDialog.close()">✕ סגירה</button></div>
+    <label>שם להצגה<input id="editUserName" value="${esc(p.name)}" maxlength="60"></label>
+    <div class="row"><button class="act" onclick="renameUser('${slug}')">✓ שמירת השם</button>
+      <label class="act" style="cursor:pointer">＋ בחירת תמונות<input type="file" multiple accept="image/*" capture="user" style="display:none" onchange="uploadUserPhotos('${slug}',this,true)"></label></div>
+    <div id="userUploadReport" class="upload-report"><b>טיפ לצילום טוב</b><span>הביטו למצלמה, הסירו משקפי שמש, והוסיפו גם תמונת צד קלה. אין צורך ביותר מ־10 תמונות טובות.</span></div>
+    <div class="grid">${files.slice(0,12).map(f=>`<div class="tile"><img src="media/persons/${slug}/${f}" onclick="showFull('media/persons/${slug}/${f}','${esc(p.name)}')"></div>`).join('')}</div>
+    <details><summary>מחיקה ופרטיות</summary><p class="stat">אפשר להסיר רק את האדם, או גם את היסטוריית הזיהויים שנשמרה עבורו.</p><div class="row"><button class="danger" onclick="deleteUser('${slug}','${esc(p.name)}',false)">מחיקת האדם</button><button class="danger" onclick="deleteUser('${slug}','${esc(p.name)}',true)">מחיקה כולל היסטוריה</button></div></details>
+  </div>`;eventDialog.showModal();
+}
+async function renameUser(slug){
+  const name=$('#editUserName')?.value.trim();if(!name){toast('השם לא יכול להיות ריק','error');return}
+  await j(`api/persons/${slug}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  persons=await j('api/persons');toast('השם נשמר');openUserEditor(slug);
+}
+async function uploadUserPhotos(slug,input,insideDialog=false){
+  const files=[...(input.files||[])];if(!files.length)return;
+  const fd=new FormData();files.forEach(file=>fd.append('files',file));
+  const r=await j(`api/persons/${slug}/photos`,{method:'POST',body:fd});persons=await j('api/persons');
+  const rejected=(r.details||[]).filter(x=>x.status!=='added');
+  toast(r.added?`${r.added} תמונות טובות נוספו`:'לא נוספה תמונה; מוצג הסבר מה לשפר',r.added?'success':'error');
+  if(insideDialog){openUserEditor(slug);const report=$('#userUploadReport');if(report)report.innerHTML=`<b>${esc(r.next_step)}</b>${rejected.map(x=>`<span>• ${esc(x.file)} — ${esc(x.message)}</span>`).join('')}`}
+  else await renderUsers();input.value='';
+}
+async function deleteUser(slug,name,purge){
+  const extra=purge?' וגם את כל היסטוריית הזיהויים שלו':'';if(!confirm(`למחוק את ${name}${extra}? לא ניתן לבטל פעולה זו.`))return;
+  await j(`api/persons/${slug}?purge_history=${purge}`,{method:'DELETE'});eventDialog.close();persons=await j('api/persons');renderUsers();
+}
+
+let selectedIntercomCamera='';
+async function renderIntercom(){
+  const [studio,overview]=await Promise.all([j('api/cameras/studio'),j('api/intercom')]);if(tab!=='intercom')return;
+  const cameras=studio.cameras||[];if(!selectedIntercomCamera||!cameras.some(c=>c.camera===selectedIntercomCamera))selectedIntercomCamera=(overview.cameras[0]||cameras[0]||{}).camera||'';
+  const c=cameras.find(item=>item.camera===selectedIntercomCamera);if(!c){main.innerHTML='<div class="friendly-empty">לא נמצאו מצלמות ב־Frigate. בדקו קודם את החיבור במסך תקינות המערכת.</div>';return}
+  main.innerHTML=`<div class="dashboard" dir="rtl">
+    <section class="hero"><div class="hero-main"><div class="eyebrow">מצב אינטרקום</div><h1>צילום קרוב ואיכותי בנקודת הכניסה</h1><p>הגדירו אזור ברור לפנים, בדקו צילום חי וקבלו משוב פשוט לפני שמפעילים אוטומציה.</p></div></section>
+    <div class="row"><label>מצלמת אינטרקום <select onchange="selectedIntercomCamera=this.value;renderIntercom()">${cameras.map(x=>`<option value="${esc(x.camera)}" ${x.camera===c.camera?'selected':''}>${esc(x.camera)}</option>`).join('')}</select></label><span class="badge ${c.mode==='intercom'?'score-good':'score-mid'}">${c.mode==='intercom'?'מצב אינטרקום פעיל':'טרם הופעל'}</span></div>
+    <div class="product-grid">
+      <section class="product-card"><div class="section-head"><div><h2>תמונה חיה</h2><p>המסגרת מסמנת את האזור שבו נחפש פנים</p></div><button class="ghost" onclick="renderIntercom()">↻ רענון</button></div><div class="intercom-preview"><img src="api/cameras/${encodeURIComponent(c.camera)}/frame?_=${Date.now()}" alt="צילום חי"><div class="intercom-guide" style="left:${c.roi[0]*100}%;top:${c.roi[1]*100}%;width:${(c.roi[2]-c.roi[0])*100}%;height:${(c.roi[3]-c.roi[1])*100}%"></div></div><div id="intercomResult" class="result-banner">עמדו מול המצלמה ולחצו על בדיקת צילום.</div><button class="act" onclick="testIntercom('${esc(c.camera)}')">◎ בדיקת צילום עכשיו</button></section>
+      <section class="product-card"><h2>הגדרה פשוטה</h2><label>גודל פנים מינימלי: <b id="intercomPxLabel">${c.min_face_px}px</b><input id="intercomPx" type="range" min="40" max="240" value="${c.min_face_px}" oninput="intercomPxLabel.textContent=this.value+'px'"></label><p class="stat">באינטרקום מומלץ להתחיל ב־120px. ערך גבוה דורש פנים קרובות וברורות יותר.</p><label>מספר תמונות לבדיקה<input id="intercomBurst" type="number" min="3" max="30" value="${c.burst_frames||8}"></label><label><input id="intercomHighRes" type="checkbox" ${c.high_resolution?'checked':''}> העדפת צילום ברזולוציה גבוהה</label><label><input id="intercomSecond" type="checkbox" ${c.require_second_factor?'checked':''}> דרישת אימות נוסף לפתיחת דלת</label><div class="callout warn"><b>כלל בטיחות:</b> FaceID לא יפתח דלת לבדו. זיהוי פנים הוא אות לאוטומציה, ויש לשלב קוד, טלפון מאושר או אישור ידני.</div><button class="act" onclick="saveIntercom('${esc(c.camera)}')">✓ שמירת מצב אינטרקום</button></section>
+    </div><details><summary>הגדרת אזור פנים מתקדמת</summary><p class="stat">לציור אזור מדויק השתמשו במסך מצלמות. ההגדרות נשמרות כאן ולא נמחקות.</p><button class="ghost" onclick="setTab('cameras')">פתיחת כיוון מצלמות</button></details>
+  </div>`;
+}
+async function saveIntercom(camera){
+  const px=+$(`#intercomPx`).value,body={min_face_px:px,night_min_face_px:px,role:'intercom',mode:'intercom',burst_frames:+$('#intercomBurst').value,high_resolution:$('#intercomHighRes').checked,require_second_factor:$('#intercomSecond').checked};
+  await j(`api/cameras/${encodeURIComponent(camera)}/profile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('מצב האינטרקום נשמר');renderIntercom();
+}
+async function testIntercom(camera){
+  const box=$('#intercomResult');box.textContent='בודק חדות, תאורה וגודל פנים…';box.className='result-banner';
+  try{const r=await j(`api/intercom/${encodeURIComponent(camera)}/capture`,{method:'POST'});const best=r.best,match=best&&best.match_score>=.5&&best.match_margin>=.08?` · מועמד: ${esc(best.person)} (${Math.round(best.match_score*100)}%)`:'';box.className=`result-banner ${r.state==='excellent'?'ok':r.state==='no_face'?'bad':'warn'}`;box.innerHTML=`<b>${esc(r.message)}</b>${best?`<span>גודל פנים ${Math.round(best.face_px)}px · איכות ${Math.round(best.score*100)}% · ${r.frames_checked} תמונות${match}</span>`:''}<span>בדיקה זו אינה אישור לפתיחת דלת.</span>`}
+  catch(e){box.className='result-banner bad';box.textContent=e.message}
+}
+
+const animalNames={dog:'כלב',cat:'חתול',bird:'ציפור',horse:'סוס',sheep:'כבשה',cow:'פרה',bear:'דוב',deer:'אייל',raccoon:'דביבון',fox:'שועל',squirrel:'סנאי',goat:'עז',rabbit:'ארנב',skunk:'בואש',possum:'אופוסום',rodent:'מכרסם'};
+async function renderAnimals(){
+  const data=await j('api/pets');if(tab!=='animals')return;const profiles=Object.values(data.profiles||{});
+  const cards=profiles.map(p=>`<article class="product-card"><div class="person-top"><div class="avatar avatar-fallback pet-icon">🐾</div><div><div class="person-title">${esc(p.name)}</div><div class="person-sub">${esc(animalNames[p.species]||p.species)} · ${p.last_seen?`${esc(p.last_camera||'')} · ${relativeTime(p.last_seen)}`:'עדיין לא נראתה'}</div></div></div><div class="mini-stats"><div class="mini-stat"><b>${p.appearances||0}</b><span>הופעות</span></div><div class="mini-stat"><b>${esc(p.top_camera||'—')}</b><span>הכי הרבה</span></div></div><div class="row"><button class="ghost" onclick="editPet('${p.slug}')">✎ עריכה</button><button class="danger" onclick="deletePet('${p.slug}','${esc(p.name)}')">מחיקה</button></div></article>`).join('');
+  const events=(data.events||[]).slice(0,24).map(e=>`<article class="recent-item">${e.image?`<img class="avatar" src="${e.image}" onclick="showFull('${e.image}','${esc(e.name||animalNames[e.species]||e.species)}')">`:`<div class="avatar avatar-fallback pet-icon">🐾</div>`}<div><b>${esc(e.name||animalNames[e.species]||e.species)}</b><div class="person-sub">${esc(e.camera||'מצלמה לא ידועה')} · ${relativeTime(e.start_ts)}</div></div></article>`).join('');
+  main.innerHTML=`<div class="dashboard" dir="rtl"><section class="hero"><div class="hero-main"><div class="eyebrow">חיות במצלמות</div><h1>מי מסתובב בבית או בחצר?</h1><p>FaceID מציג אירועי חיות שמגיעים מ־Frigate. אם Frigate מספק שם אישי, אפשר לחבר אותו לחיית המחמד שלכם.</p></div></section><section class="welcome-card"><div><h3>הוספת חיית מחמד</h3><p>זיהוי סוג החיה עובד לפי Frigate. זיהוי חיה בשם דורש מסווג אישי ב־Frigate; השדה האחרון מחבר ביניהם.</p></div><div class="row"><input id="petName" placeholder="שם, למשל לואי"><select id="petSpecies">${(data.supported||[]).map(s=>`<option value="${s}">${esc(animalNames[s]||s)}</option>`).join('')}</select><input id="petFrigate" placeholder="השם ב־Frigate (רשות)"><button class="act" onclick="createPet()">＋ הוספה</button></div></section><div class="section-head"><div><h2>חיות המחמד שלי</h2><p>${profiles.length} פרופילים</p></div></div><div class="product-grid">${cards||'<div class="friendly-empty">עדיין לא הוגדרה חיית מחמד. גם בלי הגדרה, אירועי כלב, חתול וחיות אחרות יוצגו למטה.</div>'}</div><div class="section-head"><div><h2>אירועים אחרונים</h2><p>אירועי חיות שהתקבלו מ־Frigate</p></div></div><div class="activity-list">${events||'<div class="friendly-empty">עדיין לא התקבלו אירועי חיות. ודאו שהחיות הרצויות מוגדרות כאובייקטים ב־Frigate.</div>'}</div></div>`;
+}
+async function createPet(){const name=$('#petName').value.trim();if(!name){toast('כתבו את שם חיית המחמד','error');return}await j('api/pets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,species:$('#petSpecies').value,frigate_name:$('#petFrigate').value.trim()})});renderAnimals()}
+async function editPet(slug){const data=await j('api/pets'),p=data.profiles[slug];if(!p)return;$('#eventDialogContent').innerHTML=`<div dir="rtl"><div class="section-head"><div><div class="eyebrow">עריכת חיית מחמד</div><h2>${esc(p.name)}</h2></div><button class="ghost" onclick="eventDialog.close()">✕ סגירה</button></div><div class="user-dialog-grid"><label>שם<input id="editPetName" value="${esc(p.name)}"></label><label>סוג<select id="editPetSpecies">${(data.supported||[]).map(s=>`<option value="${s}" ${s===p.species?'selected':''}>${esc(animalNames[s]||s)}</option>`).join('')}</select></label><label>השם שמגיע מ־Frigate<input id="editPetFrigate" value="${esc(p.frigate_name||'')}" placeholder="רשות"></label><div class="tip">אם Frigate מזהה רק “כלב” או “חתול” ולא שם אישי, השאירו את השדה ריק. FaceID לא יטען שזיהה חיה מסוימת בלי מסווג מתאים.</div><button class="act" onclick="savePet('${slug}')">✓ שמירת שינויים</button></div></div>`;eventDialog.showModal()}
+async function savePet(slug){await j(`api/pets/${slug}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('#editPetName').value.trim(),species:$('#editPetSpecies').value,frigate_name:$('#editPetFrigate').value.trim()})});eventDialog.close();renderAnimals()}
+async function deletePet(slug,name){if(!confirm(`למחוק את הפרופיל של ${name}? אירועי המצלמה הקודמים יישארו.`))return;await j(`api/pets/${slug}`,{method:'DELETE'});renderAnimals()}
+
 function personCard(slug,p){
   return `
     <div class="person" id="p-${slug}">
@@ -1355,7 +1465,7 @@ async function delPerson(slug,name){if(!confirm(`Delete "${name}" and all their 
   await j(`api/persons/${slug}`,{method:'DELETE'});render()}
 
 
-updateClock();setInterval(updateClock,1000);health();setInterval(health,10000);render();
+updateClock();setInterval(updateClock,1000);loadSession();health();setInterval(health,10000);render();
 </script>
 </body>
 </html>

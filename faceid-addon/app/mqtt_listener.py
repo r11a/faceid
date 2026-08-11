@@ -248,6 +248,12 @@ class EventProcessor:
             return
         after = payload.get("after") or {}
         etype = payload.get("type")
+        animal_service = getattr(self, "animals", None)
+        if animal_service is not None and after.get("label") != "person":
+            animal_service.handle_event(
+                after, etype, client=client, prefix=self.prefix,
+            )
+            return
         if after.get("label") != "person":
             return
         cam = after.get("camera", "")
@@ -311,7 +317,16 @@ class EventProcessor:
         reference = (
             st["best_unknown"]["emb"] if st.get("best_unknown") is not None else None
         )
-        samples = self.clip_analyzer.analyze(eid, reference_embedding=reference)
+        profile = self.camera_profiles.get(st["camera"]) if self.camera_profiles else None
+        hour = time.localtime().tm_hour
+        min_face_px = (
+            profile["night_min_face_px"] if profile and (hour >= 19 or hour < 6)
+            else profile["min_face_px"] if profile else self.min_face_px
+        )
+        samples = self.clip_analyzer.analyze(
+            eid, reference_embedding=reference, min_face_px=min_face_px,
+            roi=profile.get("roi") if profile and profile.get("mode") == "intercom" else None,
+        )
         st["clip_analyzed"] = True
         log.info("event %s: clip analysis produced %d diverse face sample(s)", eid, len(samples))
         for sample in samples:
@@ -328,7 +343,17 @@ class EventProcessor:
         if st is None or st["done"]:
             return
         st["attempts"] += 1
-        img = self.frigate.snapshot(eid, crop=True)
+        camera_profile = (
+            self.camera_profiles.get(st["camera"])
+            if self.camera_profiles is not None else None
+        )
+        img = None
+        if camera_profile and camera_profile.get("mode") == "intercom" and camera_profile.get("high_resolution"):
+            img = self.frigate.recording_frame(
+                st["camera"], float(st.get("start_time") or time.time())
+            )
+        if img is None:
+            img = self.frigate.snapshot(eid, crop=True)
         if img is None:
             if self.audit:
                 self.audit.observation(eid, st["attempts"], "no_snapshot")
@@ -342,9 +367,18 @@ class EventProcessor:
                 st["body"] = {"advisory": True, "error": str(exc)[:160]}
                 log.warning("event %s: advisory body path failed: %s", eid, exc)
         found = self.engine.faces(img)
+        if camera_profile and camera_profile.get("mode") == "intercom":
+            height, width = img.shape[:2]
+            left, top, right, bottom = camera_profile.get("roi", [0, 0, 1, 1])
+            found = [face for face in found if (
+                left <= float(face.bbox[0] + face.bbox[2]) / 2 / max(width, 1) <= right
+                and top <= float(face.bbox[1] + face.bbox[3]) / 2 / max(height, 1) <= bottom
+            )]
+        hour = time.localtime().tm_hour
         camera_min_face_px = (
-            self.camera_profiles.get(st["camera"])["min_face_px"]
-            if self.camera_profiles is not None else self.min_face_px
+            camera_profile["night_min_face_px"]
+            if camera_profile and (hour >= 19 or hour < 6)
+            else camera_profile["min_face_px"] if camera_profile else self.min_face_px
         )
         measured = [
             (measure_face_quality(
@@ -1084,3 +1118,5 @@ class EventProcessor:
         for slug, person in self.gallery.persons().items():
             self._publish_person_discovery(slug, person["name"])
             self._publish_person_state(person["name"])
+        if getattr(self, "animals", None) is not None:
+            self.animals.publish_discovery(self.client, self.prefix)

@@ -32,6 +32,20 @@ class RuntimeHealth:
             "open_events": len(self.processor.events),
             "pending_jobs": len(self.processor.audit.pending_jobs()) if self.processor.audit else 0,
         }
+        frigate = getattr(self.processor, "frigate", None)
+        if frigate is not None:
+            checks["frigate_security"] = {
+                "secure_port": bool(frigate.secure_mode),
+                "authenticated": bool(frigate.username),
+                "tls_verified": bool(frigate.verify_tls),
+            }
+            if not frigate.secure_mode:
+                warnings.append("Frigate uses the unauthenticated port; prefer port 8971")
+            if frigate.secure_mode and not frigate.username:
+                warnings.append("Frigate secure port is configured without a dedicated account")
+            if not frigate.verify_tls:
+                warnings.append("Frigate TLS certificate verification is disabled")
+        checks["data_schema"] = getattr(self.processor, "migration", {}).get("to")
         return {"ok": not warnings, "uptime_seconds": round(time.time() - self.started),
                 "checks": checks, "warnings": warnings}
 

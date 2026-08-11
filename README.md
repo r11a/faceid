@@ -1,5 +1,28 @@
 # FaceID — self-hosted face recognition for Frigate + Home Assistant
 
+## FaceID 5.0: a product workflow for homes and offices
+
+Version 5 adds a dedicated **Users** area for normal day-to-day operation. Create a
+person, upload 5–10 photos, see a plain-language quality result for each photo, rename
+the person or remove their profile/history without entering the technical gallery.
+Nothing from the advanced gallery, calibration or investigation tools was removed.
+
+The new **Intercom** mode focuses an entrance camera on high-resolution, close face
+captures and gives live feedback for face size, sharpness and light. It is an evidence
+source, not an access-control credential: never unlock a door from a face match alone;
+combine it with a trusted phone, PIN or explicit approval.
+
+The **Animals** area records animal labels from Frigate and publishes a Home Assistant
+sensor for each configured pet. This distinction matters: detecting “dog” or “cat” is
+available when Frigate tracks that label, but reliably deciding *which* dog it is needs
+a Frigate custom classifier/sub-label. FaceID only maps that explicit name and does not
+pretend species detection is individual pet recognition.
+
+5.0 also introduces automatic pre-migration backups, a persistent schema marker and a
+disabled-by-default foundation for future Admin/Operator/Viewer permissions by tab.
+The permission editor and enforcement are intentionally deferred until the identity
+mapping can be validated safely on the target Home Assistant installation.
+
 ## FaceID 3.1: camera studio and visits
 
 Version 3.1 adds a visual per-camera studio. It proxies the current Frigate frame

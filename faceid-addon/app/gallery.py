@@ -298,6 +298,24 @@ class Gallery:
             self._persist(slug)
             return True
 
+    def rename_person(self, slug: str, name: str) -> bool:
+        name = str(name).strip()
+        if not name or len(name) > 100:
+            raise ValueError("name must contain 1-100 characters")
+        with self._lock:
+            entry = self._cache.get(slug)
+            if entry is None:
+                return False
+            duplicate = any(
+                key != slug and value["name"].casefold() == name.casefold()
+                for key, value in self._cache.items()
+            )
+            if duplicate:
+                raise ValueError("another person already uses this name")
+            entry["name"] = name
+            self._persist(slug)
+            return True
+
     def create_person(self, name: str) -> str:
         slug = slugify(name)
         with self._lock:

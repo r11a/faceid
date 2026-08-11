@@ -16,7 +16,25 @@ def index():
 
 @app.get("/api/persons")
 def persons():
-    return {"ronen": {"name": "רונן", "files": []}, "moshe": {"name": "משה", "files": []}}
+    return {
+        "ronen": {"name": "רונן", "count": 7, "files": []},
+        "moshe": {"name": "משה", "count": 3, "files": []},
+    }
+
+
+@app.get("/api/session")
+def session():
+    return {"id": "local", "name": "Home Assistant", "role": "admin", "tabs": ["*"], "enforced": False}
+
+
+@app.get("/api/users")
+def users():
+    return {"recommended_photos": {"minimum": 5, "maximum": 10}, "users": [
+        {"slug": "ronen", "name": "רונן", "count": 7, "photo": None, "favorite": True,
+         "state": "ready", "state_label": "מוכן לזיהוי", "statistics": {"appearances": 142, "last_camera": "דלת כניסה", "avg_score": .78}},
+        {"slug": "moshe", "name": "משה", "count": 3, "photo": None, "favorite": False,
+         "state": "new", "state_label": "צריך עוד תמונות", "statistics": {"appearances": 12, "last_camera": "משרד", "avg_score": .64}},
+    ]}
 
 
 @app.get("/api/body")
@@ -29,7 +47,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"version": "3.1.4", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
+    return {"version": "5.0.0", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
                        "requested_mode": "auto", "fallbacks": 1},
@@ -48,11 +66,15 @@ def cameras():
                 "status": "recognized", "person": "Ronen"},
                {"event_id": "sample-2", "face_px": 39, "quality": .31,
                 "status": "low_quality", "person": None}]
-    return {"window_days": 7, "cameras": [{"camera": "Front door", "min_face_px": 56,
-        "role": "entry", "samples": samples, "impact": {"measured": 2, "accepted": 1, "rejected": 1},
+    return {"window_days": 7, "cameras": [{"camera": "Front door", "min_face_px": 120,
+        "night_min_face_px": 130, "role": "intercom", "mode": "intercom", "burst_frames": 8,
+        "high_resolution": True, "require_second_factor": True, "roi": [.25, .1, .75, .9],
+        "samples": samples, "impact": {"measured": 2, "accepted": 1, "rejected": 1},
         "funnel": {"events": 80, "face_detected": 61, "usable_face": 48, "recognized": 35}},
-        {"camera": "Hallway", "min_face_px": 48, "role": "observation", "samples": samples,
-         "impact": {"measured": 2, "accepted": 1, "rejected": 1},
+        {"camera": "Hallway", "min_face_px": 48, "night_min_face_px": 48,
+         "role": "observation", "mode": "standard", "burst_frames": 8,
+         "high_resolution": False, "require_second_factor": True, "roi": [0, 0, 1, 1],
+         "samples": samples, "impact": {"measured": 2, "accepted": 1, "rejected": 1},
          "funnel": {"events": 54, "face_detected": 45, "usable_face": 39, "recognized": 31}}]}
 
 
@@ -60,6 +82,19 @@ def cameras():
 def camera_frame(camera: str):
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g"><stop stop-color="#3d4144"/><stop offset="1" stop-color="#17191b"/></linearGradient></defs><rect width="1280" height="720" fill="url(#g)"/><rect x="90" y="90" width="1100" height="540" rx="25" fill="#25282b" stroke="#777"/><circle cx="640" cy="290" r="95" fill="#a6a6a2"/><path d="M440 600c30-190 370-190 400 0" fill="#777"/><text x="70" y="670" fill="#ddd" font-size="32">{camera}</text></svg>'''
     return Response(svg, media_type="image/svg+xml")
+
+
+@app.get("/api/intercom")
+def intercom():
+    return {"cameras": [{"camera": "Front door"}], "recommended": {"face_size": "120px"}}
+
+
+@app.get("/api/pets")
+def pets():
+    return {"supported": ["cat", "dog", "bird", "rabbit"], "profiles": {
+        "luna": {"slug": "luna", "name": "לונה", "species": "cat", "frigate_name": "luna",
+                 "appearances": 18, "last_seen": 1786370800, "last_camera": "חצר", "top_camera": "חצר"}
+    }, "events": [{"event_id": "pet-1", "species": "cat", "name": "לונה", "camera": "חצר", "start_ts": 1786370800, "image": None}]}
 
 
 @app.get("/api/visits")

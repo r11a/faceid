@@ -93,6 +93,7 @@ faceid:
   audit_retention_days: $(cfg '.audit_retention_days')
   known_evidence_days: $(cfg '.known_evidence_days')
   unknown_evidence_days: $(cfg '.unknown_evidence_days')
+  animal_retention_days: $(cfg '.animal_retention_days // 30')
   presence_window: $(cfg '.presence_window')
   visit_gap_minutes: $(cfg '.visit_gap_minutes // 15')
   calibration_target_far: $(cfg '.calibration_target_far')
@@ -108,6 +109,7 @@ faceid:
   ai_vision_model: $(cfg '.ai_vision_model')
   ai_embedding_model: $(cfg '.ai_embedding_model')
   set_sub_label: $(cfg '.set_sub_label')
+  access_control_enabled: $(cfg '.access_control_enabled // false')
   min_face_px: 48
   det_size: 640
   max_attempts: 6

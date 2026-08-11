@@ -56,6 +56,7 @@ faceid:
   audit_retention_days: 90             # SQLite decision history (0 = keep forever)
   known_evidence_days: 30              # local review images for recognized people
   unknown_evidence_days: 14            # local review images for unknown/review events
+  animal_retention_days: 30            # local animal event photos and history
   frigate_topic_prefix: frigate        # must match `mqtt.topic_prefix` in Frigate's config
   poll_interval: 0                     # seconds; >0 also polls Frigate's event API.
                                        # Catches events MQTT never announces — notably
@@ -69,6 +70,7 @@ faceid:
   # match_threshold so borderline faces are pre-sorted without weak-match noise.
   suggest_threshold: 0.40
   set_sub_label: false                 # opt-in: write confirmed names back to Frigate events
+  access_control_enabled: false        # 5.0 role foundation; enable only after assignments are configured
   presence_window: 120                 # camera sensor shows everyone seen within this window (s)
   calibration_target_far: 0.01         # maximum false-accept rate for recommendations
   scenario_window: 90                  # seconds for a visit to continue across cameras

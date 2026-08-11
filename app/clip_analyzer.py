@@ -37,28 +37,29 @@ class ClipAnalyzer:
         self.max_faces_per_frame = max(1, min(int(max_faces_per_frame), 12))
         self.frame_distributor = frame_distributor
 
-    def analyze(self, event_id: str, reference_embedding=None) -> list[FaceSample]:
+    def analyze(self, event_id: str, reference_embedding=None, *, min_face_px=None, roi=None) -> list[FaceSample]:
+        effective_min_face_px = int(min_face_px or self.min_face_px)
         if self.frame_distributor is not None:
             return self._analyze_frames(
                 self.frame_distributor.frames(event_id, limit=self.max_frames),
-                reference_embedding,
+                reference_embedding, effective_min_face_px, roi,
             )
         if self.media_store is not None:
             path = self.media_store.clip_path(event_id)
-            return self._analyze_file(str(path), reference_embedding) if path else []
+            return self._analyze_file(str(path), reference_embedding, effective_min_face_px, roi) if path else []
         fd, path = tempfile.mkstemp(suffix=".mp4", prefix="faceid-analyze-")
         os.close(fd)
         try:
             if not self.frigate.download_clip(event_id, path):
                 return []
-            return self._analyze_file(path, reference_embedding)
+            return self._analyze_file(path, reference_embedding, effective_min_face_px, roi)
         finally:
             try:
                 os.unlink(path)
             except OSError:
                 pass
 
-    def _analyze_file(self, path: str, reference_embedding=None) -> list[FaceSample]:
+    def _analyze_file(self, path: str, reference_embedding=None, min_face_px=None, roi=None) -> list[FaceSample]:
         cap = cv2.VideoCapture(path)
         try:
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -74,9 +75,10 @@ class ClipAnalyzer:
                 if not ok or frame is None:
                     continue
                 measured = []
-                for face in self.engine.faces(frame):
+                faces = self._within_roi(self.engine.faces(frame), frame, roi)
+                for face in faces:
                     quality = measure_face_quality(
-                        frame, face, min_face_px=self.min_face_px,
+                        frame, face, min_face_px=min_face_px or self.min_face_px,
                         min_quality=self.min_quality,
                     )
                     if not quality.usable:
@@ -131,12 +133,13 @@ class ClipAnalyzer:
         finally:
             cap.release()
 
-    def _analyze_frames(self, frames, reference_embedding=None) -> list[FaceSample]:
+    def _analyze_frames(self, frames, reference_embedding=None, min_face_px=None, roi=None) -> list[FaceSample]:
         tracks: list[dict] = []
         for frame_index, frame in frames:
             measured = []
-            for face in self.engine.faces(frame):
-                quality = measure_face_quality(frame, face, min_face_px=self.min_face_px,
+            faces = self._within_roi(self.engine.faces(frame), frame, roi)
+            for face in faces:
+                quality = measure_face_quality(frame, face, min_face_px=min_face_px or self.min_face_px,
                                                min_quality=self.min_quality)
                 if quality.usable:
                     measured.append((quality.score, quality, face))
@@ -158,6 +161,17 @@ class ClipAnalyzer:
             if len(diverse) >= self.max_samples:
                 break
         return sorted(diverse, key=lambda row: row.frame_index)
+
+    @staticmethod
+    def _within_roi(faces, frame, roi):
+        if not isinstance(roi, list) or len(roi) != 4:
+            return faces
+        height, width = frame.shape[:2]
+        left, top, right, bottom = roi
+        return [face for face in faces if (
+            left <= float(face.bbox[0] + face.bbox[2]) / 2 / max(width, 1) <= right
+            and top <= float(face.bbox[1] + face.bbox[3]) / 2 / max(height, 1) <= bottom
+        )]
 
     def _track_for(self, tracks: list[dict], embedding) -> int:
         best_idx, best_score = None, -1.0

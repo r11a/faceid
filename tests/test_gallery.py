@@ -24,6 +24,11 @@ class GalleryTests(unittest.TestCase):
             gallery._persist(alice)
             gallery._persist(bob)
 
+            self.assertTrue(gallery.rename_person(alice, "Alice Smith"))
+            self.assertEqual(gallery.persons()[alice]["name"], "Alice Smith")
+            with self.assertRaises(ValueError):
+                gallery.rename_person(alice, "Bob")
+
             candidates = gallery.match_candidates(
                 np.array([0.8, 0.6], dtype=np.float32), limit=2
             )

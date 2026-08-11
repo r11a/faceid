@@ -32,6 +32,18 @@ Full documentation: https://github.com/r11a/faceid
 5. Open the **FaceID** panel in the sidebar. Recommended first step: run the backfill
    (see main README) or just wait — every detected unknown face shows up for review.
 
+## First 5.0 check
+
+1. Open **Daily operation → Users**, create a test person and add 5–10 clear photos.
+   Rejected photos show the reason instead of silently weakening the gallery.
+2. Open **Daily operation → Intercom**, select the entrance camera, save Intercom mode
+   and run **Test current capture** while someone stands at the normal door distance.
+3. Open **Daily operation → Animals**. Generic species events appear when those labels
+   are tracked by Frigate. A pet name only appears when a Frigate classifier/sub-label
+   sends the configured individual name.
+4. In **System → Health**, verify Frigate authentication/TLS, persistent storage and
+   schema 5. A pre-migration backup is created automatically before the first upgrade.
+
 ## Options
 
 | Option | Description |
@@ -40,6 +52,8 @@ Full documentation: https://github.com/r11a/faceid
 | `frigate_username` / `frigate_password` | Credentials for authenticated port 8971 |
 | `frigate_verify_tls` | Verify the HTTPS certificate (recommended) |
 | `known_evidence_days` / `unknown_evidence_days` | Review-image retention |
+| `animal_retention_days` | Days to retain local animal-event snapshots and history |
+| `access_control_enabled` | Future role foundation; keep `false` in 5.0 unless assignments were configured manually |
 | `mqtt_*` | Leave empty to use the internal Mosquitto app automatically |
 | `backend` | `auto`, `cpu`, `cuda` or `openvino`; explicit modes fail fast when unavailable |
 | `match_threshold` | ≥ this cosine similarity = recognized (raise if strangers get misassigned) |
