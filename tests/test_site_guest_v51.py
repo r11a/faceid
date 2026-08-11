@@ -70,12 +70,22 @@ class GuestAndSiteTests(unittest.TestCase):
 
     def test_ui_contains_route_playlist_and_product_tabs(self):
         html = (Path(__file__).parents[1] / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("data-t=\"guests\"", html)
-        self.assertIn("data-t=\"site-map\"", html)
+        self.assertIn("guests:{section:'people'", html)
+        self.assertIn("'site-map':{section:'cameras'", html)
         self.assertIn("showRoutePlaylist", html)
         self.assertIn("goToRouteClip", html)
         self.assertIn("לחצו כדי לעבור לקליפ הזה", html)
         self.assertIn("נגן קליפים לפי מסלול", html)
+
+    def test_ui_has_stable_commercial_navigation_and_progressive_disclosure(self):
+        html = (Path(__file__).parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+        for section in ("home", "events", "people", "cameras", "system"):
+            self.assertIn(f'data-section="{section}"', html)
+        self.assertIn("faceid-last-screen", html)
+        self.assertIn("faceid-recent-screens", html)
+        self.assertIn("faceid-expert-mode", html)
+        self.assertIn("function goBack()", html)
+        self.assertIn("כלים למומחים", html)
 
 
 if __name__ == "__main__":

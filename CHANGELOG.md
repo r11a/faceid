@@ -3,6 +3,23 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.2.0 — 2026-08-12
+
+- **Five stable product areas:** Home, Events, People, Cameras and Management replace
+  the disappearing workspace navigation. Every existing capability remains available
+  under a predictable task-oriented hierarchy.
+- **Progressive disclosure:** everyday screens use plain language and focused actions;
+  an optional expert layer reveals calibration, gallery maintenance, AI, engine and
+  diagnostic tools without changing the navigation.
+- **Never get lost:** each screen has a deep-linkable URL, contextual breadcrumbs, a
+  reliable in-app Back action, five recently opened screens and automatic return to the
+  last screen after refresh.
+- **Friendlier daily use:** the Home screen provides first-run enrollment guidance or,
+  once configured, direct actions for enrollment, event search, review and intercom.
+  Event search hides grouping and AI internals until expert tools are enabled.
+- **Responsive commercial shell:** desktop and tablet use a clear two-level hierarchy;
+  phones receive a fixed five-destination bottom bar with large touch targets.
+
 ## 5.1.1 — 2026-08-11
 
 - **Direct route navigation:** every camera bubble in the visit clip player is now a
