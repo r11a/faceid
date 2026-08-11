@@ -3,6 +3,15 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.1.1 — 2026-08-11
+
+- **Direct route navigation:** every camera bubble in the visit clip player is now a
+  real touch-friendly button. Selecting it immediately stops the current clip and
+  loads that exact recognition event.
+- **Clear playlist state:** the active clip, fully played clips and missing Frigate
+  recordings have distinct accessible states. After playback ends, the bubbles remain
+  available for instant replay or investigation in any order.
+
 ## 5.1.0 — 2026-08-11
 
 - **Temporary Guest Access:** create a guest from one quality-checked photo, limit

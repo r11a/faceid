@@ -73,6 +73,8 @@ class GuestAndSiteTests(unittest.TestCase):
         self.assertIn("data-t=\"guests\"", html)
         self.assertIn("data-t=\"site-map\"", html)
         self.assertIn("showRoutePlaylist", html)
+        self.assertIn("goToRouteClip", html)
+        self.assertIn("לחצו כדי לעבור לקליפ הזה", html)
         self.assertIn("נגן קליפים לפי מסלול", html)
 
 
