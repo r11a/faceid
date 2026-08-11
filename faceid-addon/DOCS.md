@@ -38,9 +38,9 @@ Full documentation: https://github.com/r11a/faceid
    Rejected photos show the reason instead of silently weakening the gallery.
 2. Open **Daily operation → Intercom**, select the entrance camera, save Intercom mode
    and run **Test current capture** while someone stands at the normal door distance.
-3. Open **Daily operation → Animals**. Generic species events appear when those labels
-   are tracked by Frigate. A pet name only appears when a Frigate classifier/sub-label
-   sends the configured individual name.
+3. Open **Daily operation → Liveness**. Keep distant cameras on Advisory and set a
+   close entrance/intercom camera to Required. Test once with a real person and once
+   with a printed or phone-displayed photograph.
 4. In **System → Health**, verify Frigate authentication/TLS, persistent storage and
    schema 5. A pre-migration backup is created automatically before the first upgrade.
 
@@ -52,7 +52,9 @@ Full documentation: https://github.com/r11a/faceid
 | `frigate_username` / `frigate_password` | Credentials for authenticated port 8971 |
 | `frigate_verify_tls` | Verify the HTTPS certificate (recommended) |
 | `known_evidence_days` / `unknown_evidence_days` | Review-image retention |
-| `animal_retention_days` | Days to retain local animal-event snapshots and history |
+| `liveness_enabled` | Enable local RGB print/screen presentation-attack checks |
+| `liveness_threshold` | Real-vs-spoof score threshold; higher is stricter and rejects more real faces |
+| `liveness_required_frames` | Consecutive live frames needed in Required mode |
 | `access_control_enabled` | Future role foundation; keep `false` in 5.0 unless assignments were configured manually |
 | `mqtt_*` | Leave empty to use the internal Mosquitto app automatically |
 | `backend` | `auto`, `cpu`, `cuda` or `openvino`; explicit modes fail fast when unavailable |

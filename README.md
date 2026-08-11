@@ -12,11 +12,11 @@ captures and gives live feedback for face size, sharpness and light. It is an ev
 source, not an access-control credential: never unlock a door from a face match alone;
 combine it with a trusted phone, PIN or explicit approval.
 
-The **Animals** area records animal labels from Frigate and publishes a Home Assistant
-sensor for each configured pet. This distinction matters: detecting “dog” or “cat” is
-available when Frigate tracks that label, but reliably deciding *which* dog it is needs
-a Frigate custom classifier/sub-label. FaceID only maps that explicit name and does not
-pretend species detection is individual pet recognition.
+The **Liveness** area reduces presentation attacks from printed photographs and phone
+screens. A small local MiniFAS ONNX model evaluates face texture and several consecutive
+frames must agree. Intercom profiles require liveness by default; distant cameras begin
+in advisory mode because RGB anti-spoofing is less reliable with small faces. RGB PAD is
+not a substitute for depth/IR hardware or a second factor against advanced attacks.
 
 5.0 also introduces automatic pre-migration backups, a persistent schema marker and a
 disabled-by-default foundation for future Admin/Operator/Viewer permissions by tab.

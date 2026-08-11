@@ -47,7 +47,7 @@ class WebUIClipTests(unittest.TestCase):
             self.assertIn("no-store", index.headers["cache-control"])
             self.assertNotIn("etag", index.headers)
             self.assertNotIn("last-modified", index.headers)
-            self.assertEqual(index.headers["x-faceid-ui-version"], "5.0.0")
+            self.assertEqual(index.headers["x-faceid-ui-version"], "5.0.1")
             versioned = TestClient(app).get("/ui-previous-release")
             self.assertEqual(versioned.status_code, 200)
             self.assertEqual(versioned.content, index.content)

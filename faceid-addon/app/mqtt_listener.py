@@ -127,6 +127,7 @@ class EventProcessor:
             "ended": end_time is not None, "created": time.time(),
             "start_time": start_time or time.time(), "end_time": end_time,
             "decision": DecisionAccumulator(self.policy),
+            "liveness_history": [], "liveness": None,
         }
         st.update(extra)
         if self.audit:
@@ -248,12 +249,6 @@ class EventProcessor:
             return
         after = payload.get("after") or {}
         etype = payload.get("type")
-        animal_service = getattr(self, "animals", None)
-        if animal_service is not None and after.get("label") != "person":
-            animal_service.handle_event(
-                after, etype, client=client, prefix=self.prefix,
-            )
-            return
         if after.get("label") != "person":
             return
         cam = after.get("camera", "")
@@ -420,6 +415,36 @@ class EventProcessor:
     def _process_face(self, eid: str, st: dict, img, face, quality=None, source="snapshot"):
         if st["done"]:
             return
+        liveness_service = getattr(self, "liveness", None)
+        profile = self.camera_profiles.get(st["camera"]) if self.camera_profiles else {}
+        liveness_mode = profile.get("liveness_mode", "advisory")
+        if liveness_service is not None and liveness_mode != "off":
+            liveness_frame = liveness_service.analyze(img, face)
+            st["liveness_history"].append(liveness_frame)
+            st["liveness"] = liveness_service.consensus(st["liveness_history"])
+            st["liveness"]["mode"] = liveness_mode
+            if self.audit:
+                self.audit.update_liveness(eid, st["liveness"])
+            if liveness_mode == "required" and not st["liveness"]["confirmed"]:
+                state = st["liveness"]["state"]
+                st["liveness_blocked"] = True
+                if self.audit:
+                    self.audit.observation(
+                        eid, st["attempts"], f"liveness_{state}",
+                        det_score=float(face.det_score),
+                        face_px=int(min(face.bbox[2] - face.bbox[0], face.bbox[3] - face.bbox[1])),
+                        quality=float(quality.score) if quality else 0.0,
+                        source=source,
+                    )
+                    self.audit.save_evidence(eid, crop_face(img, face.bbox))
+                log.warning(
+                    "event %s (%s): identity blocked by required liveness (%s, %s/%s live frames)",
+                    eid, st["camera"], state, st["liveness"]["live_frames"],
+                    st["liveness"]["required_frames"],
+                )
+                return
+            if st["liveness"].get("confirmed"):
+                st["liveness_blocked"] = False
         emb = face.normed_embedding
         candidates = self.gallery.match_candidates(emb, limit=2)
         slug, name, score = candidates[0] if candidates else (None, None, 0.0)
@@ -670,9 +695,14 @@ class EventProcessor:
                             confirmations=decision.confirmations,
                         )
                     elif not self.audit.was_finalized(eid):
-                        final_status = "no_face"
+                        liveness_state = (st.get("liveness") or {}).get("state")
+                        final_status = (
+                            "spoof_suspected" if liveness_state == "spoof"
+                            else "liveness_unconfirmed" if st.get("liveness_blocked")
+                            else "no_face"
+                        )
                         self.audit.finalize(
-                            eid, "no_face", end_ts=st.get("end_time")
+                            eid, final_status, end_ts=st.get("end_time")
                         )
                 if final_status is None:
                     decision = st.get("final_decision")
@@ -683,7 +713,12 @@ class EventProcessor:
                         final_margin = decision.margin
                         confirmations = decision.confirmations
                     else:
-                        final_status = "no_face"
+                        liveness_state = (st.get("liveness") or {}).get("state")
+                        final_status = (
+                            "spoof_suspected" if liveness_state == "spoof"
+                            else "liveness_unconfirmed" if st.get("liveness_blocked")
+                            else "no_face"
+                        )
                 self._post_event(
                     eid, st, final_status, final_person, final_score,
                     margin=final_margin, confirmations=confirmations,
@@ -747,6 +782,7 @@ class EventProcessor:
             "scenario_id": scenario["scenario_id"] if scenario else None,
             "scenario": scenario,
             "body": st.get("body"),
+            "liveness": st.get("liveness"),
         }
         if self.client and st.get("body"):
             self.client.publish(
@@ -791,6 +827,7 @@ class EventProcessor:
             "person": name, "score": round(float(score), 3), "camera": st["camera"],
             "event_id": eid, "ts": time.time(),
             "decision": decision_status or (decision.status if decision else name),
+            "liveness": st.get("liveness"),
         }
         if decision is not None:
             payload.update({
@@ -1056,7 +1093,7 @@ class EventProcessor:
             "unique_id": f"{self.prefix}_recognition_event",
             "object_id": f"{self.prefix}_recognition_event",
             "state_topic": f"{self.prefix}/v1/events",
-            "event_types": ["recognized", "unknown", "ambiguous", "no_face", "ignored"],
+            "event_types": ["recognized", "unknown", "ambiguous", "no_face", "ignored", "spoof_suspected", "liveness_unconfirmed"],
             "value_template": "{{ value_json.decision }}",
             "json_attributes_topic": f"{self.prefix}/v1/events",
             "availability_topic": f"{self.prefix}/status",
@@ -1118,5 +1155,3 @@ class EventProcessor:
         for slug, person in self.gallery.persons().items():
             self._publish_person_discovery(slug, person["name"])
             self._publish_person_state(person["name"])
-        if getattr(self, "animals", None) is not None:
-            self.animals.publish_discovery(self.client, self.prefix)

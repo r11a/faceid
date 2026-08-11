@@ -8,6 +8,19 @@ from app.audit import AuditStore
 
 
 class AuditStoreTests(unittest.TestCase):
+    def test_liveness_evidence_is_persisted_and_searchable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            audit.start_event("live-1", "door", 10.0)
+            audit.update_liveness("live-1", {"state": "spoof", "score": .08})
+            audit.finalize("live-1", "spoof_suspected", end_ts=11.0)
+
+            event = audit.search_events(
+                status="spoof_suspected", limit=10,
+            )["events"][0]
+            self.assertEqual(event["liveness_status"], "spoof")
+            self.assertAlmostEqual(event["liveness_score"], .08)
+
     def test_event_lifecycle_is_persistent(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "audit.db"

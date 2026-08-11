@@ -26,7 +26,7 @@ from .vision_advisor import VisionAdvisor
 from .runtime_health import RuntimeHealth
 from .camera_profiles import CameraProfiles
 from .visits import VisitService
-from .animals import AnimalService
+from .liveness import LivenessDetector
 from .access_control import AccessControl
 from .migrations import run_migrations
 
@@ -147,13 +147,15 @@ def main():
         audit, processor.camera_profiles,
         gap_minutes=int(f.get("visit_gap_minutes", 15)),
     )
-    processor.animals = AnimalService(
-        data_dir, frigate,
-        retention_days=int(f.get("animal_retention_days", 30)),
-    )
     processor.access_control = AccessControl(
         data_dir / "access_control.json",
         enabled=bool(f.get("access_control_enabled", False)),
+    )
+    processor.liveness = LivenessDetector(
+        model_path=str(f.get("liveness_model_path") or "/opt/faceid/models/liveness.onnx"),
+        enabled=bool(f.get("liveness_enabled", True)),
+        threshold=float(f.get("liveness_threshold", 0.5)),
+        required_frames=int(f.get("liveness_required_frames", 3)),
     )
     processor.migration = migration
     processor.vision_advisor = vision_advisor

@@ -56,7 +56,9 @@ faceid:
   audit_retention_days: 90             # SQLite decision history (0 = keep forever)
   known_evidence_days: 30              # local review images for recognized people
   unknown_evidence_days: 14            # local review images for unknown/review events
-  animal_retention_days: 30            # local animal event photos and history
+  liveness_enabled: true               # passive RGB print/screen attack reduction
+  liveness_threshold: 0.5              # raise for stricter security and more false rejects
+  liveness_required_frames: 3          # consecutive live frames before required-mode identity
   frigate_topic_prefix: frigate        # must match `mqtt.topic_prefix` in Frigate's config
   poll_interval: 0                     # seconds; >0 also polls Frigate's event API.
                                        # Catches events MQTT never announces — notably

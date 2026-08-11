@@ -3,6 +3,24 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.0.1 — 2026-08-11
+
+- **Liveness, not animals:** corrects the original requirement interpretation and
+  replaces the pets screen with a dedicated anti-spoofing workspace.
+- **Local print/screen protection:** a checksum-pinned MiniFAS ONNX model evaluates
+  1.5× padded face crops and requires several consecutive live results. Identity is
+  blocked on Intercom cameras until liveness is confirmed.
+- **Per-camera policy:** choose Required, Advisory or Off. Standard distant cameras
+  default to Advisory; Intercom defaults to Required and still requires a second
+  factor for door control.
+- **Visible evidence:** Activity, event details, Health, MQTT v1 payloads and the
+  guided camera test expose liveness state and score. Suspected presentation attacks
+  are stored as `spoof_suspected`, never as a recognized person. A camera or model
+  failure is separately reported as `liveness_unconfirmed` instead of being falsely
+  labelled an attack; Required mode still blocks identity safely.
+- **Honest limits:** the UI explicitly states that RGB protection reduces common
+  print and screen attacks but does not equal depth/IR certification.
+
 ## 5.0.0 — 2026-08-11
 
 - **Friendly user management:** a dedicated everyday Users tab guides creation,
@@ -12,13 +30,11 @@ update dialog; standalone users can watch GitHub releases.
   current Frigate frame, require a larger face, test sharpness/lighting live and keep
   a second factor mandatory for door-control automations. Face recognition alone is
   deliberately never treated as authorization to unlock.
-- **Animals and pets:** Frigate animal events receive a visual timeline, local
-  retention and MQTT-discovered Home Assistant sensors for named pets. Species
-  detection works from Frigate labels; naming an individual pet requires a matching
-  Frigate classifier/sub-label and is never guessed from species alone.
+- **Initial animals interpretation:** this was replaced by the intended liveness and
+  anti-spoofing workflow in 5.0.1.
 - **Upgrade-safe data schema:** first startup creates an automatic pre-migration
   backup, applies idempotent schema migrations and reports the schema in Health.
-  Backups now include animals, camera profiles and the access-policy foundation.
+  Backups now include camera profiles and the access-policy foundation.
 - **Future role foundation:** Admin, Operator and Viewer tab policies are present and
   derived from Home Assistant Ingress identity headers. Enforcement stays disabled by
   default in 5.0 while the later user/permission editor is deliberately not exposed.

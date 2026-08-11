@@ -2,7 +2,7 @@
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 from fastapi.responses import FileResponse, Response
 
 ROOT = Path(__file__).parents[1]
@@ -47,7 +47,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"version": "5.0.0", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
+    return {"version": "5.0.1", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
                        "requested_mode": "auto", "fallbacks": 1},
@@ -68,12 +68,12 @@ def cameras():
                 "status": "low_quality", "person": None}]
     return {"window_days": 7, "cameras": [{"camera": "Front door", "min_face_px": 120,
         "night_min_face_px": 130, "role": "intercom", "mode": "intercom", "burst_frames": 8,
-        "high_resolution": True, "require_second_factor": True, "roi": [.25, .1, .75, .9],
+        "high_resolution": True, "require_second_factor": True, "liveness_mode": "required", "roi": [.25, .1, .75, .9],
         "samples": samples, "impact": {"measured": 2, "accepted": 1, "rejected": 1},
         "funnel": {"events": 80, "face_detected": 61, "usable_face": 48, "recognized": 35}},
         {"camera": "Hallway", "min_face_px": 48, "night_min_face_px": 48,
          "role": "observation", "mode": "standard", "burst_frames": 8,
-         "high_resolution": False, "require_second_factor": True, "roi": [0, 0, 1, 1],
+         "high_resolution": False, "require_second_factor": True, "liveness_mode": "advisory", "roi": [0, 0, 1, 1],
          "samples": samples, "impact": {"measured": 2, "accepted": 1, "rejected": 1},
          "funnel": {"events": 54, "face_detected": 45, "usable_face": 39, "recognized": 31}}]}
 
@@ -89,12 +89,25 @@ def intercom():
     return {"cameras": [{"camera": "Front door"}], "recommended": {"face_size": "120px"}}
 
 
-@app.get("/api/pets")
-def pets():
-    return {"supported": ["cat", "dog", "bird", "rabbit"], "profiles": {
-        "luna": {"slug": "luna", "name": "לונה", "species": "cat", "frigate_name": "luna",
-                 "appearances": 18, "last_seen": 1786370800, "last_camera": "חצר", "top_camera": "חצר"}
-    }, "events": [{"event_id": "pet-1", "species": "cat", "name": "לונה", "camera": "חצר", "start_ts": 1786370800, "image": None}]}
+@app.get("/api/liveness")
+def liveness():
+    return {"status": {"enabled": True, "model_available": True, "threshold": .5,
+                        "required_frames": 3}, "cameras": cameras()["cameras"],
+            "blocked": []}
+
+
+@app.post("/api/cameras/{camera}/profile")
+def save_camera_profile(camera: str, profile: dict = Body(...)):
+    return {"camera": camera, **profile}
+
+
+@app.post("/api/intercom/{camera}/capture")
+def capture_intercom(camera: str):
+    return {"camera": camera, "state": "excellent", "message": "הצילום עבר את הבדיקה",
+            "frames_checked": 3, "best": {"face_px": 146, "score": .88,
+            "person": "Ronen", "match_score": .81, "match_margin": .19},
+            "liveness": {"state": "live", "confirmed": True, "live_frames": 3,
+                         "required_frames": 3, "score": .93}}
 
 
 @app.get("/api/visits")

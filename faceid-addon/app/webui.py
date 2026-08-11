@@ -73,7 +73,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     @app.get("/media/{kind}/{item_path:path}")
     def media(kind: str, item_path: str):
         """Serve only gallery JPEGs; never expose embeddings, settings or backups."""
-        if kind not in {"persons", "unknowns", "ignored", "animals"}:
+        if kind not in {"persons", "unknowns", "ignored"}:
             raise HTTPException(404, "Unknown media collection")
         base = (data_dir / kind).resolve()
         target = (base / item_path).resolve()
@@ -601,7 +601,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         except tarfile.TarError:
             raise HTTPException(400, "Not a valid .tar.gz backup")
         members = tar.getmembers()
-        allowed_roots = {"persons", "ignored", "body", "animals", "system", "manifest.json"}
+        allowed_roots = {"persons", "ignored", "body", "system", "manifest.json"}
         for m in members:
             norm = Path(m.name)
             if (m.name.startswith("/") or ".." in norm.parts or
@@ -611,7 +611,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 raise HTTPException(400, "Executable body models are never accepted from backups; restore material and retrain")
         if not merge:
             write_backup_file(data_dir, data_dir / "backups" / "before-restore")
-            for sub in ("persons", "ignored", "body", "animals"):
+            for sub in ("persons", "ignored", "body"):
                 d = data_dir / sub
                 if d.exists():
                     for f in d.rglob("*"):
@@ -1074,56 +1074,6 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         service = getattr(processor, "access_control", None)
         return service.policy() if service else {"enabled": False, "roles": {}}
 
-    class PetBody(BaseModel):
-        name: str
-        species: str
-        frigate_name: str = ""
-
-    @app.get("/api/pets")
-    def pets():
-        service = getattr(processor, "animals", None)
-        return service.summary() if service else {"profiles": {}, "events": [], "supported": []}
-
-    @app.post("/api/pets")
-    def create_pet(body: PetBody):
-        service = getattr(processor, "animals", None)
-        if service is None:
-            raise HTTPException(503, "Animal service is unavailable")
-        try:
-            return {"ok": True, "profile": service.save_profile(
-                name=body.name, species=body.species,
-                frigate_name=body.frigate_name,
-            )}
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-
-    @app.put("/api/pets/{slug}")
-    def update_pet(slug: str, body: PetBody):
-        service = getattr(processor, "animals", None)
-        if service is None:
-            raise HTTPException(503, "Animal service is unavailable")
-        try:
-            return {"ok": True, "profile": service.save_profile(
-                slug=slug, name=body.name, species=body.species,
-                frigate_name=body.frigate_name,
-            )}
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-
-    @app.delete("/api/pets/{slug}")
-    def delete_pet(slug: str):
-        service = getattr(processor, "animals", None)
-        if service is None or not service.delete_profile(slug):
-            raise HTTPException(404, "Unknown pet")
-        return {"ok": True}
-
-    @app.get("/api/animals/events")
-    def animal_events(species: str = "", pet_slug: str = "", limit: int = 200):
-        service = getattr(processor, "animals", None)
-        return {"events": service.events(
-            species=species, pet_slug=pet_slug, limit=limit,
-        ) if service else []}
-
     class PrivacyBody(BaseModel):
         known_days: int = 30
         unknown_days: int = 14
@@ -1189,6 +1139,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         burst_frames: int = 8
         high_resolution: bool = False
         require_second_factor: bool = True
+        liveness_mode: str | None = None
         roi: list[float] | None = None
 
     def _camera_names():
@@ -1242,6 +1193,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 burst_frames=body.burst_frames,
                 high_resolution=body.high_resolution,
                 require_second_factor=body.require_second_factor,
+                liveness_mode=body.liveness_mode,
                 roi=body.roi,
             )}
         except ValueError as exc:
@@ -1301,6 +1253,32 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             },
         }
 
+    @app.get("/api/liveness")
+    def liveness_overview():
+        service = getattr(processor, "liveness", None)
+        profiles = getattr(processor, "camera_profiles", None)
+        blocked = []
+        if processor.audit:
+            blocked.extend(processor.audit.search_events(
+                status="spoof_suspected", limit=50,
+            )["events"])
+            blocked.extend(processor.audit.search_events(
+                status="liveness_unconfirmed", limit=50,
+            )["events"])
+            blocked.sort(
+                key=lambda row: row.get("start_ts") or row.get("updated_ts") or 0,
+                reverse=True,
+            )
+            blocked = blocked[:50]
+        return {
+            "status": service.status() if service else {
+                "enabled": False, "model_available": False,
+            },
+            "cameras": [profiles.get(camera) for camera in _camera_names()] if profiles else [],
+            "blocked": blocked,
+            "policy": "Required liveness blocks identity; RGB PAD is not a depth/IR guarantee.",
+        }
+
     @app.post("/api/intercom/{camera}/capture")
     def test_intercom_capture(camera: str):
         if camera not in _camera_names():
@@ -1308,6 +1286,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         profile = processor.camera_profiles.get(camera)
         left, top, right, bottom = profile.get("roi", [0, 0, 1, 1])
         candidates, frame_count, w, h = [], 0, 0, 0
+        liveness_history = []
         for index in range(min(int(profile.get("burst_frames", 3)), 8)):
             if index:
                 time.sleep(0.08)
@@ -1329,11 +1308,18 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 matches = gallery.match_candidates(face.normed_embedding, limit=2)
                 best_match = matches[0] if matches else (None, None, 0.0)
                 runner_score = matches[1][2] if len(matches) > 1 else 0.0
+                liveness = (
+                    processor.liveness.analyze(image, face)
+                    if getattr(processor, "liveness", None) else
+                    {"state": "unavailable", "live": None, "score": None}
+                )
+                liveness_history.append(liveness)
                 candidates.append({
                     "frame": index,
                     "box": [round(float(value), 1) for value in face.bbox],
                     "person": best_match[1], "match_score": best_match[2],
                     "match_margin": best_match[2] - runner_score,
+                    "liveness": liveness,
                     **quality.to_dict(),
                 })
         if not frame_count:
@@ -1347,10 +1333,23 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             state, message = "acceptable", "הצילום מתאים, אך התקרבות נוספת תשפר אמינות"
         else:
             state, message = "excellent", "התמונה מתאימה מאוד לזיהוי באינטרקום"
+        liveness_result = (
+            processor.liveness.consensus(liveness_history)
+            if getattr(processor, "liveness", None) else
+            {"state": "unavailable", "confirmed": False}
+        )
+        if profile.get("liveness_mode") == "required" and not liveness_result.get("confirmed"):
+            state = "spoof" if liveness_result.get("state") == "spoof" else "liveness_pending"
+            message = (
+                "הצילום נראה כמו תמונה או מסך; הזיהוי נחסם"
+                if state == "spoof" else
+                "עדיין אין מספיק הוכחות חיוּת; הזיהוי לא יאושר לכניסה"
+            )
         return {
             "camera": camera, "width": w, "height": h, "profile": profile,
             "faces": candidates, "best": best, "frames_checked": frame_count,
             "state": state, "message": message,
+            "liveness": liveness_result,
             "unlock_policy": "second_factor_required" if profile["require_second_factor"] else "face_only_blocked",
         }
 
@@ -1460,11 +1459,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                          if getattr(processor, "body_recognition", None) else None),
                 "vision": (processor.vision_advisor.status()
                            if getattr(processor, "vision_advisor", None) else None),
-                "animals": {
-                    "profiles": len(processor.animals.profiles()),
-                    "events": len(processor.animals.events(limit=1000)),
-                    "retention_days": processor.animals.retention_days,
-                } if getattr(processor, "animals", None) else None,
+                "liveness": (processor.liveness.status()
+                             if getattr(processor, "liveness", None) else None),
                 "access": (processor.access_control.policy()
                            if getattr(processor, "access_control", None) else None),
                 "schema": getattr(processor, "migration", None),

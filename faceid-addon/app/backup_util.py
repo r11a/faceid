@@ -13,7 +13,7 @@ from pathlib import Path
 log = logging.getLogger("faceid.backup")
 
 # Nur die unersetzliche Handarbeit sichern — nicht die Unknown-Queue oder Frigate-Vollbilder.
-BACKUP_SUBDIRS = ("persons", "ignored", "body", "animals")
+BACKUP_SUBDIRS = ("persons", "ignored", "body")
 BACKUP_FILES = (
     "settings.json", "learning_runs.json", "frigate_sync.json",
     "camera_profiles.json", "access_control.json", "schema.json",

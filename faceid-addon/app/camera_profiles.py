@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROLES = {"observation", "entry", "exit", "entry_exit", "restricted", "intercom"}
 MODES = {"standard", "intercom"}
+LIVENESS_MODES = {"off", "advisory", "required"}
 
 
 class CameraProfiles:
@@ -38,6 +39,9 @@ class CameraProfiles:
             "burst_frames": int(stored.get("burst_frames", 8)),
             "high_resolution": bool(stored.get("high_resolution", mode == "intercom")),
             "require_second_factor": bool(stored.get("require_second_factor", mode == "intercom")),
+            "liveness_mode": stored.get(
+                "liveness_mode", "required" if mode == "intercom" else "advisory"
+            ),
             "roi": stored.get("roi") if isinstance(stored.get("roi"), list) else [0.0, 0.0, 1.0, 1.0],
         }
 
@@ -45,7 +49,8 @@ class CameraProfiles:
         self, camera: str, *, min_face_px: int, role: str,
         mode: str = "standard", night_min_face_px: int | None = None,
         burst_frames: int = 8, high_resolution: bool = False,
-        require_second_factor: bool = True, roi: list | None = None,
+        require_second_factor: bool = True, liveness_mode: str | None = None,
+        roi: list | None = None,
     ) -> dict:
         camera = str(camera).strip()
         if not camera:
@@ -59,6 +64,9 @@ class CameraProfiles:
         mode = str(mode)
         if mode not in MODES:
             raise ValueError("unknown camera mode")
+        liveness_mode = str(liveness_mode or ("required" if mode == "intercom" else "advisory"))
+        if liveness_mode not in LIVENESS_MODES:
+            raise ValueError("unknown liveness mode")
         night_min_face_px = int(night_min_face_px or min_face_px)
         if not 24 <= night_min_face_px <= 320:
             raise ValueError("night_min_face_px must be between 24 and 320")
@@ -75,6 +83,7 @@ class CameraProfiles:
                 "burst_frames": burst_frames,
                 "high_resolution": bool(high_resolution),
                 "require_second_factor": bool(require_second_factor),
+                "liveness_mode": liveness_mode,
                 "roi": roi,
             }
             temporary = self.path.with_suffix(".tmp")

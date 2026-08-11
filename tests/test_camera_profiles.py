@@ -26,8 +26,11 @@ class CameraProfilesTests(unittest.TestCase):
                 roi=[.2, .1, .8, .95],
             )
             self.assertEqual(intercom["mode"], "intercom")
+            self.assertEqual(intercom["liveness_mode"], "required")
             self.assertEqual(intercom["burst_frames"], 10)
             self.assertEqual(intercom["roi"], [.2, .1, .8, .95])
+            with self.assertRaises(ValueError):
+                profiles.update("door", min_face_px=120, role="intercom", liveness_mode="pretend")
 
 
 if __name__ == "__main__":

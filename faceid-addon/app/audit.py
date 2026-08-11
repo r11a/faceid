@@ -143,6 +143,8 @@ class AuditStore:
                 ("probable_person", "TEXT"),
                 ("probable_score", "REAL"),
                 ("ground_truth_by", "TEXT"),
+                ("liveness_status", "TEXT"),
+                ("liveness_score", "REAL"),
             ):
                 self._ensure_column(con, "events", column, declaration)
 
@@ -181,6 +183,13 @@ class AuditStore:
                 "UPDATE events SET end_ts=?, updated_ts=? WHERE event_id=? "
                 "AND status='processing'",
                 (end_ts, time.time(), event_id),
+            )
+
+    def update_liveness(self, event_id: str, result: dict):
+        with self._lock, self._connection() as con:
+            con.execute(
+                "UPDATE events SET liveness_status=?, liveness_score=?, updated_ts=? WHERE event_id=?",
+                (result.get("state"), result.get("score"), time.time(), event_id),
             )
 
     def observation(
@@ -298,7 +307,8 @@ class AuditStore:
         sql = """
             SELECT event_id, camera, start_ts, end_ts, status, person, score,
                    margin, confirmations, updated_ts, ground_truth, scenario_id,
-                   ai_description, ai_tags, probable_person, probable_score
+                   ai_description, ai_tags, probable_person, probable_score,
+                   liveness_status, liveness_score
             FROM events
         """
         params = []
@@ -347,7 +357,7 @@ class AuditStore:
             event_id, camera, start_ts, end_ts, status, person, score, margin,
             confirmations, updated_ts, ground_truth, ground_truth_ts,
             ground_truth_by, scenario_id, ai_description, ai_tags,
-            probable_person, probable_score
+            probable_person, probable_score, liveness_status, liveness_score
         """
         with self._lock, self._connection() as con:
             con.row_factory = sqlite3.Row

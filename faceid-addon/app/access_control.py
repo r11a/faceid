@@ -11,15 +11,15 @@ from pathlib import Path
 ROLE_TABS = {
     "admin": ["*"],
     "operator": [
-        "dashboard", "users", "unknowns", "visits", "intercom", "animals",
+        "dashboard", "users", "unknowns", "visits", "intercom", "liveness",
         "automations", "activity", "calibration", "privacy", "health-center",
     ],
-    "viewer": ["dashboard", "visits", "animals", "activity"],
+    "viewer": ["dashboard", "visits", "liveness", "activity"],
 }
 MUTATING_PREFIXES = {
     "operator": (
-        "/api/persons", "/api/unknowns", "/api/audit", "/api/pets",
-        "/api/intercom",
+        "/api/persons", "/api/unknowns", "/api/audit",
+        "/api/intercom", "/api/liveness",
     ),
     "viewer": (),
 }
