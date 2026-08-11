@@ -429,7 +429,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                         "ignore_threshold", cfg["faceid"].get("match_threshold", 0.5))),
                     ignore_margin=float(cfg["faceid"].get("ignore_margin", 0.12)),
                     progress=progress,
-                    hires=bool(cfg["faceid"].get("hires_enroll", True)))
+                    hires=bool(cfg["faceid"].get("hires_enroll", True)),
+                    camera_enabled=processor.camera_enabled)
                 backfill_state["result"] = stats
                 backfill_state["status"] = "completed"
             except InterruptedError as e:
@@ -1135,6 +1136,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
 
     class CameraProfileBody(BaseModel):
         min_face_px: int
+        enabled: bool | None = None
         role: str = "observation"
         mode: str = "standard"
         night_min_face_px: int | None = None
@@ -1168,6 +1170,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 "camera": camera, "min_face_px": processor.min_face_px,
                 "role": "observation",
             }
+            profile["enabled"] = processor.camera_enabled(camera)
             samples = (
                 processor.audit.camera_samples(camera, 24) if processor.audit else []
             )
@@ -1197,9 +1200,29 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 require_second_factor=body.require_second_factor,
                 liveness_mode=body.liveness_mode,
                 roi=body.roi,
+                enabled=body.enabled,
             )}
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    class CameraEnabledBody(BaseModel):
+        enabled: bool
+
+    @app.post("/api/cameras/{camera}/enabled")
+    def set_camera_enabled(camera: str, body: CameraEnabledBody):
+        if camera not in _camera_names():
+            raise HTTPException(404, "Unknown camera")
+        try:
+            profile = processor.set_camera_enabled(camera, body.enabled)
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(503, str(exc)) from exc
+        profile["enabled"] = processor.camera_enabled(camera)
+        return {
+            "ok": True,
+            "camera": camera,
+            "enabled": profile["enabled"],
+            "profile": profile,
+        }
 
     @app.get("/api/cameras/{camera}/frame")
     def camera_frame(camera: str):

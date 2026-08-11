@@ -8,6 +8,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from app.webui import build_app
+from app.camera_profiles import CameraProfiles
 
 
 class FakeAudit:
@@ -35,6 +36,37 @@ class FakeGallery:
 
 
 class WebUIClipTests(unittest.TestCase):
+    def test_camera_selection_defaults_on_and_persists_ui_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = CameraProfiles(Path(tmp) / "camera_profiles.json")
+            frigate = SimpleNamespace(cameras=lambda: ["door"], timeout=1)
+            processor = SimpleNamespace(
+                audit=None, media_store=None, frigate=frigate,
+                camera_profiles=profiles, cameras=set(), min_face_px=48,
+            )
+
+            def camera_enabled(camera):
+                stored = profiles.all().get(camera)
+                return bool(stored.get("enabled", True)) if stored else True
+
+            processor.camera_enabled = camera_enabled
+            processor.set_camera_enabled = profiles.set_enabled
+            app = build_app(
+                {"faceid": {"auth": {}}}, SimpleNamespace(), FakeGallery(),
+                processor, Path(tmp), Path(__file__).parents[1] / "static",
+            )
+            client = TestClient(app)
+            initial = client.get("/api/cameras/studio").json()["cameras"]
+            self.assertTrue(initial[0]["enabled"])
+            response = client.post(
+                "/api/cameras/door/enabled", json={"enabled": False}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.json()["enabled"])
+            self.assertFalse(
+                client.get("/api/cameras/studio").json()["cameras"][0]["enabled"]
+            )
+
     def test_liveness_capture_returns_exact_temporary_preview_and_guidance(self):
         with tempfile.TemporaryDirectory() as tmp:
             image = np.full((240, 320, 3), 128, dtype=np.uint8)
@@ -107,7 +139,7 @@ class WebUIClipTests(unittest.TestCase):
             self.assertIn("no-store", index.headers["cache-control"])
             self.assertNotIn("etag", index.headers)
             self.assertNotIn("last-modified", index.headers)
-            self.assertEqual(index.headers["x-faceid-ui-version"], "5.0.3")
+            self.assertEqual(index.headers["x-faceid-ui-version"], "5.0.4")
             versioned = TestClient(app).get("/ui-previous-release")
             self.assertEqual(versioned.status_code, 200)
             self.assertEqual(versioned.content, index.content)

@@ -3,6 +3,18 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.0.4 — 2026-08-11
+
+- **Camera participation from the UI:** every Frigate camera can now be enabled or
+  paused directly from Camera Studio. All cameras remain enabled by default.
+- **Complete pause behavior:** a paused camera is excluded from live MQTT events,
+  polling, queued recognition jobs and history backfill; its stale presence state is
+  cleared immediately. Manual frame inspection remains available for setup.
+- **Clear operational feedback:** camera cards show active/paused status, totals and
+  an “enable all” action, with confirmation after every change.
+- **Persisted and compatible:** selections survive restarts, while the legacy YAML
+  camera allow-list remains a fallback until an explicit UI selection is saved.
+
 ## 5.0.3 — 2026-08-11
 
 - **Face-size control in Liveness:** every camera card now has a 24–240px visual

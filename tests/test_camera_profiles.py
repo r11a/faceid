@@ -12,8 +12,12 @@ class CameraProfilesTests(unittest.TestCase):
             path = Path(folder) / "camera_profiles.json"
             profiles = CameraProfiles(path, default_min_face_px=52)
             self.assertEqual(profiles.get("front")["min_face_px"], 52)
+            self.assertTrue(profiles.get("front")["enabled"])
+            disabled = profiles.set_enabled("front", False)
+            self.assertFalse(disabled["enabled"])
             saved = profiles.update("front", min_face_px=72, role="entry")
             self.assertEqual(saved["role"], "entry")
+            self.assertFalse(saved["enabled"])
             self.assertEqual(json.loads(path.read_text())["front"]["min_face_px"], 72)
             with self.assertRaises(ValueError):
                 profiles.update("front", min_face_px=12, role="entry")
@@ -31,7 +35,6 @@ class CameraProfilesTests(unittest.TestCase):
             self.assertEqual(intercom["roi"], [.2, .1, .8, .95])
             with self.assertRaises(ValueError):
                 profiles.update("door", min_face_px=120, role="intercom", liveness_mode="pretend")
-
 
 if __name__ == "__main__":
     unittest.main()
