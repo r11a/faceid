@@ -32,6 +32,7 @@ class CameraProfiles:
         mode = stored.get("mode", "intercom" if stored.get("role") == "intercom" else "standard")
         return {
             "camera": camera,
+            "enabled": bool(stored.get("enabled", True)),
             "min_face_px": int(stored.get("min_face_px", self.default_min_face_px)),
             "role": stored.get("role", "observation"),
             "mode": mode if mode in MODES else "standard",
@@ -50,7 +51,7 @@ class CameraProfiles:
         mode: str = "standard", night_min_face_px: int | None = None,
         burst_frames: int = 8, high_resolution: bool = False,
         require_second_factor: bool = True, liveness_mode: str | None = None,
-        roi: list | None = None,
+        roi: list | None = None, enabled: bool | None = None,
     ) -> dict:
         camera = str(camera).strip()
         if not camera:
@@ -77,7 +78,9 @@ class CameraProfiles:
             raise ValueError("roi must describe a non-empty normalized rectangle")
         with self._lock:
             profiles = self._read()
+            stored = profiles.get(camera) or {}
             profiles[camera] = {
+                "enabled": bool(stored.get("enabled", True) if enabled is None else enabled),
                 "min_face_px": min_face_px, "role": role, "mode": mode,
                 "night_min_face_px": night_min_face_px,
                 "burst_frames": burst_frames,
@@ -86,6 +89,23 @@ class CameraProfiles:
                 "liveness_mode": liveness_mode,
                 "roi": roi,
             }
+            temporary = self.path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            temporary.replace(self.path)
+        return self.get(camera)
+
+    def set_enabled(self, camera: str, enabled: bool) -> dict:
+        """Persist the automatic-processing switch without changing tuning."""
+        camera = str(camera).strip()
+        if not camera:
+            raise ValueError("camera is required")
+        with self._lock:
+            profiles = self._read()
+            stored = profiles.get(camera)
+            profiles[camera] = dict(stored) if isinstance(stored, dict) else {}
+            profiles[camera]["enabled"] = bool(enabled)
             temporary = self.path.with_suffix(".tmp")
             temporary.write_text(
                 json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -67,11 +67,13 @@ def cameras():
                {"event_id": "sample-2", "face_px": 39, "quality": .31,
                 "status": "low_quality", "person": None}]
     return {"window_days": 7, "cameras": [{"camera": "Front door", "min_face_px": 120,
+        "enabled": True,
         "night_min_face_px": 130, "role": "intercom", "mode": "intercom", "burst_frames": 8,
         "high_resolution": True, "require_second_factor": True, "liveness_mode": "required", "roi": [.25, .1, .75, .9],
         "samples": samples, "impact": {"measured": 2, "accepted": 1, "rejected": 1},
         "funnel": {"events": 80, "face_detected": 61, "usable_face": 48, "recognized": 35}},
         {"camera": "Hallway", "min_face_px": 48, "night_min_face_px": 48,
+         "enabled": False,
          "role": "observation", "mode": "standard", "burst_frames": 8,
          "high_resolution": False, "require_second_factor": True, "liveness_mode": "advisory", "roi": [0, 0, 1, 1],
          "samples": samples, "impact": {"measured": 2, "accepted": 1, "rejected": 1},
@@ -99,6 +101,11 @@ def liveness():
 @app.post("/api/cameras/{camera}/profile")
 def save_camera_profile(camera: str, profile: dict = Body(...)):
     return {"camera": camera, **profile}
+
+
+@app.post("/api/cameras/{camera}/enabled")
+def set_camera_enabled(camera: str, body: dict = Body(...)):
+    return {"ok": True, "camera": camera, "enabled": bool(body.get("enabled"))}
 
 
 @app.post("/api/intercom/{camera}/capture")

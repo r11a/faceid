@@ -114,6 +114,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .camera-list{display:grid;gap:9px;position:sticky;top:130px}
 .camera-choice{width:100%;text-align:right;padding:14px;border:1px solid var(--line);background:var(--panel);color:var(--fg);display:flex;justify-content:space-between;align-items:center}
 .camera-choice.on{border-color:var(--acc);background:color-mix(in oklab,var(--panel2) 80%,var(--acc) 20%)}
+.camera-choice.off{opacity:.62}.camera-choice.off b{text-decoration:line-through;text-decoration-thickness:1px}
+.camera-state{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800}.camera-state:before{content:'';width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px color-mix(in oklab,var(--good) 18%,transparent)}
+.camera-state.off{color:var(--dim)}.camera-state.off:before{background:#777;box-shadow:none}
 .studio-panel{border:1px solid var(--line);border-radius:20px;background:linear-gradient(145deg,#25272a,#18191b);overflow:hidden}
 .camera-stage{position:relative;background:#090a0b;min-height:260px;display:grid;place-items:center;overflow:hidden}
 .camera-stage img{display:block;width:100%;max-height:62vh;object-fit:contain}
@@ -261,7 +264,7 @@ details summary{cursor:pointer;font-weight:750;color:var(--fg);padding:5px}
 <dialog id="videoOverlay" class="video-overlay" onclick="if(event.target===this)closeEventVideo()"><div class="video-panel" onclick="event.stopPropagation()"><button class="ghost video-close" onclick="closeEventVideo()">✕ סגור</button><video id="eventVideo" controls playsinline preload="metadata"></video><div id="videoMessage" class="stat" style="display:none;padding:18px;text-align:center"></div></div></dialog>
 
 <script>
-const UI_VERSION='5.0.3';
+const UI_VERSION='5.0.4';
 const $=s=>document.querySelector(s), main=$('#main');
 let tab='dashboard', persons={}, selected=new Set(), suggestThr=0.40,currentSession={role:'admin',tabs:['*'],enforced:false};
 let workspace=localStorage.getItem('faceid-workspace')||'operate';
@@ -968,16 +971,18 @@ async function undoEvent(eventId){
   toast('האימות האחרון בוטל');closeEventDialog();if(tab==='activity')renderActivity();
 }
 let cameraStudioData=[],selectedCamera='';
-const cameraRoleLabels={observation:'מצלמת צפייה',entry:'כניסה',exit:'יציאה',entry_exit:'כניסה ויציאה',restricted:'אזור מוגבל'};
+const cameraRoleLabels={observation:'מצלמת צפייה',entry:'כניסה',exit:'יציאה',entry_exit:'כניסה ויציאה',restricted:'אזור מוגבל',intercom:'אינטרקום'};
 async function renderCameras(){
   const data=await j('api/cameras/studio?days=7');if(tab!=='cameras')return;
   cameraStudioData=data.cameras||[];
+  const activeCount=cameraStudioData.filter(c=>c.enabled!==false).length;
   if(!selectedCamera||!cameraStudioData.some(c=>c.camera===selectedCamera))selectedCamera=cameraStudioData[0]?.camera||'';
   if(!selectedCamera){main.innerHTML='<div class="friendly-empty" dir="rtl">לא נמצאו מצלמות. בדקו את החיבור ל־Frigate.</div>';return}
   main.innerHTML=`<div class="dashboard" dir="rtl">
     <div class="section-head"><div><h2>סטודיו מצלמות</h2><p>כוונון גודל פנים מינימלי מול תמונה אמיתית והיסטוריית המצלמה.</p></div></div>
+    <section class="welcome-card"><div><h3>אילו מצלמות משתתפות בזיהוי?</h3><p>מצלמה פעילה שולחת אירועים לזיהוי פנים, חיוּת, גוף ו־AI. כיבוי כאן מפסיק רק את הבדיקות האוטומטיות של FaceID — ההקלטה והזיהוי של Frigate ממשיכים כרגיל.</p></div><div class="row"><span class="badge score-good">${activeCount} מתוך ${cameraStudioData.length} פעילות</span>${activeCount<cameraStudioData.length?'<button class="ghost" onclick="enableAllCameras(this)">הפעל את כל המצלמות</button>':''}</div></section>
     <div class="role-note"><b>מה הסף עושה?</b> פנים קטנות מהמסגרת יידחו לפני זיהוי. הורדת הסף אינה מוסיפה פרטים לתמונה ועלולה להגדיל זיהויי שווא.</div>
-    <div class="camera-layout" style="margin-top:16px"><aside class="camera-list">${cameraStudioData.map(c=>`<button class="camera-choice ${c.camera===selectedCamera?'on':''}" onclick="selectCamera(${JSON.stringify(c.camera).replace(/"/g,'&quot;')})"><span><b>${esc(c.camera)}</b><small style="display:block;color:var(--dim)">${cameraRoleLabels[c.role]||c.role}</small></span><span>${c.min_face_px}px</span></button>`).join('')}</aside><section id="cameraEditor"></section></div></div>`;
+    <div class="camera-layout" style="margin-top:16px"><aside class="camera-list">${cameraStudioData.map(c=>`<button class="camera-choice ${c.camera===selectedCamera?'on':''} ${c.enabled===false?'off':''}" onclick="selectCamera(${JSON.stringify(c.camera).replace(/"/g,'&quot;')})"><span><b>${esc(c.camera)}</b><small style="display:block;color:var(--dim)">${cameraRoleLabels[c.role]||c.role}</small></span><span><span class="camera-state ${c.enabled===false?'off':''}">${c.enabled===false?'מושהית':'פעילה'}</span><small style="display:block;color:var(--dim);margin-top:4px">${c.min_face_px}px</small></span></button>`).join('')}</aside><section id="cameraEditor"></section></div></div>`;
   drawCameraEditor();
 }
 function selectCamera(camera){selectedCamera=camera;document.querySelectorAll('.camera-choice').forEach((b,i)=>b.classList.toggle('on',cameraStudioData[i]?.camera===camera));drawCameraEditor()}
@@ -985,7 +990,8 @@ function drawCameraEditor(){
   const c=cameraStudioData.find(x=>x.camera===selectedCamera),host=$('#cameraEditor');if(!c||!host)return;
   const f=c.funnel||{},total=Math.max(1,f.events||0),impact=c.impact||{};
   host.innerHTML=`<div class="studio-panel"><div class="camera-stage" id="cameraStage"><img id="cameraFrame" src="api/cameras/${encodeURIComponent(c.camera)}/frame?t=${Date.now()}" alt="תמונה חיה ממצלמת ${esc(c.camera)}" onload="updateMinFaceGuide()" onerror="this.style.display='none';this.parentElement.insertAdjacentHTML('beforeend','<div class=\'friendly-empty\'>Frigate לא החזיר תמונה עדכנית מהמצלמה.</div>')"><div id="minFaceGuide" class="face-box"></div></div>
-    <div class="studio-controls"><div class="section-head"><div><h2>${esc(c.camera)}</h2><p>השינוי יחול על אירועים חדשים מיד לאחר השמירה.</p></div><button class="ghost" onclick="refreshCameraFrame()">↻ רענן תמונת מצלמה</button></div>
+    <div class="studio-controls"><div class="section-head"><div><h2>${esc(c.camera)}</h2><p>${c.enabled===false?'המצלמה מושהית ואירועים חדשים ממנה אינם נבדקים.':'המצלמה פעילה וכלי הזיהוי חלים על אירועים חדשים.'}</p></div><div class="row"><span class="camera-state ${c.enabled===false?'off':''}">${c.enabled===false?'בדיקות מושהות':'בדיקות פעילות'}</span><button class="${c.enabled===false?'act':'ghost danger'}" onclick="toggleCameraEnabled(${JSON.stringify(c.camera).replace(/"/g,'&quot;')},${c.enabled===false},this)">${c.enabled===false?'הפעל בדיקות במצלמה':'הפסק בדיקות אוטומטיות'}</button><button class="ghost" onclick="refreshCameraFrame()">↻ רענן תמונת מצלמה</button></div></div>
+      ${c.enabled===false?'<div class="callout warn"><b>המצלמה אינה משתתפת כעת בעיבוד.</b> אפשר עדיין לצפות בתמונה ולכוון את ההגדרות לפני הפעלה מחדש.</div>':''}
       <label>גודל פנים מינימלי: <b id="minFaceValue">${c.min_face_px}×${c.min_face_px} פיקסלים</b><input id="cameraMinFace" type="range" min="24" max="240" step="4" value="${c.min_face_px}" oninput="previewCameraThreshold()"></label>
       <div style="margin:12px 0"><div class="impact-bar"><span id="impactFill" style="width:0"></span></div><p class="stat" id="impactText"></p></div>
       <div class="row"><label>תפקיד המצלמה <select id="cameraRole">${Object.entries(cameraRoleLabels).map(([value,label])=>`<option value="${value}" ${c.role===value?'selected':''}>${label}</option>`).join('')}</select></label><button class="act" onclick="saveCameraProfile()">שמור והפעל את הגדרת המצלמה</button><button class="ghost" onclick="analyzeCameraFrame()">זהה פנים בפריים הנוכחי</button></div>
@@ -1008,9 +1014,25 @@ function previewCameraThreshold(){
 }
 function refreshCameraFrame(){const img=$('#cameraFrame');if(img){img.style.display='block';img.src=`api/cameras/${encodeURIComponent(selectedCamera)}/frame?t=${Date.now()}`}}
 async function saveCameraProfile(){
-  const min_face_px=+$('#cameraMinFace').value,role=$('#cameraRole').value;
-  await j(`api/cameras/${encodeURIComponent(selectedCamera)}/profile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_face_px,role})});
+  const c=cameraStudioData.find(x=>x.camera===selectedCamera),min_face_px=+$('#cameraMinFace').value,role=$('#cameraRole').value;
+  await j(`api/cameras/${encodeURIComponent(selectedCamera)}/profile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_face_px,role,enabled:c?.enabled!==false})});
+  toast('הגדרות המצלמה נשמרו והוחלו על אירועים חדשים');
   await renderCameras();
+}
+async function toggleCameraEnabled(camera,enabled,button){
+  if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
+  try{
+    await j(`api/cameras/${encodeURIComponent(camera)}/enabled`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+    toast(enabled?`הבדיקות האוטומטיות הופעלו במצלמת ${camera}`:`הבדיקות במצלמת ${camera} הושהו. Frigate ממשיך להקליט.`);
+    await renderCameras();
+  }finally{if(button){button.disabled=false;button.removeAttribute('aria-busy')}}
+}
+async function enableAllCameras(button){
+  if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
+  try{
+    await Promise.all(cameraStudioData.filter(c=>c.enabled===false).map(c=>j(`api/cameras/${encodeURIComponent(c.camera)}/enabled`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true})})));
+    toast('כל מצלמות Frigate פעילות כעת ב־FaceID');await renderCameras();
+  }finally{if(button){button.disabled=false;button.removeAttribute('aria-busy')}}
 }
 async function analyzeCameraFrame(){
   const data=await j(`api/cameras/${encodeURIComponent(selectedCamera)}/analyze`),stage=$('#cameraStage');

@@ -159,6 +159,25 @@ class EventProcessor:
         if self.poll_interval > 0:
             threading.Thread(target=self._poller, daemon=True, name="faceid-poller").start()
 
+    def camera_enabled(self, camera: str) -> bool:
+        """Return the live UI override, falling back to the legacy allow-list."""
+        if self.camera_profiles is not None:
+            stored = self.camera_profiles.all().get(camera)
+            if isinstance(stored, dict) and "enabled" in stored:
+                return bool(stored["enabled"])
+        return not self.cameras or camera in self.cameras
+
+    def set_camera_enabled(self, camera: str, enabled: bool) -> dict:
+        if self.camera_profiles is None:
+            raise RuntimeError("Camera profiles are unavailable")
+        profile = self.camera_profiles.set_enabled(camera, enabled)
+        if not enabled:
+            self.present[camera] = {}
+            self._last_presence.pop(camera, None)
+            self._publish_presence(camera)
+        log.info("camera %s automatic analysis %s", camera, "enabled" if enabled else "disabled")
+        return profile
+
     def _job_dispatcher(self):
         while True:
             time.sleep(2)
@@ -169,6 +188,12 @@ class EventProcessor:
             return
         for job in self.audit.pending_jobs():
             eid, kind = job["event_id"], job["kind"]
+            if not self.camera_enabled(job["camera"]):
+                self.audit.finalize(
+                    eid, "camera_disabled", end_ts=job.get("end_ts") or time.time()
+                )
+                self.audit.complete_job(eid, kind)
+                continue
             if eid not in self.events:
                 self.events[eid] = self._new_event_state(
                     eid, job["camera"], start_time=job.get("start_ts"),
@@ -252,7 +277,7 @@ class EventProcessor:
         if after.get("label") != "person":
             return
         cam = after.get("camera", "")
-        if self.cameras and cam not in self.cameras:
+        if not self.camera_enabled(cam):
             return
         eid = after.get("id")
         if not eid:
@@ -290,6 +315,16 @@ class EventProcessor:
             try:
                 if self.audit:
                     self.audit.mark_job_running(eid, kind)
+                state = self.events.get(eid)
+                if state is not None and not self.camera_enabled(state["camera"]):
+                    if self.audit:
+                        self.audit.finalize(
+                            eid, "camera_disabled",
+                            end_ts=state.get("end_time") or time.time(),
+                        )
+                        self.audit.complete_job(eid, kind)
+                    state["done"] = True
+                    continue
                 if kind == "clip":
                     self._process_clip(eid)
                 else:
@@ -576,7 +611,7 @@ class EventProcessor:
                         or (self.audit and self.audit.was_finalized(eid))):
                     continue
                 cam = ev.get("camera", "")
-                if self.cameras and cam not in self.cameras:
+                if not self.camera_enabled(cam):
                     continue
                 self._polled.append(eid)
                 self._ensure_discovery(cam)

@@ -25,7 +25,7 @@ def run_backfill(engine, gallery, frigate, frigate_url: str, days: int = 14,
                  rescue_min_px: int = 90, rescue_min_det: float = 0.85,
                  match_margin: float = 0.08, min_confirmations: int = 2,
                  ignore_thr: float = 0.5, ignore_margin: float = 0.12,
-                 unknown_thr: float = 0.35) -> dict:
+                 unknown_thr: float = 0.35, camera_enabled=None) -> dict:
     """Person-Events der letzten `days` Tage verarbeiten. Threadsafe zur Live-Pipeline
     (Engine und Galerie sind intern gelockt). progress(i, total) wird pro Event gerufen.
 
@@ -54,6 +54,8 @@ def run_backfill(engine, gallery, frigate, frigate_url: str, days: int = 14,
         if len(batch) < 100:
             break
 
+    if camera_enabled is not None:
+        events = [event for event in events if camera_enabled(event.get("camera", ""))]
     stats = {"events": len(events), "faces": 0, "no_face": 0, "dupe": 0, "known": 0, "ignored": 0}
     for i, ev in enumerate(events):
         if progress:
