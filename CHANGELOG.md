@@ -3,6 +3,16 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.0.3 — 2026-08-11
+
+- **Face-size control in Liveness:** every camera card now has a 24–240px visual
+  threshold slider. Saving updates both daytime and nighttime minimum face size
+  together with the liveness policy.
+- **Explicit Intercom selection:** the Intercom screen starts with a prominent camera
+  picker containing every Frigate camera and remembers the last selected camera.
+- **Clear camera role:** a normal-user toggle marks or unmarks the selected camera as
+  an Intercom camera. Multiple Intercom cameras remain supported and visibly labelled.
+
 ## 5.0.2 — 2026-08-11
 
 - **Visual liveness test:** the exact frame used by the test is shown with a
