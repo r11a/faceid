@@ -3,6 +3,16 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.0.2 — 2026-08-11
+
+- **Visual liveness test:** the exact frame used by the test is shown with a
+  responsive face outline, detected face size in pixels and the configured minimum.
+- **Useful feedback:** separate, plain-language cards show liveness confidence,
+  sharpness and lighting, followed by concrete advice such as move closer, hold still,
+  add front lighting or look directly at the camera.
+- **Privacy-conscious preview:** test frames are kept only in memory for up to two
+  minutes, served with no-store headers and never added to the face gallery.
+
 ## 5.0.1 — 2026-08-11
 
 - **Liveness, not animals:** corrects the original requirement interpretation and

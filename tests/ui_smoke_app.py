@@ -47,7 +47,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"version": "5.0.1", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
+    return {"version": "5.0.2", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
                        "requested_mode": "auto", "fallbacks": 1},
@@ -104,10 +104,21 @@ def save_camera_profile(camera: str, profile: dict = Body(...)):
 @app.post("/api/intercom/{camera}/capture")
 def capture_intercom(camera: str):
     return {"camera": camera, "state": "excellent", "message": "הצילום עבר את הבדיקה",
-            "frames_checked": 3, "best": {"face_px": 146, "score": .88,
+            "frames_checked": 3, "width": 1280, "height": 720,
+            "best": {"face_px": 146, "score": .88, "sharpness": .82,
+            "illumination": .76, "contrast": .71, "frontal": .90,
+            "detection": .95, "box": [560, 180, 706, 326],
             "person": "Ronen", "match_score": .81, "match_margin": .19},
             "liveness": {"state": "live", "confirmed": True, "live_frames": 3,
-                         "required_frames": 3, "score": .93}}
+                         "required_frames": 3, "score": .93},
+            "profile": cameras()["cameras"][0],
+            "guidance": ["התמונה ברורה ובדיקת החיוּת עברה — אין צורך לשנות דבר"],
+            "preview_url": f"api/intercom/{camera}/capture/preview?_=1"}
+
+
+@app.get("/api/intercom/{camera}/capture/preview")
+def capture_preview(camera: str):
+    return camera_frame(camera)
 
 
 @app.get("/api/visits")

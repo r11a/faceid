@@ -42,6 +42,8 @@ class RenameBody(BaseModel):
 
 def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path) -> FastAPI:
     app = FastAPI(title="FaceID")
+    capture_previews: dict[str, tuple[float, bytes]] = {}
+    capture_preview_lock = threading.Lock()
 
     # Optionales HTTP Basic Auth (config: faceid.auth.user/password). Als Middleware,
     # damit auch der /data-Static-Mount (Gesichtsbilder!) geschützt ist.
@@ -1279,6 +1281,24 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             "policy": "Required liveness blocks identity; RGB PAD is not a depth/IR guarantee.",
         }
 
+    @app.get("/api/intercom/{camera}/capture/preview")
+    def intercom_capture_preview(camera: str):
+        """Return only the most recent test frame, held briefly in memory."""
+        if camera not in _camera_names():
+            raise HTTPException(404, "Unknown camera")
+        with capture_preview_lock:
+            saved = capture_previews.get(camera)
+        if not saved or time.time() - saved[0] > 120:
+            raise HTTPException(404, "No recent camera test image")
+        return Response(
+            content=saved[1], media_type="image/jpeg",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     @app.post("/api/intercom/{camera}/capture")
     def test_intercom_capture(camera: str):
         if camera not in _camera_names():
@@ -1286,6 +1306,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         profile = processor.camera_profiles.get(camera)
         left, top, right, bottom = profile.get("roi", [0, 0, 1, 1])
         candidates, frame_count, w, h = [], 0, 0, 0
+        captured_frames = {}
         liveness_history = []
         for index in range(min(int(profile.get("burst_frames", 3)), 8)):
             if index:
@@ -1296,6 +1317,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 continue
             frame_count += 1
             h, w = image.shape[:2]
+            captured_frames[index] = image.copy()
             for face in engine.faces(image):
                 cx = float(face.bbox[0] + face.bbox[2]) / 2 / max(w, 1)
                 cy = float(face.bbox[1] + face.bbox[3]) / 2 / max(h, 1)
@@ -1345,11 +1367,54 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 if state == "spoof" else
                 "עדיין אין מספיק הוכחות חיוּת; הזיהוי לא יאושר לכניסה"
             )
+        guidance = []
+        if not best:
+            guidance.append("מקמו פנים מלאות בתוך התמונה והביטו למצלמה")
+        else:
+            if best["face_px"] < profile["min_face_px"]:
+                guidance.append(
+                    f"התקרבו למצלמה: נמדדו {best['face_px']}px ונדרשים לפחות "
+                    f"{profile['min_face_px']}px"
+                )
+            if best["sharpness"] < 0.45:
+                guidance.append("החזיקו את הראש יציב ונקו את עדשת המצלמה")
+            if best["illumination"] < 0.45:
+                guidance.append("הוסיפו אור מול הפנים, לא מאחוריהן")
+            if best["contrast"] < 0.30:
+                guidance.append("שפרו את התאורה כדי להפריד את הפנים מהרקע")
+            if best["frontal"] < 0.65:
+                guidance.append("הביטו ישר למצלמה והימנעו מהטיית הראש")
+            if best["detection"] < 0.70:
+                guidance.append("ודאו שהפנים גלויות ואינן מוסתרות")
+        if liveness_result.get("state") == "spoof":
+            guidance.insert(0, "הסירו תמונה או מסך מהמצלמה ונסו עם אדם אמיתי")
+        elif liveness_result.get("confirmed") and not guidance:
+            guidance.append("התמונה ברורה ובדיקת החיוּת עברה — אין צורך לשנות דבר")
+
+        preview_token = None
+        if best and best.get("frame") in captured_frames:
+            preview = captured_frames[best["frame"]]
+            h, w = preview.shape[:2]
+            encoded_ok, encoded = cv2.imencode(
+                ".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 88],
+            )
+            if encoded_ok:
+                with capture_preview_lock:
+                    capture_previews[camera] = (time.time(), encoded.tobytes())
+                    for old_camera, (saved_at, _) in list(capture_previews.items()):
+                        if time.time() - saved_at > 120:
+                            capture_previews.pop(old_camera, None)
+                preview_token = int(time.time() * 1000)
         return {
             "camera": camera, "width": w, "height": h, "profile": profile,
             "faces": candidates, "best": best, "frames_checked": frame_count,
             "state": state, "message": message,
             "liveness": liveness_result,
+            "guidance": guidance,
+            "preview_url": (
+                f"api/intercom/{camera}/capture/preview?_={preview_token}"
+                if preview_token is not None else None
+            ),
             "unlock_policy": "second_factor_required" if profile["require_second_factor"] else "face_only_blocked",
         }
 
