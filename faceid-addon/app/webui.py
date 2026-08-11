@@ -75,7 +75,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     @app.get("/media/{kind}/{item_path:path}")
     def media(kind: str, item_path: str):
         """Serve only gallery JPEGs; never expose embeddings, settings or backups."""
-        if kind not in {"persons", "unknowns", "ignored"}:
+        if kind not in {"persons", "unknowns", "ignored", "guests"}:
             raise HTTPException(404, "Unknown media collection")
         base = (data_dir / kind).resolve()
         target = (base / item_path).resolve()
@@ -604,7 +604,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         except tarfile.TarError:
             raise HTTPException(400, "Not a valid .tar.gz backup")
         members = tar.getmembers()
-        allowed_roots = {"persons", "ignored", "body", "system", "manifest.json"}
+        allowed_roots = {"persons", "ignored", "body", "guests", "system", "manifest.json"}
         for m in members:
             norm = Path(m.name)
             if (m.name.startswith("/") or ".." in norm.parts or
@@ -614,7 +614,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 raise HTTPException(400, "Executable body models are never accepted from backups; restore material and retrain")
         if not merge:
             write_backup_file(data_dir, data_dir / "backups" / "before-restore")
-            for sub in ("persons", "ignored", "body"):
+            for sub in ("persons", "ignored", "body", "guests"):
                 d = data_dir / sub
                 if d.exists():
                     for f in d.rglob("*"):
@@ -633,7 +633,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             if norm.parts[0] == "system":
                 if len(norm.parts) != 2 or norm.parts[1] not in {
                     "settings.json", "learning_runs.json", "frigate_sync.json",
-                    "camera_profiles.json", "access_control.json", "schema.json",
+                    "camera_profiles.json", "access_control.json", "guest_access.json",
+                    "site_map.json", "schema.json",
                     "audit.db"
                 }:
                     continue
@@ -1155,6 +1156,131 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             names.update(item["camera"] for item in processor.audit.system_report()["cameras"])
         names.update(processor.frigate.cameras())
         return sorted(name for name in names if name)
+
+    @app.get("/api/guests")
+    def guests():
+        service = getattr(processor, "guest_access", None)
+        if service is None:
+            raise HTTPException(503, "Guest access is unavailable")
+        return {
+            "guests": service.list(), "history": service.history(50),
+            "threshold": service.threshold, "margin": service.margin,
+            "safety": "A face match creates eligibility only. Liveness and a second factor are required before entry is authorized.",
+        }
+
+    @app.post("/api/guests")
+    async def create_guest(name: str, valid_from: float, valid_until: float,
+                           max_entries: int = 1, cameras: str = "", file: UploadFile = None):
+        service = getattr(processor, "guest_access", None)
+        if service is None:
+            raise HTTPException(503, "Guest access is unavailable")
+        if file is None:
+            raise HTTPException(400, "A clear guest photo is required")
+        raw = await file.read()
+        if len(raw) > 15_000_000:
+            raise HTTPException(413, "Photo is larger than 15 MB")
+        image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(400, "The uploaded file is not a readable image")
+        if max(image.shape[:2]) > 2400:
+            scale = 2400 / max(image.shape[:2]); image = cv2.resize(image, None, fx=scale, fy=scale)
+        face, image = find_face_padded(engine, image, min_px=100)
+        if face is None:
+            raise HTTPException(400, "No clear face of at least 100 pixels was found")
+        quality = measure_face_quality(image, face, min_face_px=100, min_quality=max(.4, processor.min_face_quality))
+        if not quality.usable:
+            raise HTTPException(400, "The face is not sharp, bright or frontal enough for temporary access")
+        selected = [item for item in cameras.split(",") if item]
+        unknown = set(selected) - set(_camera_names())
+        if unknown:
+            raise HTTPException(400, f"Unknown cameras: {', '.join(sorted(unknown))}")
+        try:
+            guest = service.create(
+                name=name, valid_from=valid_from, valid_until=valid_until,
+                max_entries=max_entries, allowed_cameras=selected,
+                crop=crop_face(image, face.bbox), embedding=face.normed_embedding,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True, "guest": guest, "quality": quality.to_dict()}
+
+    @app.post("/api/guests/{guest_id}/revoke")
+    def revoke_guest(guest_id: str):
+        try:
+            return {"ok": True, "guest": processor.guest_access.revoke(guest_id)}
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown guest") from exc
+
+    @app.delete("/api/guests/{guest_id}")
+    def delete_guest(guest_id: str):
+        try:
+            processor.guest_access.delete(guest_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown guest") from exc
+        return {"ok": True}
+
+    @app.post("/api/guests/{guest_id}/authorize")
+    def authorize_guest(guest_id: str, body: dict):
+        event_id = str(body.get("event_id") or "")
+        detail = processor.audit.event_detail(event_id) if processor.audit and event_id else None
+        pending = next((item for item in processor.guest_access.history(1000)
+                        if item.get("guest_id") == guest_id and item.get("event_id") == event_id), None)
+        guest = next((item for item in processor.guest_access.list() if item["id"] == guest_id), None)
+        if not detail or not pending or not guest:
+            raise HTTPException(400, "No matching server-verified guest recognition was found")
+        event = detail["event"]
+        if event.get("status") != "recognized" or event.get("person") != guest["name"]:
+            raise HTTPException(400, "The event is not a finalized recognition for this guest")
+        try:
+            return processor.guest_access.evaluate(
+                guest_id, camera=str(event.get("camera") or ""),
+                score=float(event.get("score") or 0),
+                runner_up_score=max(0.0, float(event.get("score") or 0) - float(event.get("margin") or 0)),
+                liveness_confirmed=event.get("liveness_status") == "live",
+                second_factor=bool(body.get("second_factor")),
+                event_id=event_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown guest") from exc
+
+    @app.get("/api/site-map")
+    def site_map(days: int = 7):
+        service = getattr(processor, "site_intelligence", None)
+        if service is None:
+            raise HTTPException(503, "Site intelligence is unavailable")
+        cameras = _camera_names()
+        visits = processor.visits.list(days=max(1, min(days, 30)), limit=50)
+        latest = {}
+        for visit in visits:
+            latest.setdefault(visit["person"], visit)
+        return {
+            "map": service.map(cameras),
+            "analytics": service.analytics(cameras=cameras, days=days),
+            "people": [{
+                "person": item["person"], "camera": item["last_camera"],
+                "last_seen": item["end_ts"], "open": item["open"],
+                "route": item["route"], "timeline": item.get("timeline", []),
+            } for item in latest.values()],
+        }
+
+    @app.post("/api/site-map")
+    def save_site_map(body: dict):
+        service = getattr(processor, "site_intelligence", None)
+        if service is None:
+            raise HTTPException(503, "Site intelligence is unavailable")
+        try:
+            updated = service.update(body, _camera_names())
+            graph = {camera: set() for camera in _camera_names()}
+            for left, right in updated.get("links", []):
+                graph.setdefault(left, set()).add(right)
+                graph.setdefault(right, set()).add(left)
+            if getattr(processor, "scenario_manager", None) is not None:
+                processor.scenario_manager.camera_graph = graph
+            if getattr(processor, "reid", None) is not None:
+                processor.reid.camera_graph = graph
+            return {"ok": True, "map": updated}
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/cameras/studio")
     def camera_studio(days: int = 7):

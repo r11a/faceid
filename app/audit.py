@@ -759,6 +759,17 @@ class AuditStore:
             "processing": counts.get("processing", 0),
         }
 
+    def traffic_events(self, *, after_ts: float, limit: int = 10000) -> list[dict]:
+        """Anonymous person-event facts for zone traffic analytics."""
+        with self._lock, self._connection() as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                "SELECT event_id, camera, start_ts, end_ts, status FROM events "
+                "WHERE start_ts>=? AND status!='processing' ORDER BY start_ts LIMIT ?",
+                (float(after_ts), max(1, min(int(limit), 100000))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def labeled_events(self):
         with self._lock, self._connection() as con:
             con.row_factory = sqlite3.Row

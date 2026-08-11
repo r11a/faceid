@@ -1,6 +1,11 @@
 # FaceID — self-hosted face recognition for Frigate + Home Assistant
 
-## FaceID 5.0: a product workflow for homes and offices
+## FaceID 5.1: a product workflow for homes and offices
+
+5.1 adds temporary guest passes with strict liveness/second-factor boundaries, a
+drag-and-drop camera site map, anonymous Frigate person-traffic analytics and a visit
+player that plays recognition clips in camera order. Map locations are explicitly
+estimated, and face recognition alone never authorizes a door unlock.
 
 Version 5 adds a dedicated **Users** area for normal day-to-day operation. Create a
 person, upload 5–10 photos, see a plain-language quality result for each photo, rename

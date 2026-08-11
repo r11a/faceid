@@ -73,6 +73,8 @@ faceid:
   suggest_threshold: 0.40
   set_sub_label: false                 # opt-in: write confirmed names back to Frigate events
   access_control_enabled: false        # 5.0 role foundation; enable only after assignments are configured
+  guest_match_threshold: 0.62          # stricter than the resident recognition default
+  guest_match_margin: 0.12             # guest must clearly lead every other identity
   presence_window: 120                 # camera sensor shows everyone seen within this window (s)
   calibration_target_far: 0.01         # maximum false-accept rate for recommendations
   scenario_window: 90                  # seconds for a visit to continue across cameras

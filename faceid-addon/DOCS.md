@@ -32,7 +32,13 @@ Full documentation: https://github.com/r11a/faceid
 5. Open the **FaceID** panel in the sidebar. Recommended first step: run the backfill
    (see main README) or just wait — every detected unknown face shows up for review.
 
-## First 5.0 check
+## First 5.1 check
+
+Open **Guests** to create a time/camera/count-limited temporary pass, and open
+**Investigation → Site map** to position cameras and connect plausible transitions.
+From **Visits**, use **Play clips by route** to review the matching Frigate clips in
+chronological order. A guest face match is only eligibility evidence: liveness and a
+second factor remain mandatory before any door-control automation acts.
 
 1. Open **Daily operation → Users**, create a test person and add 5–10 clear photos.
    Rejected photos show the reason instead of silently weakening the gallery.

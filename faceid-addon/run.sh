@@ -112,6 +112,8 @@ faceid:
   ai_embedding_model: $(cfg '.ai_embedding_model')
   set_sub_label: $(cfg '.set_sub_label')
   access_control_enabled: $(cfg '.access_control_enabled // false')
+  guest_match_threshold: $(cfg '.guest_match_threshold // 0.62')
+  guest_match_margin: $(cfg '.guest_match_margin // 0.12')
   min_face_px: 48
   det_size: 640
   max_attempts: 6
