@@ -34,7 +34,7 @@ class VisitService:
                     "end_ts": float(event.get("end_ts") or event["start_ts"]),
                     "first_camera": event["camera"],
                     "last_camera": event["camera"],
-                    "route": [], "events": [], "scores": [],
+                    "route": [], "events": [], "timeline": [], "scores": [],
                     "arrival": "confirmed" if starts_entry else "observed",
                     "departure": "not_observed",
                 }
@@ -48,6 +48,10 @@ class VisitService:
             if not previous["route"] or previous["route"][-1] != event["camera"]:
                 previous["route"].append(event["camera"])
             previous["events"].append(event["event_id"])
+            previous["timeline"].append({
+                "event_id": event["event_id"], "camera": event["camera"],
+                "start_ts": float(event["start_ts"]),
+            })
             previous["scores"].append(float(event.get("score") or 0))
             if role in {"exit", "entry_exit"}:
                 previous["departure"] = "confirmed"

@@ -3,6 +3,25 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.1.0 — 2026-08-11
+
+- **Temporary Guest Access:** create a guest from one quality-checked photo, limit
+  recognition to a date/time window, selected cameras and an entry count, then revoke
+  or delete it immediately from a friendly UI. Guest matching uses a stricter score and
+  margin; liveness plus a second factor are mandatory and FaceID never unlocks alone.
+- **Site map and estimated routes:** drag cameras onto a responsive site canvas, connect
+  plausible transitions and see each person's last observed camera. Saved links also
+  constrain live scenario and appearance-ReID paths; the UI clearly labels locations as
+  estimates rather than GPS positions.
+- **Anonymous traffic analytics:** camera/zone traffic share, peak hour and common
+  transitions are calculated from Frigate person events without using identities or
+  face images in the aggregate calculations.
+- **Route clip playlist:** every visit can play its Frigate recognition clips in
+  chronological camera order. The player shows route progress, advances automatically
+  and skips expired/missing clips without stopping the remaining journey.
+- **Operational backup:** guest templates, guest audit decisions and the site map are
+  included in safe backups and restores.
+
 ## 5.0.4 — 2026-08-11
 
 - **Camera participation from the UI:** every Frigate camera can now be enabled or

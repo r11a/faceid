@@ -28,6 +28,8 @@ from .camera_profiles import CameraProfiles
 from .visits import VisitService
 from .liveness import LivenessDetector
 from .access_control import AccessControl
+from .guest_access import GuestAccess
+from .site_intelligence import SiteIntelligence
 from .migrations import run_migrations
 
 BASE = Path(__file__).resolve().parent.parent
@@ -150,6 +152,14 @@ def main():
     processor.access_control = AccessControl(
         data_dir / "access_control.json",
         enabled=bool(f.get("access_control_enabled", False)),
+    )
+    processor.guest_access = GuestAccess(
+        data_dir,
+        threshold=float(f.get("guest_match_threshold", max(.62, processor.match_thr + .08))),
+        margin=float(f.get("guest_match_margin", max(.12, processor.match_margin))),
+    )
+    processor.site_intelligence = SiteIntelligence(
+        data_dir / "site_map.json", audit, processor.camera_profiles, processor.visits,
     )
     processor.liveness = LivenessDetector(
         model_path=str(f.get("liveness_model_path") or "/opt/faceid/models/liveness.onnx"),

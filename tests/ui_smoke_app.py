@@ -47,7 +47,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"version": "5.0.3", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
+    return {"version": "5.1.0", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
                        "requested_mode": "auto", "fallbacks": 1},
@@ -133,8 +133,35 @@ def visits():
     return {"camera_roles_configured": True, "visits": [{"person": "Ronen",
         "start_ts": 1786370400, "end_ts": 1786370820, "first_camera": "Front door",
         "last_camera": "Hallway", "route": ["Front door", "Hallway"], "events": ["1", "2"],
+        "timeline": [{"event_id": "1", "camera": "Front door", "start_ts": 1786370400},
+                     {"event_id": "2", "camera": "Hallway", "start_ts": 1786370820}],
         "event_count": 2, "avg_score": .82, "duration_seconds": 420, "open": False,
         "arrival": "confirmed", "departure": "not_observed"}]}
+
+
+@app.get("/api/guests")
+def guests():
+    return {"threshold": .62, "margin": .12, "history": [], "guests": [{
+        "id": "guest1", "name": "Delivery", "photo": "api/cameras/Front%20door/frame",
+        "valid_from": 1786370400, "valid_until": 1786456800, "max_entries": 1,
+        "entries_used": 0, "allowed_cameras": ["Front door"], "status": "active",
+    }]}
+
+
+@app.get("/api/site-map")
+def site_map(days: int = 7):
+    return {"map": {"title": "Office", "notice": "Estimated locations, not GPS.",
+        "links": [["Front door", "Hallway"]], "cameras": [
+            {"camera": "Front door", "label": "Entrance", "x": 24, "y": 45,
+             "role": "intercom", "enabled": True},
+            {"camera": "Hallway", "label": "Hallway", "x": 72, "y": 45,
+             "role": "observation", "enabled": False}]},
+        "people": [{"person": "Ronen", "camera": "Hallway", "last_seen": 1786370820,
+                    "open": False, "route": ["Front door", "Hallway"]}],
+        "analytics": {"days": days, "total_person_events": 134, "peak_hour": 18,
+            "cameras": [{"camera": "Front door", "events": 80, "share": .597},
+                        {"camera": "Hallway", "events": 54, "share": .403}],
+            "hours": [], "transitions": [{"from": "Front door", "to": "Hallway", "count": 27}]}}
 
 
 if __name__ == "__main__":

@@ -481,7 +481,19 @@ class EventProcessor:
             if st["liveness"].get("confirmed"):
                 st["liveness_blocked"] = False
         emb = face.normed_embedding
-        candidates = self.gallery.match_candidates(emb, limit=2)
+        candidates = self.gallery.match_candidates(emb, limit=3)
+        guest_access = getattr(self, "guest_access", None)
+        if guest_access is not None:
+            guest_candidates = guest_access.candidates(
+                emb, camera=st["camera"], now=st.get("start_time"), limit=2,
+            )
+            combined = sorted([*candidates, *guest_candidates], key=lambda item: item[2], reverse=True)
+            if combined and str(combined[0][0]).startswith("guest:"):
+                lead = float(combined[0][2]) - float(combined[1][2] if len(combined) > 1 else 0)
+                if float(combined[0][2]) >= guest_access.threshold and lead >= guest_access.margin:
+                    candidates = combined[:2]
+                else:
+                    candidates = [item for item in combined if not str(item[0]).startswith("guest:")][:2]
         slug, name, score = candidates[0] if candidates else (None, None, 0.0)
         _, runner_up, runner_up_score = (
             candidates[1] if len(candidates) > 1 else (None, None, 0.0)
@@ -545,6 +557,21 @@ class EventProcessor:
             st["best_score"], st["best_person"] = decision.score, decision.person
             st["done"] = True
             st["final_decision"] = decision
+            if decision.slug and str(decision.slug).startswith("guest:"):
+                guest_id = str(decision.slug).split(":", 1)[1]
+                st["guest"] = {"id": guest_id, "name": decision.person}
+                access_result = guest_access.evaluate(
+                    guest_id, camera=st["camera"], score=decision.score,
+                    runner_up_score=decision.runner_up_score,
+                    liveness_confirmed=bool((st.get("liveness") or {}).get("confirmed")),
+                    second_factor=False, event_id=eid,
+                )
+                st["guest_access"] = access_result
+                if self.client:
+                    self.client.publish(
+                        f"{self.prefix}/v1/guest_access",
+                        json.dumps(access_result, ensure_ascii=False), retain=False,
+                    )
             self._publish_recognition(
                 eid, st, decision.person, decision.score, decision=decision
             )
@@ -818,6 +845,8 @@ class EventProcessor:
             "scenario": scenario,
             "body": st.get("body"),
             "liveness": st.get("liveness"),
+            "guest": st.get("guest"),
+            "guest_access": st.get("guest_access"),
         }
         if self.client and st.get("body"):
             self.client.publish(
