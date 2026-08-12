@@ -14,6 +14,11 @@ class AuditStore:
         self.evidence_dir = self.path.parent / "audit_images"
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self.evidence_known_days = 30
+        self.evidence_unknown_days = 14
+        self.evidence_known_max = 300
+        self.evidence_unknown_max = 300
+        self._evidence_since_prune = 0
         self._init_db()
         self.prune(retention_days)
 
@@ -38,6 +43,13 @@ class AuditStore:
             temporary = target.with_suffix(".tmp")
             temporary.write_bytes(encoded.tobytes())
             temporary.replace(target)
+            self._evidence_since_prune += 1
+            if self._evidence_since_prune >= 25:
+                self._evidence_since_prune = 0
+                self.prune_evidence(
+                    self.evidence_known_days, self.evidence_unknown_days,
+                    self.evidence_known_max, self.evidence_unknown_max,
+                )
             return target
         except (OSError, ValueError):
             return None
@@ -145,6 +157,7 @@ class AuditStore:
                 ("ground_truth_by", "TEXT"),
                 ("liveness_status", "TEXT"),
                 ("liveness_score", "REAL"),
+                ("occurrence", "TEXT"),
             ):
                 self._ensure_column(con, "events", column, declaration)
 
@@ -246,12 +259,13 @@ class AuditStore:
         score: float = 0.0,
         margin: float = 0.0,
         confirmations: int = 0,
+        occurrence: str | None = None,
     ):
         with self._lock, self._connection() as con:
             con.execute(
                 """
                 UPDATE events SET end_ts=?, status=?, person=?, score=?, margin=?,
-                    confirmations=?, updated_ts=?
+                    confirmations=?, occurrence=?, updated_ts=?
                 WHERE event_id=?
                 """,
                 (
@@ -261,6 +275,7 @@ class AuditStore:
                     score,
                     margin,
                     confirmations,
+                    occurrence,
                     time.time(),
                     event_id,
                 ),
@@ -303,18 +318,25 @@ class AuditStore:
             except OSError:
                 pass
 
-    def recent(self, limit: int = 100, status: str | None = None):
+    def recent(
+        self, limit: int = 100, status: str | None = None,
+        include_presence_updates: bool = False,
+    ):
         sql = """
             SELECT event_id, camera, start_ts, end_ts, status, person, score,
                    margin, confirmations, updated_ts, ground_truth, scenario_id,
                    ai_description, ai_tags, probable_person, probable_score,
-                   liveness_status, liveness_score
+                   liveness_status, liveness_score, occurrence
             FROM events
         """
-        params = []
+        clauses, params = [], []
+        if not include_presence_updates:
+            clauses.append("COALESCE(occurrence,'')!='presence_update'")
         if status:
-            sql += " WHERE status=?"
+            clauses.append("status=?")
             params.append(status)
+        if clauses:
+            sql += f" WHERE {' AND '.join(clauses)}"
         sql += " ORDER BY updated_ts DESC LIMIT ?"
         params.append(max(1, min(int(limit), 500)))
         with self._lock, self._connection() as con:
@@ -326,8 +348,11 @@ class AuditStore:
         status: str | None = None, person: str | None = None,
         camera: str | None = None, date_from: float | None = None,
         date_to: float | None = None, query: str | None = None,
+        include_presence_updates: bool = False,
     ):
         clauses, params = [], []
+        if not include_presence_updates:
+            clauses.append("COALESCE(occurrence,'')!='presence_update'")
         if status:
             clauses.append("status=?")
             params.append(status)
@@ -357,7 +382,8 @@ class AuditStore:
             event_id, camera, start_ts, end_ts, status, person, score, margin,
             confirmations, updated_ts, ground_truth, ground_truth_ts,
             ground_truth_by, scenario_id, ai_description, ai_tags,
-            probable_person, probable_score, liveness_status, liveness_score
+            probable_person, probable_score, liveness_status, liveness_score,
+            occurrence
         """
         with self._lock, self._connection() as con:
             con.row_factory = sqlite3.Row
@@ -507,6 +533,7 @@ class AuditStore:
             con.row_factory = sqlite3.Row
             recognition_times = con.execute(
                 "SELECT start_ts FROM events WHERE status='recognized' "
+                "AND COALESCE(occurrence,'')!='presence_update' "
                 "AND person=? AND start_ts IS NOT NULL",
                 (person,),
             ).fetchall()
@@ -561,6 +588,7 @@ class AuditStore:
                   SUM(CASE WHEN status IN ('unknown','ambiguous') THEN 1 ELSE 0 END) review,
                   AVG(CASE WHEN score>0 THEN score END) avg_score
                 FROM events WHERE status!='processing' AND start_ts>=?
+                  AND COALESCE(occurrence,'')!='presence_update'
                 GROUP BY camera ORDER BY events DESC
                 """, (time.time() - 7 * 86400,)
             ).fetchall()
@@ -582,7 +610,8 @@ class AuditStore:
         self, *, person: str | None = None, after_ts: float = 0
     ) -> list[dict]:
         """Chronological recognized events used to derive visits, not raw frame counts."""
-        where = ["status='recognized'", "person IS NOT NULL", "start_ts>=?"]
+        where = ["status='recognized'", "person IS NOT NULL", "start_ts>=?",
+                 "COALESCE(occurrence,'')!='presence_update'"]
         params: list = [float(after_ts)]
         if person:
             where.append("person=?")
@@ -620,6 +649,7 @@ class AuditStore:
                   AVG(CASE WHEN o.quality>0 THEN o.quality END) avg_quality
                 FROM events e LEFT JOIN observation_summary o ON o.event_id=e.event_id
                 WHERE e.status!='processing' AND e.start_ts>=?
+                  AND COALESCE(e.occurrence,'')!='presence_update'
                 GROUP BY e.camera ORDER BY events DESC
                 """, (cutoff,)
             ).fetchall()
@@ -649,21 +679,34 @@ class AuditStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def prune_evidence(self, known_days: int, unknown_days: int) -> int:
-        """Apply separate image retention without deleting recognition metadata."""
+    def prune_evidence(
+        self, known_days: int, unknown_days: int,
+        known_max: int = 300, unknown_max: int = 300,
+    ) -> int:
+        """Bound evidence by age and count without deleting event metadata."""
+        self.evidence_known_days = int(known_days)
+        self.evidence_unknown_days = int(unknown_days)
+        self.evidence_known_max = max(0, int(known_max))
+        self.evidence_unknown_max = max(0, int(unknown_max))
         now = time.time()
         removed = 0
         with self._lock, self._connection() as con:
             rows = con.execute(
                 "SELECT event_id, status, updated_ts FROM events "
-                "WHERE status!='processing'"
+                "WHERE status!='processing' ORDER BY updated_ts DESC"
             ).fetchall()
+        kept = {"known": 0, "unknown": 0}
         for event_id, status, updated_ts in rows:
-            days = known_days if status == "recognized" else unknown_days
-            if days <= 0 or float(updated_ts or now) >= now - days * 86400:
-                continue
+            kind = "known" if status == "recognized" else "unknown"
+            days = known_days if kind == "known" else unknown_days
+            maximum = self.evidence_known_max if kind == "known" else self.evidence_unknown_max
             path = self.evidence_path(event_id)
-            if path.is_file():
+            if not path.is_file():
+                continue
+            kept[kind] += 1
+            expired = days > 0 and float(updated_ts or now) < now - days * 86400
+            over_cap = maximum == 0 or kept[kind] > maximum
+            if expired or over_cap:
                 try:
                     path.unlink()
                     removed += 1
@@ -703,6 +746,7 @@ class AuditStore:
                        SUM(CASE WHEN start_ts>=? THEN 1 ELSE 0 END) AS last_30_days
                 FROM events
                 WHERE status='recognized' AND person IS NOT NULL
+                  AND COALESCE(occurrence,'')!='presence_update'
                 GROUP BY person
                 """,
                 (now - 7 * 86400, now - 30 * 86400),
@@ -722,6 +766,7 @@ class AuditStore:
                     """
                     SELECT camera, COUNT(*) AS count FROM events
                     WHERE status='recognized' AND person=?
+                      AND COALESCE(occurrence,'')!='presence_update'
                     GROUP BY camera ORDER BY count DESC, camera
                     """,
                     (row["person"],),
@@ -745,6 +790,7 @@ class AuditStore:
                 SELECT status, COUNT(*) AS count FROM events
                 WHERE date(start_ts, 'unixepoch', 'localtime')
                       = date('now', 'localtime')
+                  AND COALESCE(occurrence,'')!='presence_update'
                 GROUP BY status
                 """
             ).fetchall()
@@ -765,7 +811,8 @@ class AuditStore:
             con.row_factory = sqlite3.Row
             rows = con.execute(
                 "SELECT event_id, camera, start_ts, end_ts, status FROM events "
-                "WHERE start_ts>=? AND status!='processing' ORDER BY start_ts LIMIT ?",
+                "WHERE start_ts>=? AND status!='processing' "
+                "AND COALESCE(occurrence,'')!='presence_update' ORDER BY start_ts LIMIT ?",
                 (float(after_ts), max(1, min(int(limit), 100000))),
             ).fetchall()
         return [dict(row) for row in rows]

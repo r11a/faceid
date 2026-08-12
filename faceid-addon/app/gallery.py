@@ -68,6 +68,12 @@ class Gallery:
         self.max_per_person = int(max_per_person)  # 0 = unbegrenzt
         self.trimmed_keep = 10  # wie viele beiseitegelegte Fotos je Person aufgehoben werden
         self.dedupe_threshold = 0.65  # ab hier gilt ein Foto als Duplikat (Hover-Highlight + Dedup)
+        # The review queue is an inbox, not a second photo archive. Recognition
+        # events remain in AuditStore even when their temporary review crop is pruned.
+        self.review_queue_max_total = 200
+        self.review_queue_max_per_cluster = 12
+        self.review_queue_retention_days = 14
+        self.review_queue_dedupe_days = 7
         self._lock = threading.Lock()
         self._cache = {}  # slug -> {"name":..., "emb": np.ndarray, "files": [...]}
         self._ign_emb = np.zeros((0, 512), dtype=np.float32)
@@ -752,7 +758,7 @@ class Gallery:
 
     def save_unknown(self, crop_bgr: np.ndarray, embedding: np.ndarray, meta: dict,
                      dedupe_sim: float = 0.75, full_bgr: np.ndarray | None = None):
-        """Unbekanntes Gesicht ablegen; sehr ähnliche jüngste Unknowns werden übersprungen."""
+        """Store one useful review sample while the durable event stays in AuditStore."""
         with self._lock:
             now = time.time()
             for jf in self.unknown_dir.glob("*.json"):
@@ -760,7 +766,7 @@ class Gallery:
                     m = json.loads(jf.read_text())
                 except (json.JSONDecodeError, OSError):
                     continue
-                if now - m.get("ts", 0) < 3600:
+                if now - m.get("ts", 0) < self.review_queue_dedupe_days * 86400:
                     sim = float(np.dot(np.array(m["embedding"], dtype=np.float32), embedding))
                     if sim > dedupe_sim:
                         return None
@@ -770,7 +776,94 @@ class Gallery:
                 cv2.imwrite(str(self.unknown_dir / f"{uid}_full.jpg"), full_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
             meta = dict(meta, ts=now, embedding=[round(float(v), 6) for v in embedding])
             _atomic_write_json(self.unknown_dir / f"{uid}.json", meta)
-            return uid
+        self.prune_unknown_queue()
+        return uid
+
+    def _delete_unknown_files(self, uid: str):
+        (self.unknown_dir / f"{uid}.json").unlink(missing_ok=True)
+        (self.unknown_dir / f"{uid}.jpg").unlink(missing_ok=True)
+        (self.unknown_dir / f"{uid}_full.jpg").unlink(missing_ok=True)
+
+    def prune_unknown_queue(self) -> dict:
+        """Bound the review inbox by age, representative cluster and global size.
+
+        Only temporary review crops are removed. Audit events, scores, timestamps,
+        evidence retention and statistics are deliberately untouched.
+        """
+        with self._lock:
+            now = time.time()
+            entries = []
+            removed = {"expired": 0, "duplicate_event": 0, "cluster_cap": 0, "global_cap": 0}
+            seen_events = set()
+            for jf in sorted(self.unknown_dir.glob("*.json"), reverse=True):
+                try:
+                    meta = json.loads(jf.read_text(encoding="utf-8"))
+                    emb = np.array(meta["embedding"], dtype=np.float32)
+                except (json.JSONDecodeError, OSError, KeyError, ValueError):
+                    self._delete_unknown_files(jf.stem)
+                    removed["expired"] += 1
+                    continue
+                ts = float(meta.get("ts") or 0)
+                if self.review_queue_retention_days > 0 and now - ts > self.review_queue_retention_days * 86400:
+                    self._delete_unknown_files(jf.stem); removed["expired"] += 1; continue
+                event_id = str(meta.get("event_id") or "")
+                if event_id and event_id in seen_events:
+                    self._delete_unknown_files(jf.stem); removed["duplicate_event"] += 1; continue
+                if event_id:
+                    seen_events.add(event_id)
+                entries.append({"id": jf.stem, "meta": meta, "emb": emb, "ts": ts})
+
+            # Known-person suggestions are naturally one task. Remaining faces are
+            # greedily grouped by cosine similarity so every identity keeps a small,
+            # varied set instead of one image per hour forever.
+            groups: list[list[dict]] = []
+            known: dict[str, list[dict]] = {}
+            unknown: list[dict] = []
+            for item in entries:
+                guess = str(item["meta"].get("guess") or "").strip()
+                if guess:
+                    known.setdefault(guess.casefold(), []).append(item)
+                else:
+                    unknown.append(item)
+            groups.extend(known.values())
+            unknown_groups: list[list[dict]] = []
+            for item in unknown:
+                target = next((group for group in unknown_groups
+                               if float(np.dot(group[0]["emb"], item["emb"])) >= 0.78), None)
+                if target is None:
+                    unknown_groups.append([item])
+                else:
+                    target.append(item)
+            groups.extend(unknown_groups)
+
+            kept_groups: list[list[dict]] = []
+            for group in groups:
+                group.sort(key=lambda row: row["ts"], reverse=True)
+                keep = group[:max(1, self.review_queue_max_per_cluster)]
+                kept_groups.append(keep)
+                for item in group[len(keep):]:
+                    self._delete_unknown_files(item["id"]); removed["cluster_cap"] += 1
+
+            # Round-robin across identities prevents a busy doorway or one resident
+            # from consuming the complete queue.
+            globally_kept = []
+            for index in range(max((len(group) for group in kept_groups), default=0)):
+                for group in kept_groups:
+                    if index < len(group):
+                        globally_kept.append(group[index])
+            for item in globally_kept[max(1, self.review_queue_max_total):]:
+                self._delete_unknown_files(item["id"]); removed["global_cap"] += 1
+            return {
+                **removed,
+                "removed": sum(removed.values()),
+                "remaining": min(len(globally_kept), max(1, self.review_queue_max_total)),
+                "policy": {
+                    "max_total": max(1, self.review_queue_max_total),
+                    "max_per_identity": max(1, self.review_queue_max_per_cluster),
+                    "retention_days": max(1, self.review_queue_retention_days),
+                    "dedupe_days": max(1, self.review_queue_dedupe_days),
+                },
+            }
 
     def unknowns(self):
         out = []
@@ -826,6 +919,4 @@ class Gallery:
             _atomic_write_json(jf, m)
 
     def discard_unknown(self, uid: str):
-        (self.unknown_dir / f"{uid}.json").unlink(missing_ok=True)
-        (self.unknown_dir / f"{uid}.jpg").unlink(missing_ok=True)
-        (self.unknown_dir / f"{uid}_full.jpg").unlink(missing_ok=True)
+        self._delete_unknown_files(uid)

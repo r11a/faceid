@@ -3,6 +3,24 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.2.1 — 2026-08-12
+
+- **Bounded review inbox:** the verification screen keeps at most 200 representative
+  crops, 12 per likely identity and 14 days. Existing oversized queues are reduced
+  automatically on startup without deleting event metadata or investigation history.
+- **Verify without polluting enrollment:** confirming a known person now labels and
+  closes all related tasks without copying every crop into the person's reference
+  gallery. Adding a training image is a separate, explicit action capped at three.
+- **Visit-aware recognition:** the first sighting is an arrival, a move to another
+  camera is a transition and continuing visibility on the same camera is a quiet
+  presence update. Quiet updates refresh HA presence/last-seen state but do not create
+  duplicate notifications, automations, AI jobs, body-training material or statistics.
+- **Hard evidence limits:** investigation images are capped at 300 known and 300 other
+  events, decoded-frame cache at 25 events and optional AI grids at 100. Event time,
+  score and decision metadata remain after transient imagery is removed.
+- **Friendlier review UI:** explains the automatic limits, uses clear primary actions,
+  moves destructive options behind disclosure and provides manual cleanup feedback.
+
 ## 5.2.0 — 2026-08-12
 
 - **Five stable product areas:** Home, Events, People, Cameras and Management replace

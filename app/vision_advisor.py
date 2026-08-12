@@ -40,6 +40,12 @@ class VisionAdvisor:
         safe = self.frames.media_store._path(event_id).stem
         path = self.audit_dir / f"{safe}.jpg"
         cv2.imwrite(str(path), grid, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        grids = sorted(
+            self.audit_dir.glob("*.jpg"), key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        for old in grids[100:]:
+            old.unlink(missing_ok=True)
         return path
 
     def inspect(self, event_id: str, candidates: list[str]) -> dict:

@@ -283,7 +283,7 @@ main{padding-top:18px}.mobile-more-label{display:none}
 <dialog id="videoOverlay" class="video-overlay" onclick="if(event.target===this)closeEventVideo()"><div class="video-panel" onclick="event.stopPropagation()"><button class="ghost video-close" onclick="closeEventVideo()">✕ סגור</button><video id="eventVideo" controls playsinline preload="metadata"></video><div id="videoMessage" class="stat" style="display:none;padding:18px;text-align:center"></div></div></dialog>
 
 <script>
-const UI_VERSION='5.2.0';
+const UI_VERSION='5.2.1';
 const $=s=>document.querySelector(s), main=$('#main');
 const SECTION_META={
   home:{label:'בית',description:'תמונת מצב, משימות ופעולות מהירות',defaultTab:'dashboard'},
@@ -617,7 +617,7 @@ async function startBackfill(){
   render();
 }
 async function renderUnknowns(){
-  const [clusters,bf]=await Promise.all([j('api/unknowns'),j('api/backfill')]);
+  const [clusters,bf,policy]=await Promise.all([j('api/unknowns'),j('api/backfill'),j('api/unknowns/policy')]);
   if(tab!=='unknowns')return;
   if(bf.running&&tab==='unknowns')setTimeout(()=>{if(tab==='unknowns')render()},4000);
   if(!clusters.length){
@@ -642,11 +642,11 @@ async function renderUnknowns(){
   window._sugg=sugg; window._clusters=rest; window._n2s=n2s;
 
   let html=`<div class="dashboard" dir="rtl"><div class="welcome-card"><div><span class="eyebrow">דורש את תשומת לבך</span>
-    <h3>${clusters.reduce((n,c)=>n+c.length,0)} תמונות ממתינות לזיהוי</h3>
-    <p>בחרו שם קיים, כתבו שם חדש או העבירו אדם קבוע לרשימת ההתעלמות. לחיצה על תמונה מסמנת רק אותה.</p></div></div>
+    <h3>${clusters.reduce((n,c)=>n+c.length,0)} דוגמאות מייצגות לבדיקה</h3>
+    <p>זהו תור משימות, לא ארכיון תמונות. המערכת מסירה כפילויות לבד ושומרת לכל היותר ${policy.max_per_identity} דוגמאות לכל זהות ו־${policy.max_total} בסך הכול. גם תמונות התחקור מוגבלות ל־${policy.evidence_max_total}; פרטי האירועים והציונים נשארים זמינים בלי לשמור תמונה לכל זיהוי.</p></div></div>
     ${backfillRow(bf)}<div class="row">
-    <button class="act" title="שיוך אוטומטי רק להצעות שעברו את סף הזיהוי" onclick="autoAssign()">אישור הצעות בטוחות</button>
-    <span class="stat">ישויכו רק פנים שעברו את סף הביטחון הנוכחי</span>
+    <button class="ghost" title="הפעלת ניקוי כפילויות ומגבלות התור עכשיו" onclick="maintainUnknownQueue(this)">נקה וארגן עכשיו</button>
+    <span class="stat">אישור זהות סוגר את המשימות בלי להעמיס תמונות נוספות על גלריית האדם.</span>
   </div>`;
 
   // --- Vorschlags-Gruppen ---
@@ -659,15 +659,15 @@ async function renderUnknowns(){
         <span class="stat">${g.items.length} תמונות · ביטחון ממוצע ${avg}%</span>
         <span style="flex:1"></span>
         <select id="ssel${gi}" title="assign to a different person instead">${personOptions(g.slug)}</select>
-        <button class="act" title="שיוך כל התמונות בקבוצה" onclick="assignSuggestion(${gi})">אישור הכול</button>
-        <button class="ghost" style="color:var(--warn);border-color:var(--warn)" title="לא להתריע ולא להציג פנים אלה שוב" onclick="ignoreSuggestion(${gi})">התעלמות</button>
+        <button class="act" title="אימות האירועים וסגירת המשימות בלי להוסיף תמונות לגלריה" onclick="resolveSuggestion(${gi})">כן, זה ${esc(g.name)}</button>
+        <button class="ghost" title="הוסף רק תמונה טובה אחת כנקודת ייחוס נוספת" onclick="assignSuggestion(${gi})">הוסף תמונת אימון אחת</button>
       </div>
       <div class="grid">${g.items.map(u=>`
-        <div class="tile">
+        <div class="tile" data-id="${u.id}" title="לחיצה בוחרת תמונת אימון מסוימת" onclick="this.classList.toggle('sel')">
           <img src="media/unknowns/${u.id}.jpg" loading="lazy">
           <span class="score">${(u.guess_score*100|0)}% · ${fmtWhen(u)}</span>
-          ${u.full_url?`<button class="z" aria-label="הגדל תמונת אירוע" title="הגדל תמונת אירוע" onclick="showFull('${u.full_url}','${esc(u.camera||'')} · ${fmtWhen(u)}','media/unknowns/${u.id}.jpg')">הגדל</button>`:''}
-          <button class="x" aria-label="הסר מהצעה זו" title="אלה אינם הפנים של ${esc(g.name)} — הוצא אותם מהקבוצה" onclick="rejectSuggestion('${u.id}')">הסר</button>
+          ${u.full_url?`<button class="z" aria-label="הגדל תמונת אירוע" title="הגדל תמונת אירוע" onclick="event.stopPropagation();showFull('${u.full_url}','${esc(u.camera||'')} · ${fmtWhen(u)}','media/unknowns/${u.id}.jpg')">הגדל</button>`:''}
+          <button class="x" aria-label="הסר מהצעה זו" title="אלה אינם הפנים של ${esc(g.name)} — הוצא אותם מהקבוצה" onclick="event.stopPropagation();rejectSuggestion('${u.id}')">הסר</button>
         </div>`).join('')}
       </div>
     </div>`;}).join('');
@@ -684,9 +684,9 @@ async function renderUnknowns(){
         <span style="flex:1"></span>
         <select id="sel${i}" title="שיוך לאדם קיים"><option value="">— בחירת אדם —</option>${personOptions(gslug)}</select>
         <input id="new${i}" placeholder="…או שם חדש" size="14" title="יצירת אדם חדש בשם זה">
-        <button class="act" title="שמירת התמונות המסומנות אצל האדם שנבחר" onclick="assignCluster(${i})">שייך תמונות לאדם שנבחר</button>
-        <button class="ghost" style="color:var(--warn);border-color:var(--warn)" onclick="ignoreCluster(${i})" title="לא להתריע ולא להציג פנים אלה שוב">העבר לרשימת התעלמות</button>
-        <button class="ghost" title="מחיקת התמונות המסומנות שאינן שימושיות" onclick="discardCluster(${i})">מחק תמונות לא שימושיות</button>
+        <button class="act" title="אמת את כל האירועים בקבוצה בלי להוסיף תמונות אימון" onclick="resolveCluster(${i})">אמת זהות וסגור משימות</button>
+        <button class="ghost" title="לאדם חדש נשמרות עד שלוש דוגמאות מסומנות בלבד" onclick="assignCluster(${i})">צור אדם חדש / הוסף דוגמאות</button>
+        <details><summary>פעולות נוספות</summary><button class="ghost" style="color:var(--warn);border-color:var(--warn)" onclick="ignoreCluster(${i})" title="מיועד רק לאדם שאין לזהות או להתריע עליו בעתיד">אל תציג אדם זה שוב</button><button class="ghost" title="סגירת המשימות ללא שיוך" onclick="discardCluster(${i})">סגור ללא זיהוי</button></details>
       </div>
       <div class="grid">${c.map(u=>`
         <div class="tile" data-id="${u.id}" title="click to select — actions then apply to the selection only" onclick="this.classList.toggle('sel')">
@@ -701,10 +701,24 @@ async function renderUnknowns(){
 async function assignSuggestion(gi){
   const g=window._sugg[gi]; if(!g)return;
   const slug=$(`#ssel${gi}`).value||g.slug;
-  const ids=g.items.map(it=>it.id).filter(id=>!window._excludedIds.has(id));
+  const box=document.querySelector(`.cluster[data-sg="${gi}"]`);
+  const selected=[...box.querySelectorAll('.tile.sel')].map(t=>t.dataset.id);
+  const best=[...g.items].filter(it=>!window._excludedIds.has(it.id)).sort((a,b)=>(b.guess_score||0)-(a.guess_score||0))[0];
+  const ids=selected.length?selected.slice(0,3):(best?[best.id]:[]);
   if(!ids.length)return toast('Nothing to assign');
   const r=await j('api/unknowns/assign',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,person:slug})});
-  toast(`${r.assigned} face(s) assigned`);render();
+  toast(`נוספו ${r.assigned} תמונות אימון בלבד; שאר המשימות נשארו לאימות`);render();
+}
+async function resolveSuggestion(gi){
+  const g=window._sugg[gi];if(!g)return;
+  const person=$(`#ssel${gi}`).value||g.slug,ids=g.items.map(it=>it.id).filter(id=>!window._excludedIds.has(id));
+  const r=await j('api/unknowns/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,person})});
+  toast(`${r.resolved} משימות אושרו; לא נוספו תמונות מיותרות לגלריה`);render();
+}
+async function maintainUnknownQueue(button){
+  if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
+  try{const r=await j('api/unknowns/maintenance',{method:'POST'});toast(`התור אורגן: הוסרו ${r.removed} כפילויות/דוגמאות ישנות, נשארו ${r.remaining}`);render()}
+  finally{if(button){button.disabled=false;button.removeAttribute('aria-busy')}}
 }
 async function ignoreSuggestion(gi){
   const g=window._sugg[gi]; if(!g)return;
@@ -813,13 +827,20 @@ async function deleteIgnored(id){
 }
 async function assignCluster(i){
   const person=$(`#new${i}`).value.trim()||$(`#sel${i}`).value;
-  if(!person)return toast('Pick a person or enter a name');
+  if(!person)return toast('יש לבחור אדם או להקליד שם חדש');
   const box=document.querySelector(`.cluster[data-i="${i}"]`);
   const sel=[...box.querySelectorAll('.tile.sel')].map(t=>t.dataset.id);
-  const ids=sel.length?sel:window._clusters[i].map(u=>u.id);
+  const ids=(sel.length?sel:window._clusters[i].slice(0,3).map(u=>u.id)).slice(0,3);
   const r=await j('api/unknowns/assign',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({ids,person})});
-  toast(`${r.assigned} face(s) → ${person}`);render();
+  toast(`נשמרו ${r.assigned} דוגמאות אימון עבור ${person}`);render();
+}
+async function resolveCluster(i){
+  const person=$(`#sel${i}`).value;
+  if(!person)return toast('כדי לאמת יש לבחור אדם קיים; ליצירת אדם חדש השתמשו בכפתור המשני');
+  const ids=window._clusters[i].map(u=>u.id);
+  const r=await j('api/unknowns/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,person})});
+  toast(`${r.resolved} משימות אושרו בלי להוסיף תמונות לגלריה`);render();
 }
 function showFull(url,cap,fallback){const im=$('#lbimg');
   im.onerror=fallback?()=>{im.onerror=null;im.src=fallback;$('#lbcap').textContent=(cap||'')+' · תמונת האירוע המלאה פגה; מוצג חיתוך הפנים שנשמר'}:null;

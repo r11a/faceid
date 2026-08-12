@@ -68,6 +68,14 @@ def main():
                       max_per_person=int(cfg["faceid"].get("max_faces_per_person", 40)))
     gallery.trimmed_keep = int(cfg["faceid"].get("trimmed_keep", 10))
     gallery.dedupe_threshold = float(cfg["faceid"].get("dedupe_threshold", 0.65))
+    gallery.review_queue_max_total = int(cfg["faceid"].get("review_queue_max_total", 200))
+    gallery.review_queue_max_per_cluster = int(cfg["faceid"].get("review_queue_max_per_cluster", 12))
+    gallery.review_queue_retention_days = int(cfg["faceid"].get("review_queue_retention_days", 14))
+    gallery.review_queue_dedupe_days = int(cfg["faceid"].get("review_queue_dedupe_days", 7))
+    queue_cleanup = gallery.prune_unknown_queue()
+    if queue_cleanup["removed"]:
+        log.info("review queue bounded: removed %d redundant crops; %d representative samples remain",
+                 queue_cleanup["removed"], queue_cleanup["remaining"])
     frigate_cfg = cfg["frigate"]
     frigate = FrigateAPI(
         frigate_cfg["url"],
@@ -108,6 +116,8 @@ def main():
     audit.prune_evidence(
         int(cfg["faceid"].get("known_evidence_days", 30)),
         int(cfg["faceid"].get("unknown_evidence_days", 14)),
+        int(cfg["faceid"].get("known_evidence_max", 300)),
+        int(cfg["faceid"].get("unknown_evidence_max", 300)),
     )
     f = cfg["faceid"]
     camera_graph = f.get("camera_graph") or {}
