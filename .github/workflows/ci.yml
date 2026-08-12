@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -119,3 +121,25 @@ jobs:
                   print(f"script block {i} does not parse:\n{r.stderr}"); sys.exit(1)
           print(f"{len(blocks)} script block(s) parse")
           EOF
+
+      - name: Released tag still matches shipped code
+        if: github.event_name == 'push'
+        run: |
+          version=$(python -c 'import yaml; print(yaml.safe_load(open("faceid-addon/config.yaml"))["version"])')
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${tag}^{commit}" >/dev/null; then
+            tagged=$(git rev-parse "${tag}^{commit}")
+            current=$(git rev-parse HEAD)
+            if [ "${tagged}" != "${current}" ]; then
+              changed=$(git diff --name-only "${tag}"..HEAD -- \
+                app static requirements.txt faceid-addon/app faceid-addon/static \
+                faceid-addon/config.yaml faceid-addon/run.sh \
+                faceid-addon/Dockerfile faceid-addon/requirements.txt)
+              if [ -n "${changed}" ]; then
+                echo "${tag} no longer points at the code shipped as ${version}:"
+                echo "${changed}"
+                echo "Bump the version and publish a new tag instead of changing a released build."
+                exit 1
+              fi
+            fi
+          fi

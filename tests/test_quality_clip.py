@@ -4,9 +4,10 @@ try:
     import cv2
     import numpy as np
     from app.clip_analyzer import ClipAnalyzer
+    from app.media_errors import ClipNotReady
     from app.quality import FaceQuality, measure_face_quality
 except ImportError:
-    cv2 = np = ClipAnalyzer = FaceQuality = measure_face_quality = None
+    cv2 = np = ClipAnalyzer = FaceQuality = measure_face_quality = ClipNotReady = None
 
 
 @unittest.skipIf(cv2 is None, "OpenCV dependencies are not installed")
@@ -39,3 +40,12 @@ class QualityAndTrackingTests(unittest.TestCase):
         tracks[idx]["embeddings"].append(first)
         self.assertEqual(analyzer._track_for(tracks, similar), 0)
         self.assertEqual(analyzer._track_for(tracks, other), 1)
+
+    def test_missing_clip_is_retryable_not_no_face(self):
+        class MissingMedia:
+            def clip_path(self, _event_id):
+                return None
+
+        analyzer = ClipAnalyzer(object(), object(), media_store=MissingMedia())
+        with self.assertRaises(ClipNotReady):
+            analyzer.analyze("not-finalised")

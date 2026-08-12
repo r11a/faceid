@@ -69,6 +69,8 @@ faceid:
   clip_analysis: $(cfg '.clip_analysis')
   clip_max_frames: $(cfg '.clip_max_frames')
   clip_max_samples: $(cfg '.clip_max_samples')
+  clip_retry_attempts: $(cfg '.clip_retry_attempts // 3')
+  clip_retry_seconds: $(cfg '.clip_retry_seconds // 10')
   video_decode: $(cfg '.video_decode // "auto"')
   body_enabled: $(cfg '.body_enabled // false')
   body_threshold: $(cfg '.body_threshold // 0.72')

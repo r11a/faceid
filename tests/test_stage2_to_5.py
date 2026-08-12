@@ -35,6 +35,21 @@ class StageTwoToFiveTests(unittest.TestCase):
         self.assertEqual([(j["event_id"], j["kind"], j["end_ts"]) for j in jobs],
                          [("e1", "clip", 2.0)])
 
+    def test_clip_retry_limit_is_explicit(self):
+        self.audit.start_event("e1", "front", 1)
+        self.audit.queue_job("e1", "clip")
+        self.audit.mark_job_running("e1", "clip")
+        self.assertEqual(
+            self.audit.retry_job("e1", "clip", "not ready", max_attempts=2),
+            "pending",
+        )
+        self.audit.mark_job_running("e1", "clip")
+        self.assertEqual(
+            self.audit.retry_job("e1", "clip", "not ready", max_attempts=2),
+            "failed",
+        )
+        self.assertEqual(self.audit.pending_jobs(), [])
+
     def test_scenarios_require_identity_link_for_unknowns(self):
         manager = ScenarioManager(
             self.audit, window_seconds=90,

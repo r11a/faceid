@@ -950,7 +950,10 @@ class AuditStore:
                 (time.time(), event_id, kind),
             )
 
-    def retry_job(self, event_id: str, kind: str, error: str, delay: float = 5.0):
+    def retry_job(
+        self, event_id: str, kind: str, error: str, delay: float = 5.0,
+        max_attempts: int = 5,
+    ) -> str:
         now = time.time()
         with self._lock, self._connection() as con:
             row = con.execute(
@@ -958,7 +961,7 @@ class AuditStore:
                 (event_id, kind),
             ).fetchone()
             attempts = int(row[0]) if row else 1
-            status = "failed" if attempts >= 5 else "pending"
+            status = "failed" if attempts >= max(1, int(max_attempts)) else "pending"
             con.execute(
                 """
                 UPDATE jobs SET status=?, available_ts=?, last_error=?, updated_ts=?
@@ -969,6 +972,7 @@ class AuditStore:
                     event_id, kind,
                 ),
             )
+            return status
 
     def pending_jobs(self, limit: int = 100):
         now = time.time()

@@ -3,6 +3,26 @@
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 
+## 5.3.0 — 2026-08-12
+
+- **Safe group-photo enrollment:** FaceID no longer assumes that the largest face
+  in an uploaded photo belongs to the selected person. A strong, clearly leading
+  gallery match can be accepted automatically; otherwise the UI shows the photo,
+  draws every eligible face and requires an explicit choice before anything is saved.
+- **Honest clip retry states:** a Frigate clip that is not finalized yet is distinct
+  from a readable clip containing no usable face. Unavailable clips retry three times
+  at configurable intervals and remain visible in evidence as `clip_not_ready` instead
+  of silently completing as “no face”.
+- **Secure high-resolution intercom path:** cameras with high-resolution capture enabled
+  fetch their current recording frame through the configured Frigate API—normally the
+  authenticated 8971 endpoint. FaceID does not expose or require go2rtc port 1984, and
+  the evidence records the `secure_live_hires` source used for the decision.
+- **Release integrity:** CI now has the full tag history and refuses a stale release tag
+  when shipped application files changed after that tag. Backend, UI, manifest and
+  changelog version consistency remains mandatory.
+- **Regression coverage:** focused tests protect multi-person enrollment selection,
+  unavailable-clip classification and the authenticated high-resolution camera path.
+
 ## 5.2.1 — 2026-08-12
 
 - **Bounded review inbox:** the verification screen keeps at most 200 representative

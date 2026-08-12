@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from .quality import FaceQuality, measure_face_quality
+from .media_errors import ClipNotReady
 
 
 @dataclass
@@ -46,12 +47,14 @@ class ClipAnalyzer:
             )
         if self.media_store is not None:
             path = self.media_store.clip_path(event_id)
-            return self._analyze_file(str(path), reference_embedding, effective_min_face_px, roi) if path else []
+            if path is None:
+                raise ClipNotReady(f"Frigate clip {event_id} is not ready")
+            return self._analyze_file(str(path), reference_embedding, effective_min_face_px, roi)
         fd, path = tempfile.mkstemp(suffix=".mp4", prefix="faceid-analyze-")
         os.close(fd)
         try:
             if not self.frigate.download_clip(event_id, path):
-                return []
+                raise ClipNotReady(f"Frigate clip {event_id} is not ready")
             return self._analyze_file(path, reference_embedding, effective_min_face_px, roi)
         finally:
             try:

@@ -22,6 +22,7 @@ from .decision import DecisionAccumulator, DecisionPolicy
 from .quality import measure_face_quality
 from .clip_analyzer import ClipAnalyzer
 from .presence import RecognitionSessionTracker
+from .media_errors import ClipNotReady
 
 log = logging.getLogger("faceid.mqtt")
 
@@ -72,6 +73,8 @@ class EventProcessor:
         self.ignore_learning = bool(f.get("ignore_learning", True))
         self.hires_enroll = bool(f.get("hires_enroll", True))
         self.clip_analysis = bool(f.get("clip_analysis", True))
+        self.clip_retry_attempts = max(1, int(f.get("clip_retry_attempts", 3)))
+        self.clip_retry_seconds = max(1.0, float(f.get("clip_retry_seconds", 10)))
         self.min_face_quality = float(f.get("min_face_quality", 0.35))
         # Ereignisse, die Frigate nicht per MQTT meldet (z. B. per API angelegte
         # Kamera-Meldungen als Zuverlaessigkeits-Bruecke), per Abfrage nachziehen.
@@ -335,6 +338,35 @@ class EventProcessor:
                     self._process(eid)
                 if self.audit:
                     self.audit.complete_job(eid, kind)
+            except ClipNotReady as e:
+                state = self.events.get(eid)
+                retries = int((state or {}).get("clip_not_ready_retries", 0)) + 1
+                if state is not None:
+                    state["clip_not_ready_retries"] = retries
+                    state["clip_queued"] = False
+                status = "pending"
+                if self.audit:
+                    self.audit.observation(
+                        eid, int((state or {}).get("attempts", 0)),
+                        "clip_not_ready", source="clip",
+                    )
+                    status = self.audit.retry_job(
+                        eid, kind, str(e), delay=self.clip_retry_seconds,
+                        max_attempts=self.clip_retry_attempts,
+                    )
+                if status == "failed" or retries >= self.clip_retry_attempts:
+                    if state is not None:
+                        state["clip_analyzed"] = True
+                    log.warning(
+                        "event %s: clip remained unavailable after %d attempts; continuing without clip evidence",
+                        eid, retries,
+                    )
+                else:
+                    log.info(
+                        "event %s: clip not ready; retry %d/%d in %.0fs",
+                        eid, retries + 1, self.clip_retry_attempts,
+                        self.clip_retry_seconds,
+                    )
             except Exception as e:
                 if self.audit:
                     self.audit.retry_job(eid, kind, str(e))
@@ -382,10 +414,16 @@ class EventProcessor:
             if self.camera_profiles is not None else None
         )
         img = None
-        if camera_profile and camera_profile.get("mode") == "intercom" and camera_profile.get("high_resolution"):
-            img = self.frigate.recording_frame(
-                st["camera"], float(st.get("start_time") or time.time())
-            )
+        source = "snapshot"
+        if camera_profile and camera_profile.get("high_resolution"):
+            # Stay on Frigate's configured API (normally authenticated 8971).  No
+            # browser-visible go2rtc/1984 connection or extra credential path.
+            timestamps = [time.time(), float(st.get("start_time") or time.time())]
+            for timestamp in timestamps:
+                img = self.frigate.recording_frame(st["camera"], timestamp)
+                if img is not None:
+                    source = "secure_live_hires"
+                    break
         if img is None:
             img = self.frigate.snapshot(eid, crop=True)
         if img is None:
@@ -449,7 +487,7 @@ class EventProcessor:
                          eid, st["camera"], st["attempts"], w, h)
             return
         quality, face = max(usable, key=lambda item: item[0].score)
-        self._process_face(eid, st, img, face, quality=quality, source="snapshot")
+        self._process_face(eid, st, img, face, quality=quality, source=source)
 
     def _process_face(self, eid: str, st: dict, img, face, quality=None, source="snapshot"):
         if st["done"]:
