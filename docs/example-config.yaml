@@ -48,6 +48,8 @@ faceid:
   clip_analysis: true                  # sample the finished clip for diverse, stronger evidence
   clip_max_frames: 24
   clip_max_samples: 8
+  clip_retry_attempts: 3                # a finished event clip may need a moment to appear
+  clip_retry_seconds: 10                # unavailable is retried; a readable clip with no face is final
   # Clips are downloaded once and shared by recognition + browser playback.
   # These hard disk-cache limits protect the host from long recordings.
   media_max_clip_mb: 150

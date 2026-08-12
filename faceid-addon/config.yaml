@@ -1,5 +1,5 @@
 name: FaceID
-version: "5.2.1"
+version: "5.3.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -12,7 +12,7 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8600
-ingress_entry: ui-5.2.1
+ingress_entry: ui-5.3.0
 panel_icon: mdi:face-recognition
 panel_title: FaceID
 ports:
@@ -40,6 +40,8 @@ options:
   clip_analysis: true
   clip_max_frames: 24
   clip_max_samples: 8
+  clip_retry_attempts: 3
+  clip_retry_seconds: 10
   video_decode: auto
   body_enabled: false
   body_threshold: 0.72
@@ -113,6 +115,8 @@ schema:
   clip_analysis: bool
   clip_max_frames: int(4,120)
   clip_max_samples: int(2,30)
+  clip_retry_attempts: int(1,10)
+  clip_retry_seconds: int(1,120)
   video_decode: list(auto|software|vaapi|cuda)
   body_enabled: bool
   body_threshold: float(0.5,0.99)

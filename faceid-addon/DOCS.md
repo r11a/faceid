@@ -32,7 +32,14 @@ Full documentation: https://github.com/r11a/faceid
 5. Open the **FaceID** panel in the sidebar. Recommended first step: run the backfill
    (see main README) or just wait — every detected unknown face shows up for review.
 
-## First 5.1 check
+## First 5.3 check
+
+Upload one clear single-person photo and one group photo in **People → Known people**.
+The single photo should be accepted normally. When the group cannot be matched with a
+clear lead, FaceID must show the photo with a numbered frame around every eligible face
+and save nothing until you choose one. In **Cameras → Intercom**, enable high-resolution
+capture only for the entrance camera; it uses the configured Frigate API and does not
+require exposing go2rtc port 1984.
 
 Open **Guests** to create a time/camera/count-limited temporary pass, and open
 **Investigation → Site map** to position cameras and connect plausible transitions.
@@ -70,6 +77,7 @@ second factor remain mandatory before any door-control automation acts.
 | `min_confirmations` | distinct agreeing frames required before publishing |
 | `min_face_quality` | reject weak size, blur, lighting and pose evidence |
 | `clip_analysis` / `clip_max_*` | sample diverse faces from the finished recording |
+| `clip_retry_attempts` / `clip_retry_seconds` | retry a Frigate clip that has not finished preparing; a readable clip with no face is not retried |
 | `cluster_eps` | how aggressively unknown faces are grouped in the review UI |
 | `presence_window` | camera sensor lists everyone seen within this many seconds |
 | `recognition_session_seconds` | continuous same-person/same-camera sightings stay one visit; default 300 seconds |

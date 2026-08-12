@@ -22,6 +22,7 @@ from .backup_util import build_backup_gz, write_backup_file, prune_backups
 from .calibration import UNKNOWN_LABEL, build_calibration_report
 from .gallery_coach import gallery_coach_report
 from .quality import measure_face_quality
+from .enrollment import choose_enrollment_face
 from pathlib import Path as _P
 
 log = logging.getLogger("faceid.web")
@@ -226,26 +227,77 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             gallery.refresh_guesses()
         return {"ignored_faces": n}
 
+    def enrollment_preview(image, candidates: list[dict]) -> dict:
+        """Return a bounded preview and normalized boxes for an explicit UI choice."""
+        height, width = image.shape[:2]
+        preview = image
+        if max(height, width) > 960:
+            scale = 960 / max(height, width)
+            preview = cv2.resize(image, None, fx=scale, fy=scale)
+        ok, encoded = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        boxes = []
+        for item in candidates:
+            left, top, right, bottom = item["bbox"]
+            boxes.append({
+                **item,
+                "bbox": [left / width, top / height, right / width, bottom / height],
+            })
+        return {
+            "preview": (
+                "data:image/jpeg;base64," + base64.b64encode(encoded).decode("ascii")
+                if ok else None
+            ),
+            "candidates": boxes,
+        }
+
     @app.post("/api/persons/{slug}/photos")
-    async def upload_photos(slug: str, files: list[UploadFile]):
+    async def upload_photos(
+        slug: str, files: list[UploadFile], face_index: int | None = None,
+    ):
         """Fotos (z. B. aus der Foto-Library) hochladen: Gesicht extrahieren + einlernen."""
         if slug not in gallery.persons():
             raise HTTPException(404, "Unknown person")
         added, skipped, details = 0, [], []
-        for uf in files:
+        for upload_index, uf in enumerate(files):
             raw = await uf.read()
             img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
             if img is None:
                 skipped.append(f"{uf.filename}: not an image")
-                details.append({"file": uf.filename, "status": "rejected", "message": "הקובץ אינו תמונה תקינה"})
+                details.append({"file": uf.filename, "upload_index": upload_index, "status": "rejected", "message": "הקובץ אינו תמונה תקינה"})
                 continue
             if max(img.shape[:2]) > 2000:  # Foto-Library-Bilder einkürzen, Detection reicht so
                 s = 2000 / max(img.shape[:2])
                 img = cv2.resize(img, None, fx=s, fy=s)
-            face, img = find_face_padded(engine, img, min_px=60)
+            faces = list(engine.faces(img))
+            if not faces:
+                padded_face, padded_image = find_face_padded(engine, img, min_px=60)
+                if padded_face is not None:
+                    img, faces = padded_image, [padded_face]
+            selection = choose_enrollment_face(
+                faces, gallery.embeddings(slug), requested_index=face_index,
+                min_face_px=60,
+            )
+            if selection.reason == "invalid_selection":
+                skipped.append(f"{uf.filename}: selected face is no longer available")
+                details.append({
+                    "file": uf.filename, "upload_index": upload_index,
+                    "status": "rejected",
+                    "message": "הפנים שנבחרו אינן זמינות עוד; נסו לבחור שוב",
+                })
+                continue
+            if selection.reason == "needs_selection":
+                skipped.append(f"{uf.filename}: choose one of the detected faces")
+                details.append({
+                    "file": uf.filename, "upload_index": upload_index,
+                    "status": "needs_selection",
+                    "message": "נמצאו כמה אנשים — בחרו את הפנים ששייכות לאדם הזה",
+                    **enrollment_preview(img, selection.candidates),
+                })
+                continue
+            face = selection.face
             if face is None:
                 skipped.append(f"{uf.filename}: no face found")
-                details.append({"file": uf.filename, "status": "rejected", "message": "לא נמצאו פנים ברורות"})
+                details.append({"file": uf.filename, "upload_index": upload_index, "status": "rejected", "message": "לא נמצאו פנים ברורות בגודל 60 פיקסלים לפחות"})
                 continue
             quality = measure_face_quality(
                 img, face, min_face_px=60,
@@ -261,12 +313,16 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 else:
                     message = "זווית הפנים או איכות התמונה אינן מתאימות"
                 skipped.append(f"{uf.filename}: low quality")
-                details.append({"file": uf.filename, "status": "rejected", "message": message, "quality": quality.to_dict()})
+                details.append({"file": uf.filename, "upload_index": upload_index, "status": "rejected", "message": message, "quality": quality.to_dict()})
                 continue
             gallery.add_face(slug, crop_face(img, face.bbox), face.normed_embedding,
                              source={"camera": "upload"})
             added += 1
-            details.append({"file": uf.filename, "status": "added", "message": "התמונה נוספה", "quality": quality.to_dict()})
+            details.append({
+                "file": uf.filename, "upload_index": upload_index,
+                "status": "added", "message": "התמונה נוספה",
+                "selection": selection.reason, "quality": quality.to_dict(),
+            })
         count = gallery.persons().get(slug, {}).get("count", 0)
         return {
             "added": added, "skipped": skipped, "details": details, "count": count,

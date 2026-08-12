@@ -12,6 +12,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .media_errors import ClipNotReady
+
 log = logging.getLogger("faceid.frames")
 
 
@@ -41,7 +43,7 @@ class FrameDistributor:
                 clip = self.media_store.clip_path(event_id)
                 if clip is None:
                     self._stats["last_error"] = "clip unavailable"
-                    return []
+                    raise ClipNotReady(f"Frigate clip {event_id} is not ready")
                 target.mkdir(parents=True, exist_ok=True)
                 cached = self._decode(clip, target, limit)
             else:
