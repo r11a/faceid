@@ -21,6 +21,7 @@ from .hires import upgrade_face
 from .decision import DecisionAccumulator, DecisionPolicy
 from .quality import measure_face_quality
 from .clip_analyzer import ClipAnalyzer
+from .presence import RecognitionSessionTracker
 
 log = logging.getLogger("faceid.mqtt")
 
@@ -64,6 +65,9 @@ class EventProcessor:
         self.cameras = set(f.get("cameras") or [])
         self.set_sub_label = bool(f.get("set_sub_label", False))
         self.presence_window = float(f.get("presence_window", 120))
+        self.recognition_sessions = RecognitionSessionTracker(
+            f.get("recognition_session_seconds", 300)
+        )
         self.ignore_thr = float(f.get("ignore_threshold", f.get("match_threshold", 0.5)))
         self.ignore_learning = bool(f.get("ignore_learning", True))
         self.hires_enroll = bool(f.get("hires_enroll", True))
@@ -552,12 +556,17 @@ class EventProcessor:
         )
 
         if decision.status == "recognized":
-            if self.audit:
+            occurrence = self.recognition_sessions.classify(
+                decision.person, st["camera"], st.get("start_time")
+            )
+            st["recognition_occurrence"] = occurrence
+            actionable = occurrence != "presence_update"
+            if self.audit and actionable:
                 self.audit.save_evidence(eid, crop)
             st["best_score"], st["best_person"] = decision.score, decision.person
             st["done"] = True
             st["final_decision"] = decision
-            if decision.slug and str(decision.slug).startswith("guest:"):
+            if actionable and decision.slug and str(decision.slug).startswith("guest:"):
                 guest_id = str(decision.slug).split(":", 1)[1]
                 st["guest"] = {"id": guest_id, "name": decision.person}
                 access_result = guest_access.evaluate(
@@ -577,7 +586,7 @@ class EventProcessor:
             )
             if self.set_sub_label:
                 self.frigate.set_sub_label(eid, decision.person, decision.score)
-            if self.reid is not None:
+            if actionable and self.reid is not None:
                 self.reid.seed(
                     decision.person, st["camera"], st.get("context_frame"),
                     ts=st.get("start_time"),
@@ -587,6 +596,7 @@ class EventProcessor:
                     eid, "recognized", end_ts=st.get("end_time"),
                     person=decision.person, score=decision.score,
                     margin=decision.margin, confirmations=decision.confirmations,
+                    occurrence=occurrence,
                 )
             return
 
@@ -755,6 +765,7 @@ class EventProcessor:
                             person=decision.person, score=decision.score,
                             margin=decision.margin,
                             confirmations=decision.confirmations,
+                            occurrence=st.get("recognition_occurrence"),
                         )
                     elif not self.audit.was_finalized(eid):
                         liveness_state = (st.get("liveness") or {}).get("state")
@@ -797,6 +808,8 @@ class EventProcessor:
         if st.get("post_processed"):
             return
         st["post_processed"] = True
+        occurrence = st.get("recognition_occurrence")
+        actionable = occurrence != "presence_update"
         probable_person, probable_score = None, 0.0
         if (
             self.reid is not None
@@ -816,7 +829,7 @@ class EventProcessor:
                 )
         link_person = person if status == "recognized" else probable_person
         scenario = None
-        if self.scenario_manager is not None:
+        if actionable and self.scenario_manager is not None:
             try:
                 scenario = self.scenario_manager.attach(
                     eid,
@@ -847,8 +860,9 @@ class EventProcessor:
             "liveness": st.get("liveness"),
             "guest": st.get("guest"),
             "guest_access": st.get("guest_access"),
+            "occurrence": occurrence,
         }
-        if self.client and st.get("body"):
+        if actionable and self.client and st.get("body"):
             self.client.publish(
                 f"{self.prefix}/body/advisory",
                 json.dumps({"event_id": eid, "camera": st["camera"], **st["body"]},
@@ -856,7 +870,8 @@ class EventProcessor:
                 retain=False,
             )
         if (
-            self.body_recognition is not None and status == "recognized" and person
+            actionable and self.body_recognition is not None
+            and status == "recognized" and person
             and st.get("context_frame") is not None
         ):
             try:
@@ -865,14 +880,14 @@ class EventProcessor:
                 )
             except Exception:
                 log.exception("event %s: could not stage body material", eid)
-        if self.dispatcher is not None:
+        if actionable and self.dispatcher is not None:
             try:
                 self.dispatcher.dispatch(
                     payload, client=self.client, prefix=self.prefix
                 )
             except Exception:
                 log.exception("event %s: automation dispatch failed", eid)
-        if self.ai_context is not None:
+        if actionable and self.ai_context is not None:
             try:
                 self.ai_context.submit(
                     eid, st.get("context_frame"),
@@ -892,6 +907,7 @@ class EventProcessor:
             "event_id": eid, "ts": time.time(),
             "decision": decision_status or (decision.status if decision else name),
             "liveness": st.get("liveness"),
+            "occurrence": st.get("recognition_occurrence"),
         }
         if decision is not None:
             payload.update({
@@ -900,10 +916,12 @@ class EventProcessor:
                 "runner_up": decision.runner_up,
                 "runner_up_score": round(float(decision.runner_up_score), 3),
             })
-        self.recent.appendleft(payload)
+        actionable = st.get("recognition_occurrence") != "presence_update"
+        if actionable:
+            self.recent.appendleft(payload)
         # faceid/event genau einmal pro (Event, Person) — Score-Verbesserungen lösen keine
         # erneute Meldung aus (sonst mehrere Notifications für dieselbe Sichtung)
-        if self.client and st.get("announced") != name:
+        if actionable and self.client and st.get("announced") != name:
             st["announced"] = name
             self.client.publish(f"{self.prefix}/event", json.dumps(payload, ensure_ascii=False))
         self.present.setdefault(st["camera"], {})[name] = time.time()

@@ -22,6 +22,7 @@ class FrameDistributor:
         self.root.mkdir(parents=True, exist_ok=True)
         self.decode_mode = decode_mode if decode_mode in ("auto", "software", "vaapi", "cuda") else "auto"
         self.max_frames = max(4, min(int(max_frames), 120))
+        self.max_cached_events = 25
         self._lock = threading.Lock()
         self._stats = {"requests": 0, "cache_hits": 0, "ffmpeg": 0, "opencv": 0,
                        "hardware": 0, "fallbacks": 0, "last_backend": None, "last_error": None}
@@ -127,11 +128,16 @@ class FrameDistributor:
 
     def prune(self):
         cutoff = time.time() - float(getattr(self.media_store, "retention_seconds", 86400))
-        for directory in self.root.iterdir():
+        directories = sorted(
+            (path for path in self.root.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for index, directory in enumerate(directories):
             if not directory.is_dir():
                 continue
             try:
-                if directory.stat().st_mtime >= cutoff:
+                if index < self.max_cached_events and directory.stat().st_mtime >= cutoff:
                     continue
                 for path in directory.iterdir():
                     path.unlink(missing_ok=True)

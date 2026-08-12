@@ -312,6 +312,57 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         gallery.refresh_guesses()
         return {"assigned": n, "slug": slug}
 
+    @app.post("/api/unknowns/resolve")
+    def resolve_unknowns(body: AssignBody, request: Request):
+        """Human-confirm queue events without turning every crop into gallery data."""
+        persons_now = gallery.persons()
+        if body.person in persons_now:
+            name = persons_now[body.person]["name"]
+        else:
+            match = next((person["name"] for person in persons_now.values()
+                          if person["name"] == body.person), None)
+            if match is None:
+                raise HTTPException(400, "Choose an existing person")
+            name = match
+        reviewer = (request.headers.get("x-remote-user-name")
+                    or request.headers.get("x-forwarded-user") or "operator")
+        resolved = labeled = 0
+        for uid in body.ids[:1000]:
+            jf = gallery.unknown_dir / f"{uid}.json"
+            try:
+                meta = json.loads(jf.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            event_id = str(meta.get("event_id") or "")
+            if event_id and processor.audit is not None:
+                labeled += int(processor.audit.set_ground_truth(
+                    event_id, name, reviewer, action="review_queue_resolve"
+                ))
+            if processor.set_sub_label and event_id:
+                processor.frigate.set_sub_label(event_id, name, 1.0)
+            gallery.discard_unknown(uid)
+            resolved += 1
+        return {"resolved": resolved, "labeled": labeled, "person": name,
+                "gallery_photos_added": 0}
+
+    @app.post("/api/unknowns/maintenance")
+    def maintain_unknowns():
+        return gallery.prune_unknown_queue()
+
+    @app.get("/api/unknowns/policy")
+    def unknown_queue_policy():
+        return {
+            "max_total": gallery.review_queue_max_total,
+            "max_per_identity": gallery.review_queue_max_per_cluster,
+            "retention_days": gallery.review_queue_retention_days,
+            "dedupe_days": gallery.review_queue_dedupe_days,
+            "evidence_max_total": (
+                processor.audit.evidence_known_max
+                + processor.audit.evidence_unknown_max
+                if processor.audit is not None else 0
+            ),
+        }
+
     @app.post("/api/unknowns/auto_assign")
     def auto_assign():
         """Alle Unknowns mit Galerie-Match >= match_threshold der vorgeschlagenen Person zuordnen."""
@@ -675,13 +726,14 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         limit: int = 100, offset: int = 0, status: str | None = None,
         person: str | None = None, camera: str | None = None,
         date_from: float | None = None, date_to: float | None = None,
-        q: str | None = None,
+        q: str | None = None, include_presence_updates: bool = False,
     ):
         if processor.audit is None:
             return {"events": [], "scenarios": []}
         result = processor.audit.search_events(
             limit=limit, offset=offset, status=status, person=person,
             camera=camera, date_from=date_from, date_to=date_to, query=q,
+            include_presence_updates=include_presence_updates,
         )
         result["scenarios"] = processor.audit.recent_scenarios(limit=limit)
         return result

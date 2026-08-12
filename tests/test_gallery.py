@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,28 @@ except ModuleNotFoundError:
 
 @unittest.skipIf(Gallery is None, "gallery dependencies are not installed")
 class GalleryTests(unittest.TestCase):
+    def test_review_queue_is_bounded_and_keeps_representatives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gallery = Gallery(Path(tmp), top_k=1)
+            gallery.review_queue_max_total = 5
+            gallery.review_queue_max_per_cluster = 3
+            gallery.review_queue_retention_days = 14
+            crop = np.zeros((64, 64, 3), dtype=np.uint8)
+            embedding = np.zeros(512, dtype=np.float32)
+            embedding[0] = 1.0
+            for index in range(8):
+                gallery.save_unknown(
+                    crop, embedding,
+                    {"event_id": f"event-{index}", "guess": "Alice"},
+                    dedupe_sim=1.1,
+                )
+                time.sleep(.002)
+
+            self.assertEqual(len(gallery.unknowns()), 3)
+            result = gallery.prune_unknown_queue()
+            self.assertEqual(result["remaining"], 3)
+            self.assertEqual(result["policy"]["max_per_identity"], 3)
+
     def test_returns_runner_up_and_deletes_nested_trimmed_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             gallery = Gallery(Path(tmp), top_k=1)

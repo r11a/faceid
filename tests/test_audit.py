@@ -4,6 +4,8 @@ import time
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from app.audit import AuditStore
 
 
@@ -79,6 +81,45 @@ class AuditStoreTests(unittest.TestCase):
             self.assertAlmostEqual(stats["avg_score"], 0.7)
             summary = audit.dashboard_summary()
             self.assertEqual(summary["recognized_24h"], 3)
+
+    def test_presence_updates_do_not_inflate_activity_or_statistics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            now = time.time()
+            for event_id, occurrence in (
+                ("arrival", "arrival"),
+                ("repeat", "presence_update"),
+                ("move", "camera_transition"),
+            ):
+                audit.start_event(event_id, "front", now)
+                audit.finalize(
+                    event_id, "recognized", end_ts=now + 1, person="Alice",
+                    score=.8, margin=.2, confirmations=2,
+                    occurrence=occurrence,
+                )
+
+            self.assertEqual(audit.person_statistics()["Alice"]["appearances"], 2)
+            self.assertEqual(len(audit.recent()), 2)
+            self.assertEqual(audit.search_events()["total"], 2)
+            self.assertEqual(
+                audit.search_events(include_presence_updates=True)["total"], 3
+            )
+
+    def test_evidence_images_are_bounded_without_deleting_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            image = np.zeros((32, 32, 3), dtype=np.uint8)
+            for index in range(5):
+                event_id = f"known-{index}"
+                audit.start_event(event_id, "front", time.time() + index)
+                audit.finalize(event_id, "recognized", person="Alice")
+                audit.save_evidence(event_id, image)
+            removed = audit.prune_evidence(30, 14, known_max=2, unknown_max=2)
+            self.assertEqual(removed, 3)
+            self.assertEqual(len(list(audit.evidence_dir.glob("*.jpg"))), 2)
+            self.assertEqual(
+                audit.search_events(include_presence_updates=True)["total"], 5
+            )
 
     def test_camera_funnel_counts_events_not_observation_rows(self):
         with tempfile.TemporaryDirectory() as tmp:

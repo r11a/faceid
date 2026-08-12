@@ -72,6 +72,7 @@ second factor remain mandatory before any door-control automation acts.
 | `clip_analysis` / `clip_max_*` | sample diverse faces from the finished recording |
 | `cluster_eps` | how aggressively unknown faces are grouped in the review UI |
 | `presence_window` | camera sensor lists everyone seen within this many seconds |
+| `recognition_session_seconds` | continuous same-person/same-camera sightings stay one visit; default 300 seconds |
 | `visit_gap_minutes` | gap after which repeated detections count as a new visit |
 | `calibration_target_far` | false-accept target for calibration recommendations |
 | `scenario_window` | maximum gap between identity-linked cross-camera events |
@@ -89,6 +90,9 @@ second factor remain mandatory before any door-control automation acts.
 | `set_sub_label` | opt in to writing confirmed names back to Frigate events |
 | `ignore_margin` | ignore match must beat the best enrolled person by this much |
 | `audit_retention_days` | days to keep the SQLite decision history (0 = forever) |
+| `known_evidence_max` / `unknown_evidence_max` | hard image caps; metadata remains after an image is pruned |
+| `review_queue_max_total` / `review_queue_max_per_cluster` | hard limits for representative verification crops |
+| `review_queue_retention_days` / `review_queue_dedupe_days` | age and similarity window for the verification inbox |
 | `cameras` | process only these cameras (empty = all) |
 | `discovery_cameras` | cameras that get a Home Assistant sensor |
 | `suggest_threshold` | score at which unknown faces are grouped into a "looks like <person>" suggestion |
