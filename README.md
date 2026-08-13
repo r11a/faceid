@@ -1,6 +1,20 @@
 # FaceID — self-hosted face recognition for Frigate + Home Assistant
 
-## FaceID 5.1: a product workflow for homes and offices
+## FaceID 6.0: a focused product interface for homes and offices
+
+6.0 replaces the legacy single-file dashboard with a maintainable React interface.
+The permanent task-based navigation keeps Home, review, investigation, people and
+cameras immediately visible; calibration, body recognition, gallery maintenance,
+Frigate library sync, privacy and logs live in a clearly labelled expert area. The
+same layout becomes a touch-friendly drawer and bottom-sheet workflow on phones.
+
+Every existing operational workflow has a home: bounded unknown review, visual
+camera thresholds, intercom and liveness checks, guest access, Home Assistant entities,
+calibration, safe backup/restore, curated Frigate import/export, editable site map and
+sequential visit clips. The UI uses versioned immutable bundles while the HTML entry
+point is always served `no-store`, preventing stale Home Assistant WebViews.
+
+## FaceID 5.1: security and site intelligence
 
 5.1 adds temporary guest passes with strict liveness/second-factor boundaries, a
 drag-and-drop camera site map, anonymous Frigate person-traffic analytics and a visit
@@ -47,7 +61,7 @@ identity, human-reviewed DINOv2 body appearance with multi-event consensus, and 
 optional local Vision advisor. A face decision or explicit operator review establishes
 identity; body and Vision are supporting signals and must never unlock a door alone.
 
-Open **Advanced recognition** in the web UI to review Frigate person crops, approve or
+Open **Expert tools → Body recognition** in the web UI to review Frigate person crops, approve or
 reject body material, train the local model and run a historical three-way test. Start
 with at least three varied full-person images per resident and add confirmed stranger
 examples. Both `body_enabled` and `vision_advisor_enabled` remain off by default.
@@ -259,7 +273,7 @@ log with `journalctl -u faceid -f` until you see `MQTT verbunden (Success)`, the
    **"Scan camera history"** — faces from past Frigate events land in the review queue,
    pre-clustered per person, and already-known people are tagged in Frigate retroactively.
    (CLI alternative: `venv/bin/python -m app.backfill --days 14`)
-2. **Assign clusters** in the UI (Unknown tab): pick a name per cluster — select individual
+2. **Assign clusters** in the UI (**Needs review**): pick a name per cluster — select individual
    tiles first if a cluster contains a stray face. The ⛶ button shows the full snapshot
    for context.
 3. Once a few people exist, use **"apply suggestions"** to bulk-assign everything the
@@ -446,6 +460,21 @@ being unusual, it's automatically kept.
 
 **Full details:** [docs/trimming.md](docs/trimming.md) explains the why, the exact
 selection rule (with numbers), and how to restore or curate set-aside photos.
+
+## The 6.0 product interface
+
+The old tab wall was replaced with a responsive task-first interface. The daily workflow
+is intentionally short: **Dashboard → Needs review → Events → People**. Cameras, entry,
+liveness and guests live under **Security & entry**; Home Assistant and system health live
+under **Management**. Calibration, body recognition, Frigate sync, privacy, routes and logs
+are preserved under the collapsed **Expert tools** group.
+
+The document shell is never cached, while its versioned JavaScript and CSS are immutable.
+This lets Home Assistant load a new release without private browsing and without repeatedly
+downloading unchanged assets.
+
+Frontend source lives in `frontend/`; `npm run build` writes the deployable bundle to
+`static/`. The production image does not require Node.js because the built files are committed.
 
 ## Seeing what it is doing
 

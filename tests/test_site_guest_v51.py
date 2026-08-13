@@ -27,7 +27,8 @@ class GuestAndSiteTests(unittest.TestCase):
     def test_guest_is_scoped_and_fails_closed_without_second_factor(self):
         with tempfile.TemporaryDirectory() as folder:
             service = GuestAccess(Path(folder), threshold=.62, margin=.12)
-            embedding = np.zeros(512, dtype=np.float32); embedding[0] = 1
+            embedding = np.zeros(512, dtype=np.float32)
+            embedding[0] = 1
             crop = np.zeros((120, 120, 3), dtype=np.uint8)
             guest = service.create(
                 name="Visitor", valid_from=time.time() - 10,
@@ -68,24 +69,27 @@ class GuestAndSiteTests(unittest.TestCase):
             self.assertNotIn("person", analytics)
             self.assertEqual(analytics["transitions"][0]["count"], 1)
 
-    def test_ui_contains_route_playlist_and_product_tabs(self):
-        html = (Path(__file__).parents[1] / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("guests:{section:'people'", html)
-        self.assertIn("'site-map':{section:'cameras'", html)
-        self.assertIn("showRoutePlaylist", html)
-        self.assertIn("goToRouteClip", html)
-        self.assertIn("לחצו כדי לעבור לקליפ הזה", html)
-        self.assertIn("נגן קליפים לפי מסלול", html)
+    def test_ui_is_built_from_the_new_product_shell(self):
+        root = Path(__file__).parents[1]
+        html = (root / "static" / "index.html").read_text(encoding="utf-8")
+        source = (root / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+        advanced = (root / "frontend" / "src" / "pages" / "Advanced.jsx").read_text(encoding="utf-8")
+        self.assertIn("faceid-6.0.0.js", html)
+        self.assertIn('guests: { title: "אורחים"', source)
+        self.assertIn('"routes", "מסלולים ומפה"', advanced)
+        self.assertIn("visits?days=30", advanced)
 
     def test_ui_has_stable_commercial_navigation_and_progressive_disclosure(self):
-        html = (Path(__file__).parents[1] / "static" / "index.html").read_text(encoding="utf-8")
-        for section in ("home", "events", "people", "cameras", "system"):
-            self.assertIn(f'data-section="{section}"', html)
-        self.assertIn("faceid-last-screen", html)
-        self.assertIn("faceid-recent-screens", html)
-        self.assertIn("faceid-expert-mode", html)
-        self.assertIn("function goBack()", html)
-        self.assertIn("כלים למומחים", html)
+        source = (
+            Path(__file__).parents[1] / "frontend" / "src" / "App.jsx"
+        ).read_text(encoding="utf-8")
+        for section in (
+            "home", "review", "events", "people", "live", "health", "advanced"
+        ):
+            self.assertIn(f"{section}:", source)
+        self.assertIn("faceid-expert-open", source)
+        self.assertIn('"למומחים"', source)
+        self.assertIn("drawer", source)
 
 
 if __name__ == "__main__":

@@ -112,6 +112,18 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         """Compatibility alias only; Home Assistant ingress always enters at root."""
         return _index_response()
 
+    @app.get("/assets/{asset_path:path}")
+    def ui_asset(asset_path: str):
+        """Serve only the versioned frontend assets produced by Vite."""
+        base = (static_dir / "assets").resolve()
+        target = (base / asset_path).resolve()
+        if base not in target.parents or not target.is_file():
+            raise HTTPException(404, "Unknown UI asset")
+        response = FileResponse(target)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
     @app.get("/api/persons")
     def persons():
         return gallery.persons()
