@@ -1,5 +1,5 @@
 name: FaceID
-version: "6.0.0"
+version: "6.0.1"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -12,7 +12,7 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8600
-ingress_entry: ui-6.0.0
+ingress_entry: ui-6.0.1
 panel_icon: mdi:face-recognition
 panel_title: FaceID
 ports:

@@ -12,7 +12,7 @@ export function HealthPage() {
   const health = useResource("health", { poll: 10000 });
   const report = useResource("system-report", { poll: 20000 });
   if (health.loading || report.loading) return <Loading text="בודק את כל רכיבי המערכת…" />;
-  if (health.error) return <ErrorState error={health.error} retry={health.reload} />;
+  if (health.error || report.error) return <ErrorState error={health.error || report.error} retry={() => { health.reload(); report.reload(); }} />;
   const h = health.data || {};
   const r = report.data || {};
   const frigateOk = [true, "ok", "connected"].includes(r.frigate?.connected ?? r.frigate?.status);
@@ -46,6 +46,8 @@ export function AutomationsPage() {
   const toast = useToast();
   const copy = async (value, id) => { await navigator.clipboard.writeText(value); setCopied(id); toast("שם הישות הועתק"); window.setTimeout(() => setCopied(""), 1800); };
   const mqtt = health.data?.mqtt || {};
+  if (health.loading || users.loading) return <Loading />;
+  if (health.error || users.error) return <ErrorState error={health.error || users.error} retry={() => { health.reload(); users.reload(); }} />;
   return <>
     <PageHeader eyebrow="Home Assistant" title="אוטומציות שימושיות, לא רק חיישנים" description="FaceID מפרסם ישויות לכל אדם ומידע עשיר על המיקום, הזמן והביטחון. כאן רואים מה אפשר לעשות איתן." />
     <Panel className="integration-status"><span className={`integration-icon ${mqtt.connected === false ? "bad" : "good"}`}><Radio /></span><div><h2>{mqtt.connected === false ? "MQTT אינו מחובר" : "Home Assistant מחובר"}</h2><p>{mqtt.connected === false ? "בדוק את פרטי MQTT בהגדרות התוסף." : `${mqtt.entities || "חיישנים"} התגלו אוטומטית. אין צורך להגדיר YAML ידנית.`}</p></div><Badge tone={mqtt.connected === false ? "danger" : "success"}>{mqtt.connected === false ? "דורש טיפול" : "פעיל"}</Badge></Panel>

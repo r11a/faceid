@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Component, useEffect, useMemo, useState } from "react";
 import {
-  Activity, Bell, BookOpenCheck, Bot, Camera, ChevronDown, ChevronLeft, CircleHelp,
+  Activity, AlertTriangle, Bell, BookOpenCheck, Bot, Camera, ChevronLeft, CircleHelp,
   ClipboardCheck, DoorOpen, Gauge, Home, Images, Menu, Moon, Search, Settings,
   ShieldCheck, Sparkles, Sun, UserPlus, Users, Wrench, X,
 } from "lucide-react";
@@ -12,7 +12,7 @@ import { CamerasPage, GuestsPage, IntercomPage, LivenessPage } from "./pages/Sec
 import { AutomationsPage, HealthPage } from "./pages/Management.jsx";
 import { AdvancedPage, CalibrationPage, LearningPage, SettingsPage } from "./pages/Advanced.jsx";
 
-const VERSION = "6.0.0";
+const VERSION = "6.0.1";
 const pages = {
   home: { title: "תמונת מצב", subtitle: "כל מה שחשוב עכשיו", icon: Home, component: DashboardPage },
   review: { title: "דורש טיפול", subtitle: "אישור מהיר של אירועים לא ודאיים", icon: ClipboardCheck, component: ReviewPage },
@@ -45,7 +45,6 @@ function resolvePage() {
 function Shell() {
   const [page, setPage] = useState(resolvePage);
   const [drawer, setDrawer] = useState(false);
-  const [expertOpen, setExpertOpen] = useState(() => localStorage.getItem("faceid-expert-open") === "true");
   const [theme, setTheme] = useState(() => localStorage.getItem("faceid-theme") || "dark");
   const [clock, setClock] = useState(new Date());
   const [search, setSearch] = useState("");
@@ -73,11 +72,10 @@ function Shell() {
     <aside className={`sidebar ${drawer ? "open" : ""}`}>
       <div className="brand"><span className="brand-mark"><Images /></span><div><strong>FaceID</strong><small>מרכז זיהוי חכם</small></div><button className="drawer-close" onClick={() => setDrawer(false)}><X /></button></div>
       <nav>
-        {groups.map(([label, ids], groupIndex) => {
-          const advanced = groupIndex === 3;
+        {groups.map(([label, ids]) => {
           return <div className="nav-group" key={label}>
-            {advanced ? <button className="nav-group-toggle" onClick={() => { const next = !expertOpen; setExpertOpen(next); localStorage.setItem("faceid-expert-open", String(next)); }}><span>{label}</span><ChevronDown className={expertOpen ? "rotate" : ""} /></button> : <span className="nav-label">{label}</span>}
-            {(!advanced || expertOpen) && ids.map((id) => { const Icon = pages[id].icon; return <button className={`nav-item ${page === id ? "active" : ""}`} onClick={() => navigate(id)} key={id}><span className={`nav-icon tone-${id}`}><Icon /></span><span><b>{pages[id].title}</b><small>{pages[id].subtitle}</small></span>{id === "review" && reviewCount > 0 && <em>{reviewCount > 99 ? "99+" : reviewCount}</em>}<ChevronLeft /></button>; })}
+            <span className="nav-label">{label}</span>
+            {ids.map((id) => { const Icon = pages[id].icon; return <button className={`nav-item ${page === id ? "active" : ""}`} onClick={() => navigate(id)} key={id}><span className={`nav-icon tone-${id}`}><Icon /></span><span><b>{pages[id].title}</b><small>{pages[id].subtitle}</small></span>{id === "review" && reviewCount > 0 && <em>{reviewCount > 99 ? "99+" : reviewCount}</em>}<ChevronLeft /></button>; })}
           </div>;
         })}
       </nav>
@@ -91,9 +89,19 @@ function Shell() {
         <div className="top-actions"><div className="system-pill"><span className={systemOk ? "ok" : "bad"} />{systemOk ? "מחובר" : "דורש בדיקה"}</div><time>{clock.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}</time><button className="icon-button" onClick={() => navigate("review")} title="התראות"><Bell />{reviewCount > 0 && <i />}</button><button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="ערכת נושא">{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" onClick={() => navigate("health")} title="עזרה ותקינות"><CircleHelp /></button></div>
       </header>
       <div className="mobile-context"><Badge tone={systemOk ? "success" : "danger"}>{systemOk ? "המערכת מחוברת" : "דורש בדיקה"}</Badge><span>{clock.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })} · v{VERSION}</span></div>
-      <div className="page-content"><CurrentPage navigate={navigate} /></div>
+      <div className="page-content"><PageBoundary page={page}><CurrentPage navigate={navigate} /></PageBoundary></div>
     </main>
   </div>;
+}
+
+class PageBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidUpdate(previous) { if (previous.page !== this.props.page && this.state.error) this.setState({ error: null }); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <div className="page-crash"><AlertTriangle /><div><span className="eyebrow">המסך לא נטען</span><h1>נתקלנו בתקלה מקומית</h1><p>שאר המערכת ממשיכה לפעול. אפשר לעבור למסך אחר או לנסות לטעון מחדש.</p><details><summary>פרטים טכניים</summary><code>{this.state.error.message}</code></details><button className="button primary" onClick={() => location.reload()}>טעינה מחדש</button></div></div>;
+  }
 }
 
 export default function App() { return <ToastProvider><Shell /></ToastProvider>; }
