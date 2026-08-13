@@ -1,5 +1,28 @@
 # Changelog
 
+## 6.0.0 — 2026-08-13
+
+- **Complete product UI:** replaced the legacy monolithic interface with a responsive
+  React application inspired by the clear PROJECTS navigation model, with a granite
+  visual system and accessible semantic status colors.
+- **Task-first navigation:** daily operation is now organized around Dashboard,
+  Needs review, Events, People, Cameras, Entry, Liveness, Guests and Automations;
+  calibration and engine tooling live behind progressive disclosure.
+- **Commercial mobile experience:** added a real mobile drawer, touch-sized actions,
+  responsive cards/tables, bottom-sheet dialogs and clip playback that stays above
+  the event details on small screens.
+- **Clear feedback:** loading, empty, success and error states are consistent across
+  every action, while destructive or security-sensitive operations remain explicit.
+- **No lost expert capability:** added curated gallery and ignored-face management,
+  explicit Frigate import/export, safe merge/replace restore, body-learning handoff
+  from an event, editable camera map and a visit player that advances clips in route
+  order while every camera bubble remains directly selectable.
+- **Cache-safe frontend:** versioned immutable UI assets are served by FastAPI while
+  the HTML shell remains no-store, preventing stale Home Assistant WebViews without
+  requiring private browsing.
+- **Source and release guard:** the maintainable Vite/React source is committed and CI
+  rebuilds it, verifies the generated add-on UI and keeps version metadata aligned.
+
 All notable changes to FaceID. The Home Assistant app shows this file in the
 update dialog; standalone users can watch GitHub releases.
 

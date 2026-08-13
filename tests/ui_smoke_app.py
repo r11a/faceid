@@ -14,6 +14,11 @@ def index():
     return FileResponse(ROOT / "static" / "index.html")
 
 
+@app.get("/assets/{asset_path:path}")
+def assets(asset_path: str):
+    return FileResponse(ROOT / "static" / "assets" / asset_path)
+
+
 @app.get("/api/persons")
 def persons():
     return {
@@ -47,7 +52,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"version": "5.3.0", "persons": 2, "queue": 4, "open_events": 0, "suggest_threshold": .4,
+    return {"status": "ok", "version": "6.0.0", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
                        "requested_mode": "auto", "fallbacks": 1},
@@ -56,7 +61,7 @@ def health():
 
 @app.get("/api/dashboard")
 def dashboard():
-    return {"summary": {}, "people": [], "recent": [], "events": [],
+    return {"summary": {"recognized_today": 18, "events_today": 31, "seen_today": 2}, "people": users()["users"], "recent": [], "events": [],
             "gallery": {"photos": 0, "recommendation": "בדיקת ממשק"}}
 
 

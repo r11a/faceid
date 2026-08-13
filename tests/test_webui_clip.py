@@ -139,10 +139,14 @@ class WebUIClipTests(unittest.TestCase):
             self.assertIn("no-store", index.headers["cache-control"])
             self.assertNotIn("etag", index.headers)
             self.assertNotIn("last-modified", index.headers)
-            self.assertEqual(index.headers["x-faceid-ui-version"], "5.3.0")
+            self.assertEqual(index.headers["x-faceid-ui-version"], "6.0.0")
             versioned = TestClient(app).get("/ui-previous-release")
             self.assertEqual(versioned.status_code, 200)
             self.assertEqual(versioned.content, index.content)
+            ui_asset = TestClient(app).get("/assets/faceid-6.0.0.js")
+            self.assertEqual(ui_asset.status_code, 200)
+            self.assertIn("immutable", ui_asset.headers["cache-control"])
+            self.assertEqual(ui_asset.headers["x-content-type-options"], "nosniff")
             response = TestClient(app).get(
                 "/api/activity/e1/clip", headers={"Range": "bytes=0-15"}
             )

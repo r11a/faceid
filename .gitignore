@@ -9,5 +9,8 @@ venv/
 __pycache__/
 *.pyc
 
+# frontend dependencies (the production bundle is committed under static/)
+node_modules/
+
 # insightface model cache
 .insightface/
