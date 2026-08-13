@@ -8,8 +8,15 @@ import { api, assetUrl } from "../api.js";
 import { useResource } from "../hooks.js";
 import { Badge, Empty, ErrorState, Loading, Metric, Modal, PageHeader, Panel, dateTime, percent, useToast } from "../ui.jsx";
 
-const roleLabels = { observation: "צפייה", entrance: "כניסה", exit: "יציאה", intercom: "אינטרקום" };
-const modeLabels = { standard: "רגילה", intercom: "אינטרקום", high_security: "אבטחה גבוהה" };
+const roleLabels = {
+  observation: "צפייה בלבד",
+  entry: "כניסה",
+  exit: "יציאה",
+  entry_exit: "כניסה ויציאה",
+  restricted: "אזור מוגבל",
+  intercom: "אינטרקום",
+};
+const modeLabels = { standard: "רגילה", intercom: "אינטרקום מאובטח" };
 
 function LiveFrame({ camera, refreshKey = 0, analyze }) {
   const [failed, setFailed] = useState(false);
@@ -79,6 +86,8 @@ export function IntercomPage() {
     catch (error) { toast(error.message, "error"); }
     finally { setTesting(false); }
   };
+  if (intercom.loading || studio.loading) return <Loading text="טוען מצלמות כניסה…" />;
+  if (intercom.error || studio.error) return <ErrorState error={intercom.error || studio.error} retry={() => { intercom.reload(); studio.reload(); }} />;
   return <>
     <PageHeader eyebrow="כניסה" title="מצב אינטרקום ממוקד ואמין" description="בחר מצלמה, הגדר אותה כאינטרקום ובדוק תמונה ברזולוציה גבוהה. זיהוי פנים לבדו לעולם אינו פותח דלת." />
     <Panel className="intercom-selector"><label>מצלמת אינטרקום<select value={camera} onChange={(e) => { setCamera(e.target.value); setResult(null); }}>{candidates.map((item) => <option value={item.camera} key={item.camera}>{item.camera}{item.mode === "intercom" ? " · מוגדרת כאינטרקום" : ""}</option>)}</select></label>{profile?.mode !== "intercom" && <button className="button secondary" onClick={markIntercom}><DoorOpen />הגדר מצלמה זו כאינטרקום</button>}<button className="button primary" disabled={!camera || testing} onClick={test}><ScanFace />{testing ? "מצלם ובודק מספר תמונות…" : "בדיקה חיה עכשיו"}</button></Panel>
@@ -96,8 +105,8 @@ export function LivenessPage() {
     try { await api(`cameras/${encodeURIComponent(camera)}/profile`, { method: "POST", body: JSON.stringify({ ...profile, min_face_px: Number(profile.min_face_px), night_min_face_px: Number(profile.night_min_face_px || profile.min_face_px), burst_frames: Number(profile.burst_frames || 3), liveness_mode: mode }) }); toast("רמת הגנת החיוּת נשמרה"); data.reload(); studio.reload(); }
     catch (error) { toast(error.message, "error"); }
   };
-  if (data.loading) return <Loading />;
-  if (data.error) return <ErrorState error={data.error} retry={data.reload} />;
+  if (data.loading || studio.loading) return <Loading />;
+  if (data.error || studio.error) return <ErrorState error={data.error || studio.error} retry={() => { data.reload(); studio.reload(); }} />;
   const status = data.data?.status || {};
   return <>
     <PageHeader eyebrow="Anti-Spoofing" title="הגנה מתמונה ומסך — בשפה פשוטה" description="במצלמות כניסה קרובות מומלץ מצב חובה. במצלמות רחוקות התחל במצב מסייע כדי לא לחסום אנשים אמיתיים." />
@@ -114,8 +123,8 @@ export function GuestsPage() {
   const [open, setOpen] = useState(false);
   const toast = useToast();
   const revoke = async (id) => { try { await api(`guests/${id}/revoke`, { method: "POST" }); toast("גישת האורח בוטלה"); guests.reload(); } catch (error) { toast(error.message, "error"); } };
-  if (guests.loading) return <Loading />;
-  if (guests.error) return <ErrorState error={guests.error} retry={guests.reload} />;
+  if (guests.loading || cameras.loading) return <Loading />;
+  if (guests.error || cameras.error) return <ErrorState error={guests.error || cameras.error} retry={() => { guests.reload(); cameras.reload(); }} />;
   return <>
     <PageHeader eyebrow="גישה זמנית" title="אורחים ללא הרשאה קבועה" description="פנים יוצרות זכאות בלבד. חיוּת וגורם שני נדרשים לפני אישור כניסה." actions={<button className="button primary" onClick={() => setOpen(true)}><UserPlus />אורח חדש</button>} />
     <div className="guest-grid">{(guests.data?.guests || []).map((guest) => <Panel key={guest.id}><div className="panel-heading"><div><span className="eyebrow">אורח זמני</span><h2>{guest.name}</h2></div><Badge tone={guest.status === "active" ? "success" : "neutral"}>{guest.status === "active" ? "פעיל" : guest.status === "used" ? "נוצל" : "בוטל"}</Badge></div><div className="guest-details"><span><b>בתוקף עד</b>{dateTime(guest.valid_until)}</span><span><b>כניסות נותרו</b>{guest.entries_left ?? guest.max_entries}</span><span><b>מצלמות</b>{guest.allowed_cameras?.join(", ") || "כל מצלמות הכניסה"}</span></div>{guest.status === "active" && <button className="button danger-ghost" onClick={() => revoke(guest.id)}>ביטול גישה</button>}</Panel>)}</div>

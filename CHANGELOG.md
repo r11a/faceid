@@ -1,5 +1,18 @@
 # Changelog
 
+## 6.0.1 — 2026-08-13
+
+- **Full-screen repair pass:** fixes a missing component import that could crash the
+  People screen and leave the entire single-page application blank.
+- **Failure isolation:** a broken screen now shows a local recovery panel instead of
+  taking down navigation and every subsequent screen.
+- **Responsive QA:** validates every daily, security, management and expert screen at
+  desktop and phone widths, with targeted fixes for clipped controls and dialogs.
+- **Reliable navigation and feedback:** expert tools remain discoverable, dependent API
+  failures have retry states, and camera roles now match the server's supported values.
+- **Touch and tablet polish:** larger switches, wrapping action groups and a stacked
+  camera workspace prevent overlap on narrow phones and medium-size tablets.
+
 ## 6.0.0 — 2026-08-13
 
 - **Complete product UI:** replaced the legacy monolithic interface with a responsive

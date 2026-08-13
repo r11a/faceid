@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowLeft, Camera, Check, ChevronLeft, ClipboardCheck, Clock3, DoorOpen, Download,
   Film, ImageOff, Images, MapPin, MoreVertical, Play, Plus, Search, ShieldAlert,
-  Sparkles, Star, Trash2, Upload, UserCheck, UserRound, Users, X,
+  Sparkles, Star, Trash2, Upload, UserCheck, UserPlus, UserRound, Users, X,
 } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
 import { useResource } from "../hooks.js";

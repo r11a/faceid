@@ -52,7 +52,8 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "6.0.0", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
+    return {"status": "ok", "version": "6.0.1", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
+            "backend": "CPUExecutionProvider", "mqtt": {"connected": True, "entities": 18},
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
                        "requested_mode": "auto", "fallbacks": 1},
@@ -63,6 +64,109 @@ def health():
 def dashboard():
     return {"summary": {"recognized_today": 18, "events_today": 31, "seen_today": 2}, "people": users()["users"], "recent": [], "events": [],
             "gallery": {"photos": 0, "recommendation": "בדיקת ממשק"}}
+
+
+@app.get("/api/system-report")
+def system_report():
+    return {"frigate": {"connected": True, "url": "https://frigate:8971"},
+            "mqtt": {"connected": True, "entities": 18},
+            "storage": {"evidence": "124 MB · שמירה מוגבלת"},
+            "advanced": {"runtime": {"provider": "CPUExecutionProvider"}}}
+
+
+@app.get("/api/activity")
+def activity():
+    return {"total": 2, "events": [
+        {"event_id": "1", "start_ts": 1786370400, "camera": "Front door",
+         "status": "recognized", "person": "רונן", "score": .84, "confirmations": 3},
+        {"event_id": "2", "start_ts": 1786370820, "camera": "Hallway",
+         "status": "ambiguous", "probable_person": "משה", "score": .49, "confirmations": 1},
+    ], "scenarios": []}
+
+
+@app.get("/api/activity/{event_id}/image")
+def activity_image(event_id: str):
+    return camera_frame("Event " + event_id)
+
+
+@app.get("/api/activity/{event_id}/references")
+def references(event_id: str):
+    return {"references": []}
+
+
+@app.get("/api/audit/{event_id}")
+def audit_detail(event_id: str):
+    return {"event": {"event_id": event_id, "start_ts": 1786370400,
+        "camera": "Front door", "status": "recognized", "person": "רונן",
+        "score": .84, "margin": .21, "confirmations": 3, "liveness_status": "live",
+        "liveness_score": .91}}
+
+
+@app.get("/api/unknowns")
+def unknowns():
+    return [[{"id": "unknown-1", "camera": "Front door", "ts": 1786370400,
+              "guess_name": "רונן"},
+             {"id": "unknown-2", "camera": "Hallway", "ts": 1786370420,
+              "guess_name": "רונן"}]]
+
+
+@app.get("/api/unknowns/policy")
+def unknown_policy():
+    return {"max_total": 200, "max_per_identity": 12, "retention_days": 14}
+
+
+@app.get("/api/settings")
+def settings():
+    return {"thresholds": {"match_threshold": .5, "unknown_threshold": .35,
+            "match_margin": .08, "suggest_threshold": .4, "cluster_eps": .55,
+            "ignore_threshold": .5, "ignore_margin": .12},
+            "ranges": {"match_threshold": [.2, .95], "unknown_threshold": [.1, .8],
+            "match_margin": [0, .5], "suggest_threshold": [.1, .8],
+            "cluster_eps": [.2, .9], "ignore_threshold": [.2, .95],
+            "ignore_margin": [0, .5]}, "max_faces_per_person": 40,
+            "trimmed_keep": 10, "match_top_k": 3, "min_confirmations": 2,
+            "hires_enroll": True, "backup": {"enabled": True, "hour": 3,
+            "keep": 7, "dir": "data/backups"}}
+
+
+@app.get("/api/calibration")
+def calibration():
+    return {"ready": True, "labeled_events": 27,
+            "current": {"tar": .92, "far": .01, "frr": .08, "wrong_id": 0},
+            "recommended": {"threshold": .63, "margin": .14}}
+
+
+@app.get("/api/backfill")
+def backfill():
+    return {"running": False, "processed": 0, "total": 0, "history": []}
+
+
+@app.get("/api/gallery-coach")
+def gallery_coach():
+    return {"summary": {"review": 1}, "people": [{"slug": "ronen", "person": "רונן",
+        "review_count": 1, "advice": ["הוסף תמונת צד אחת"], "images": []}]}
+
+
+@app.get("/api/ignored")
+def ignored():
+    return [[{"id": "ignored-1", "group": "מבקר קבוע", "from_person": "לא מזוהה"}]]
+
+
+@app.get("/api/frigate-sync")
+def frigate_sync():
+    return {"summary": {"local_people": 2, "local_images": 10, "frigate_people": 2,
+        "frigate_images": 8, "import_candidates": 0, "export_candidates": 0},
+        "local": [], "remote": []}
+
+
+@app.get("/api/privacy")
+def privacy():
+    return {"audit_events": 318, "evidence_images": 126, "evidence_bytes": 44040192}
+
+
+@app.get("/api/logs")
+def logs():
+    return {"lines": ["INFO FaceID test fixture ready", "INFO Frigate connected"]}
 
 
 @app.get("/api/cameras/studio")
@@ -89,6 +193,13 @@ def cameras():
 def camera_frame(camera: str):
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g"><stop stop-color="#3d4144"/><stop offset="1" stop-color="#17191b"/></linearGradient></defs><rect width="1280" height="720" fill="url(#g)"/><rect x="90" y="90" width="1100" height="540" rx="25" fill="#25282b" stroke="#777"/><circle cx="640" cy="290" r="95" fill="#a6a6a2"/><path d="M440 600c30-190 370-190 400 0" fill="#777"/><text x="70" y="670" fill="#ddd" font-size="32">{camera}</text></svg>'''
     return Response(svg, media_type="image/svg+xml")
+
+
+@app.get("/api/cameras/{camera}/analyze")
+def analyze_camera(camera: str):
+    return {"camera": camera, "width": 1280, "height": 720,
+            "faces": [{"box": [560, 180, 706, 326], "face_px": 146,
+                       "score": .88, "usable": True}]}
 
 
 @app.get("/api/intercom")

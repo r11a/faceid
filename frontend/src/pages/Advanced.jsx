@@ -40,6 +40,7 @@ export function LearningPage() {
   const cancel = async () => { try { await api("backfill/cancel", { method: "POST" }); toast("הסריקה תיעצר בנקודה בטוחה"); backfill.reload(); } catch (error) { toast(error.message, "error"); } };
   const setAside = async (slug, file) => { try { await api("gallery-coach/set-aside", { method: "POST", body: JSON.stringify({ slug, file, reason: "נבדקה והועברה הצידה במרכז הלמידה" }) }); toast("התמונה הועברה הצידה וניתנת לשחזור"); coach.reload(); } catch (error) { toast(error.message, "error"); } };
   if (backfill.loading || coach.loading) return <Loading />;
+  if (backfill.error || coach.error) return <ErrorState error={backfill.error || coach.error} retry={() => { backfill.reload(); coach.reload(); }} />;
   return <>
     <PageHeader eyebrow="למידה מבוקרת" title="שיפור חומר הלימוד, לא שינוי זהות" description="המערכת מחפשת תמונות חלשות, סורקת היסטוריה ומציעה מועמדות — שום תמונה אינה משויכת לאדם אוטומטית." />
     <div className="safety-banner"><Brain /><div><b>מה המטרה?</b><p>לשמור לכל אדם מעט תמונות טובות ומגוונות. יותר תמונות דומות לא משפרות דיוק ולעיתים אף פוגעות בו.</p></div></div>
@@ -63,8 +64,9 @@ export function SettingsPage() {
     try { const body = new FormData(); body.append("file", restoreFile); await api(`restore?merge=${merge}`, { method: "POST", body }); toast(merge ? "הגיבוי מוזג בהצלחה" : "הגיבוי שוחזר בהצלחה — מומלץ להפעיל מחדש את התוסף"); settings.reload(); }
     catch (error) { toast(error.message, "error"); }
   };
-  if (settings.loading || !form) return <Loading />;
+  if (settings.loading) return <Loading />;
   if (settings.error) return <ErrorState error={settings.error} retry={settings.reload} />;
+  if (!form) return <Loading />;
   const slider = (key, label, hint) => { const range = settings.data.ranges[key]; return <label className="advanced-slider" key={key}><span><b>{label}</b><small>{hint}</small></span><input type="range" min={range[0]} max={range[1]} step="0.01" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} /><strong>{Number(form[key]).toFixed(2)}</strong></label>; };
   return <>
     <PageHeader eyebrow="הגדרות" title="הגדרות בטוחות וברורות" description="אין צורך לשנות מספרים כדי להתחיל. אחרי לפחות 20 אימותים, מסך הכיול יציע ערכים המבוססים על הנתונים שלך." actions={<button className="button primary" onClick={save}><Save />שמירת כל השינויים</button>} />
@@ -136,6 +138,7 @@ function IgnoredTools() {
     } catch (error) { toast(error.message, "error"); }
   };
   if (ignored.loading) return <Loading />;
+  if (ignored.error) return <ErrorState error={ignored.error} retry={ignored.reload} />;
   const clusters = ignored.data || [];
   return <><Panel className="review-toolbar"><div><b>{clusters.reduce((sum, cluster) => sum + cluster.length, 0)} פנים מושתקות</b><span>{ids.length ? `${ids.length} נבחרו` : "מושתקים אינם יוצרים התראות"}</span></div><div><select value={person} onChange={(e) => setPerson(e.target.value)}><option value="">שיוך לאדם…</option>{(users.data?.users || []).map((item) => <option value={item.slug} key={item.slug}>{item.name}</option>)}</select><button className="button success" disabled={!ids.length || !person} onClick={() => run("assign")}>שייך לאדם</button><button className="button secondary" disabled={!ids.length} onClick={() => run("restore")}><RotateCcw />החזר לבדיקה</button><button className="button danger-ghost" disabled={!ids.length} onClick={() => run("delete")}><Trash2 />מחק</button></div><div className="group-actions"><input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="שם קבוצת השתקה" /><button className="button secondary" disabled={!ids.length || !group.trim()} onClick={() => run("move")}>העבר לקבוצה</button></div></Panel><div className="cluster-list">{clusters.map((cluster, index) => <Panel key={cluster[0]?.id || index}><div className="panel-heading"><div><span className="eyebrow">קבוצת השתקה</span><h2>{cluster[0]?.group || `קבוצה ${index + 1}`}</h2></div><button className="text-button" onClick={() => setSelected((current) => ({ ...current, ...Object.fromEntries(cluster.map((item) => [item.id, true])) }))}>בחר הכול</button></div><div className="unknown-grid">{cluster.map((item) => <label className={selected[item.id] ? "selected" : ""} key={item.id}><input type="checkbox" checked={Boolean(selected[item.id])} onChange={(e) => setSelected({ ...selected, [item.id]: e.target.checked })} /><img src={assetUrl(`media/ignored/${item.id}.jpg`)} alt="פנים מושתקות" /><span>{item.from_person || "עוגן השתקה"}</span><i><Check /></i></label>)}</div></Panel>)}</div>{!clusters.length && <Empty icon={UserX} title="אין פנים מושתקות" text="פנים שתבחר להשתיק במסך דורש טיפול יופיעו כאן." />}</>;
 }
@@ -167,6 +170,7 @@ function RouteTools() {
   const site = useResource("site-map?days=7");
   const [playlist, setPlaylist] = useState(null);
   if (visits.loading || site.loading) return <Loading />;
+  if (visits.error || site.error) return <ErrorState error={visits.error || site.error} retry={() => { visits.reload(); site.reload(); }} />;
   return <><Panel><div className="panel-heading"><div><span className="eyebrow">תנועה בין מצלמות</span><h2>ביקורים ומסלולים</h2></div></div><div className="route-list">{(visits.data?.visits || []).map((visit, index) => <button key={visit.id || index} onClick={() => setPlaylist({ visit, index: 0 })}><span><b>{visit.person || "לא זוהה"}</b><small>{dateTime(visit.start_ts)} · {visit.open ? "עדיין באתר" : "הסתיים"} · {visit.event_count || visit.timeline?.length || 0} קליפים</small></span><div className="route-bubbles">{(visit.route || []).map((camera, cameraIndex) => <Badge tone="info" key={`${camera}-${cameraIndex}`}>{camera}</Badge>)}</div><Play /></button>)}</div></Panel><SiteMapEditor resource={site} />{playlist && <RoutePlaylist playlist={playlist} setPlaylist={setPlaylist} />}</>;
 }
 
@@ -203,11 +207,12 @@ function PrivacyTools() {
   const toast = useToast();
   const prune = async () => { if (!confirm("למחוק כעת תמונות ראיה ישנות לפי התקופות שנבחרו?")) return; try { const result = await api("privacy/prune", { method: "POST", body: JSON.stringify({ known_days: Number(known), unknown_days: Number(unknown) }) }); toast(`${result.removed_images} תמונות ישנות נמחקו`); privacy.reload(); } catch (error) { toast(error.message, "error"); } };
   if (privacy.loading) return <Loading />;
+  if (privacy.error) return <ErrorState error={privacy.error} retry={privacy.reload} />;
   return <><div className="metrics-grid"><Metric label="אירועי ביקורת" value={privacy.data?.audit_events || 0} /><Metric label="תמונות ראיה" value={privacy.data?.evidence_images || 0} tone="turquoise" /><Metric label="נפח ראיות" value={`${Math.round((privacy.data?.evidence_bytes || 0) / 1048576)} MB`} tone="purple" /></div><Panel><div className="panel-heading"><div><span className="eyebrow">מדיניות שמירה</span><h2>מחיקת ראיות ישנות</h2></div></div><div className="settings-columns"><label>זיהויים מוכרים — ימים<input type="number" min="1" max="3650" value={known} onChange={(e) => setKnown(e.target.value)} /></label><label>אנשים לא מוכרים — ימים<input type="number" min="1" max="3650" value={unknown} onChange={(e) => setUnknown(e.target.value)} /></label></div><button className="button danger-ghost" onClick={prune}><Trash2 />מחיקה לפי המדיניות עכשיו</button></Panel></>;
 }
 
 function LogTools() {
   const [level, setLevel] = useState("");
   const logs = useResource(`logs?limit=400${level ? `&level=${level}` : ""}`);
-  return <Panel><div className="panel-heading"><div><span className="eyebrow">אבחון</span><h2>לוג מערכת</h2></div><div><select value={level} onChange={(e) => setLevel(e.target.value)}><option value="">כל הרמות</option><option value="ERROR">שגיאות</option><option value="WARNING">אזהרות</option><option value="INFO">מידע</option></select><button className="button secondary" onClick={logs.reload}><RefreshCw />רענון</button></div></div>{logs.loading ? <Loading /> : <pre className="log-view">{(logs.data?.lines || []).join("\n") || logs.data?.note || "אין שורות לוג"}</pre>}</Panel>;
+  return <Panel><div className="panel-heading"><div><span className="eyebrow">אבחון</span><h2>לוג מערכת</h2></div><div><select value={level} onChange={(e) => setLevel(e.target.value)}><option value="">כל הרמות</option><option value="ERROR">שגיאות</option><option value="WARNING">אזהרות</option><option value="INFO">מידע</option></select><button className="button secondary" onClick={logs.reload}><RefreshCw />רענון</button></div></div>{logs.loading ? <Loading /> : logs.error ? <ErrorState error={logs.error} retry={logs.reload} /> : <pre className="log-view">{(logs.data?.lines || []).join("\n") || logs.data?.note || "אין שורות לוג"}</pre>}</Panel>;
 }
