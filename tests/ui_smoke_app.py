@@ -52,7 +52,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "6.0.1", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
+    return {"status": "ok", "version": "6.1.0", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
             "backend": "CPUExecutionProvider", "mqtt": {"connected": True, "entities": 18},
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
@@ -278,6 +278,36 @@ def site_map(days: int = 7):
             "cameras": [{"camera": "Front door", "events": 80, "share": .597},
                         {"camera": "Hallway", "events": 54, "share": .403}],
             "hours": [], "transitions": [{"from": "Front door", "to": "Hallway", "count": 27}]}}
+
+
+@app.get("/api/faces/index")
+def face_index():
+    return {"running": False, "processed": 12, "total": 12}
+
+
+@app.post("/api/faces/index")
+def start_face_index():
+    return face_index()
+
+
+@app.get("/api/faces/timeline")
+def face_timeline(person: str = "", offset: int = 0):
+    return {"total": 3, "offset": offset, "limit": 50, "mode": "identity" if person else "similarity",
+            "cameras": ["כניסה", "חניה", "מסדרון"], "index": face_index(), "events": [
+                {"event_id": "qa-1", "camera": "כניסה", "start_ts": 1792249200, "person": "רונן", "similarity": None if person else .81},
+                {"event_id": "qa-2", "camera": "מסדרון", "start_ts": 1792249260, "person": "רונן", "similarity": None if person else .76},
+                {"event_id": "qa-3", "camera": "חניה", "start_ts": 1792335600, "person": None, "similarity": None if person else .64},
+            ]}
+
+
+@app.get("/api/access1")
+def access1_status():
+    return {"available": False, "enabled": False, "state": "awaiting_api", "people": {}, "cameras": {}, "attempts": []}
+
+
+@app.get("/api/access1/directory")
+def access1_directory():
+    return {"verified": False, "users": [], "readers": []}
 
 
 if __name__ == "__main__":

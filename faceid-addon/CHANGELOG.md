@@ -1,5 +1,40 @@
 # Changelog
 
+## 6.1.0 — 2026-10-18
+
+- **Photo search:** upload a photo to compare against the reference gallery and
+  recorded face observations. Group photos require an explicit face choice.
+  Search does not enroll anyone; adding the selected face is a separate action
+  bound to its original server-side crop and embedding, with quality validation.
+- **Cross-camera face timeline:** select a known person, an unknown review face,
+  or a face in an event to see related events grouped by day and ordered by time.
+  Camera/date filters, similarity thresholds, chronological direction, pagination
+  and clip playback are available in the same workflow. Similarity remains a
+  candidate signal; unconfirmed guesses never become identity history.
+- **Historical coverage:** new usable face observations are indexed locally in
+  the existing audit database, with at most eight distinct samples per event.
+  A background scan recovers vectors from retained historical images and unknown
+  metadata. Already deleted images cannot be recovered. Search crops obey the
+  configured evidence age/count limits; vectors follow audit-history retention.
+- **Everyday application UI:** added Gallery & Search, direct face-history actions
+  from people and review screens, visible reference photos and simpler enrollment
+  wording. Expert diagnostics remain accessible behind disclosure. Desktop and
+  phone layouts support the new workflow.
+- **Access1 preparation — not yet an active vendor connection:** added persistent
+  person-to-user and camera-to-reader mapping, a disabled setup screen and a tested
+  provider boundary. No vendor API/SDK/version has been supplied, so this release
+  does not connect to Access1 or open doors. A future verified provider must submit
+  a face credential through Access1's own permission flow and return its decision
+  and biometric event ID. Fresh secure live evidence, confirmed liveness and
+  idempotent requests are required; historical clips cannot authorize entry.
+- **Upstream reliability fixes adapted to this fork:** distinct Unicode names
+  without moving existing identities; atomic assignment that rejects stale or
+  empty selections; asynchronous MQTT connection and guarded callbacks; atomic
+  backups with writable persistent target checks; model cache excluded from HA
+  backups; JSON-safe add-on strings/lists and all four review limits forwarded.
+- **Enrollment repair:** restored the reference-embedding snapshot accessor used
+  by the existing photo-upload flow, with regression coverage for actual uploads.
+
 ## 6.0.1 — 2026-08-13
 
 - **Full-screen repair pass:** fixes a missing component import that could crash the

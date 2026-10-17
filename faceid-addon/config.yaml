@@ -1,5 +1,5 @@
 name: FaceID
-version: "6.0.1"
+version: "6.1.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -12,13 +12,18 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8600
-ingress_entry: ui-6.0.1
+ingress_entry: ui-6.1.0
 panel_icon: mdi:face-recognition
 panel_title: FaceID
 ports:
   8600/tcp: null
 ports_description:
   8600/tcp: Web UI without ingress (optional)
+backup_exclude:
+  - model-cache
+  - model-cache/**
+map:
+  - share:rw
 services:
   - mqtt:want
 options:
@@ -62,6 +67,7 @@ options:
   poll_interval: 0
   backup_enabled: false
   backup_hour: 3
+  backup_dir: ""
   backup_keep: 7
   audit_retention_days: 90
   known_evidence_days: 30
@@ -137,6 +143,7 @@ schema:
   poll_interval: int(0,3600)
   backup_enabled: bool
   backup_hour: int(0,23)
+  backup_dir: str?
   backup_keep: int(1,90)
   audit_retention_days: int(0,3650)
   known_evidence_days: int(1,3650)

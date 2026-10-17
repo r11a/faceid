@@ -8,16 +8,20 @@ import { api } from "./api.js";
 import { useResource } from "./hooks.js";
 import { Badge, ToastProvider } from "./ui.jsx";
 import { DashboardPage, EventsPage, PeoplePage, ReviewPage } from "./pages/Daily.jsx";
+import { FacesPage } from "./pages/Faces.jsx";
+import { Access1Page } from "./pages/Access1.jsx";
 import { CamerasPage, GuestsPage, IntercomPage, LivenessPage } from "./pages/Security.jsx";
 import { AutomationsPage, HealthPage } from "./pages/Management.jsx";
 import { AdvancedPage, CalibrationPage, LearningPage, SettingsPage } from "./pages/Advanced.jsx";
 
-const VERSION = "6.0.1";
+const VERSION = "6.1.0";
 const pages = {
   home: { title: "תמונת מצב", subtitle: "כל מה שחשוב עכשיו", icon: Home, component: DashboardPage },
   review: { title: "דורש טיפול", subtitle: "אישור מהיר של אירועים לא ודאיים", icon: ClipboardCheck, component: ReviewPage },
   events: { title: "אירועים ותחקור", subtitle: "חיפוש, קליפים ומסלולים", icon: Activity, component: EventsPage },
-  people: { title: "אנשים", subtitle: "הטמעה, עריכה וסטטיסטיקה", icon: Users, component: PeoplePage },
+  people: { title: "אנשים", subtitle: "תמונות והופעות של האנשים שלך", icon: Users, component: PeoplePage },
+  faces: { title: "גלריה וחיפוש", subtitle: "חפש פנים וצפה בהופעות מכל המצלמות", icon: Images, component: FacesPage },
+  access1: { title: "בקרת כניסה", subtitle: "משתמשים וקוראים ב־Access1", icon: DoorOpen, component: Access1Page },
   live: { title: "מצלמות", subtitle: "תמונה חיה ואיכות זיהוי", icon: Camera, component: CamerasPage },
   intercom: { title: "כניסה ואינטרקום", subtitle: "בדיקת פנים ברזולוציה גבוהה", icon: DoorOpen, component: IntercomPage },
   liveness: { title: "הגנה מזיוף", subtitle: "בדיקת אדם חי מול תמונה או מסך", icon: ShieldCheck, component: LivenessPage },
@@ -31,14 +35,14 @@ const pages = {
 };
 
 const groups = [
-  ["שימוש יומיומי", ["home", "review", "events", "people"]],
-  ["אבטחה וכניסות", ["live", "intercom", "liveness", "guests"]],
+  ["שימוש יומיומי", ["home", "faces", "people", "review", "events"]],
+  ["אבטחה וכניסות", ["live", "access1", "intercom", "guests"]],
   ["ניהול", ["automations", "health", "settings"]],
-  ["למומחים", ["learning", "calibration", "advanced"]],
+  ["למומחים", ["liveness", "learning", "calibration", "advanced"]],
 ];
 
 function resolvePage() {
-  const key = location.hash.replace(/^#\/?/, "").split("/")[0];
+  const key = location.hash.replace(/^#\/?/, "").split(/[/?]/)[0];
   return pages[key] ? key : "home";
 }
 
@@ -48,6 +52,7 @@ function Shell() {
   const [theme, setTheme] = useState(() => localStorage.getItem("faceid-theme") || "dark");
   const [clock, setClock] = useState(new Date());
   const [search, setSearch] = useState("");
+  const [expert, setExpert] = useState(false);
   const health = useResource("health", { poll: 15000 });
   const session = useResource("session");
   useEffect(() => {
@@ -72,7 +77,8 @@ function Shell() {
     <aside className={`sidebar ${drawer ? "open" : ""}`}>
       <div className="brand"><span className="brand-mark"><Images /></span><div><strong>FaceID</strong><small>מרכז זיהוי חכם</small></div><button className="drawer-close" onClick={() => setDrawer(false)}><X /></button></div>
       <nav>
-        {groups.map(([label, ids]) => {
+        <button className="text-button expert-toggle" onClick={() => setExpert(!expert)} aria-expanded={expert}>{expert ? "הסתר כלים מתקדמים" : "כלים מתקדמים"}</button>
+        {groups.filter(([label]) => expert || label !== "למומחים").map(([label, ids]) => {
           return <div className="nav-group" key={label}>
             <span className="nav-label">{label}</span>
             {ids.map((id) => { const Icon = pages[id].icon; return <button className={`nav-item ${page === id ? "active" : ""}`} onClick={() => navigate(id)} key={id}><span className={`nav-icon tone-${id}`}><Icon /></span><span><b>{pages[id].title}</b><small>{pages[id].subtitle}</small></span>{id === "review" && reviewCount > 0 && <em>{reviewCount > 99 ? "99+" : reviewCount}</em>}<ChevronLeft /></button>; })}

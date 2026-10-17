@@ -1,0 +1,4 @@
+frontend/index.html text eol=lf
+faceid-addon/run.sh text eol=lf
+static/** text eol=lf
+faceid-addon/static/** text eol=lf

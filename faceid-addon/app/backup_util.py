@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import uuid
 from pathlib import Path
 
 log = logging.getLogger("faceid.backup")
@@ -17,7 +18,7 @@ BACKUP_SUBDIRS = ("persons", "ignored", "body", "guests")
 BACKUP_FILES = (
     "settings.json", "learning_runs.json", "frigate_sync.json",
     "camera_profiles.json", "access_control.json", "guest_access.json",
-    "site_map.json", "schema.json",
+    "site_map.json", "schema.json", "access1.json",
 )
 
 
@@ -73,11 +74,32 @@ def build_backup_gz(data_dir: Path) -> bytes:
 
 
 def write_backup_file(data_dir: Path, backup_dir: Path) -> Path:
+    backup_dir = validate_backup_dir(data_dir, backup_dir)
     backup_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
     path = backup_dir / f"faceid-backup-{ts}.tar.gz"
-    path.write_bytes(build_backup_gz(data_dir))
+    temporary = backup_dir / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(build_backup_gz(data_dir))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
+
+
+def validate_backup_dir(data_dir: Path, backup_dir: Path) -> Path:
+    target = backup_dir.expanduser().resolve()
+    if os.environ.get("FACEID_ADDON") == "1":
+        if not any(target == root or root in target.parents
+                   for root in (Path('/data').resolve(), Path('/share').resolve())):
+            raise ValueError('Backup directory must be inside /data or /share')
+    target.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryFile(dir=target):
+        pass
+    return target
 
 
 def prune_backups(backup_dir: Path, keep: int):

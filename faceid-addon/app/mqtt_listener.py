@@ -149,11 +149,11 @@ class EventProcessor:
         if m.get("user"):
             c.username_pw_set(m["user"], m.get("password", ""))
         c.will_set(f"{self.prefix}/status", "offline", retain=True)
-        c.on_connect = self._on_connect
-        c.on_message = self._on_message
-        c.connect(m["host"], int(m.get("port", 1883)), keepalive=60)
-        c.loop_start()
         self.client = c
+        c.on_connect = self._guard_callback(self._on_connect)
+        c.on_message = self._guard_callback(self._on_message)
+        c.connect_async(m["host"], int(m.get("port", 1883)), keepalive=60)
+        c.loop_start()
         self._check_frigate()
         threading.Thread(target=self._worker, daemon=True, name="faceid-worker").start()
         threading.Thread(target=self._finalizer, daemon=True, name="faceid-finalizer").start()
@@ -165,6 +165,15 @@ class EventProcessor:
             ).start()
         if self.poll_interval > 0:
             threading.Thread(target=self._poller, daemon=True, name="faceid-poller").start()
+
+    @staticmethod
+    def _guard_callback(callback):
+        def guarded(*args, **kwargs):
+            try:
+                return callback(*args, **kwargs)
+            except Exception:
+                log.exception("MQTT callback failed; connection remains active")
+        return guarded
 
     def camera_enabled(self, camera: str) -> bool:
         """Return the live UI override, falling back to the legacy allow-list."""
@@ -415,6 +424,7 @@ class EventProcessor:
         )
         img = None
         source = "snapshot"
+        st["access1_evidence_ts"] = None
         if camera_profile and camera_profile.get("high_resolution"):
             # Stay on Frigate's configured API (normally authenticated 8971).  No
             # browser-visible go2rtc/1984 connection or extra credential path.
@@ -423,6 +433,7 @@ class EventProcessor:
                 img = self.frigate.recording_frame(st["camera"], timestamp)
                 if img is not None:
                     source = "secure_live_hires"
+                    st["access1_evidence_ts"] = timestamp
                     break
         if img is None:
             img = self.frigate.snapshot(eid, crop=True)
@@ -523,6 +534,12 @@ class EventProcessor:
             if st["liveness"].get("confirmed"):
                 st["liveness_blocked"] = False
         emb = face.normed_embedding
+        face_search = getattr(self, "face_search", None)
+        if face_search is not None:
+            try:
+                face_search.record(eid, emb, crop_face(img, face.bbox))
+            except Exception:
+                log.exception("Could not index face for event %s", eid)
         candidates = self.gallery.match_candidates(emb, limit=3)
         guest_access = getattr(self, "guest_access", None)
         if guest_access is not None:
@@ -599,6 +616,17 @@ class EventProcessor:
             )
             st["recognition_occurrence"] = occurrence
             actionable = occurrence != "presence_update"
+            access1 = getattr(self, "access1", None)
+            if access1 is not None:
+                access1.enqueue({
+                    "event_id": eid, "slug": decision.slug, "camera": st["camera"],
+                    "score": decision.score, "occurred_at": st.get("start_time"),
+                    "queued_at": time.time(),
+                    "evidence_source": source,
+                    "evidence_ts": st.get("access1_evidence_ts"),
+                    "event_ended": bool(st.get("end_time")),
+                    "liveness_confirmed": bool((st.get("liveness") or {}).get("confirmed")),
+                })
             if self.audit and actionable:
                 self.audit.save_evidence(eid, crop)
             st["best_score"], st["best_person"] = decision.score, decision.person

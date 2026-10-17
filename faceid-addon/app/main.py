@@ -12,7 +12,7 @@ from .frigate_api import FrigateAPI
 from .gallery import Gallery
 from .mqtt_listener import EventProcessor
 from .webui import build_app
-from .backup_util import start_auto_backup
+from .backup_util import start_auto_backup, validate_backup_dir
 from .audit import AuditStore
 from .scenarios import ScenarioManager
 from .reid import AppearanceReID
@@ -58,6 +58,8 @@ def main():
             cfg.setdefault("faceid", {}).update(json.loads(settings_f.read_text()))
         except (json.JSONDecodeError, OSError):
             log.warning("settings.json unreadable — ignoring it")
+    if cfg["faceid"].get("backup_enabled") or cfg["faceid"].get("backup_dir"):
+        validate_backup_dir(data_dir, Path(cfg["faceid"].get("backup_dir") or (data_dir / "backups")))
     log.info("loading InsightFace (buffalo_l) …")
     engine = FaceEngine(
         det_size=int(cfg["faceid"].get("det_size", 640)),
@@ -180,6 +182,11 @@ def main():
     processor.migration = migration
     processor.vision_advisor = vision_advisor
     processor.runtime_health = RuntimeHealth(data_dir, processor)
+    from .face_search import FaceSearch
+    processor.face_search = FaceSearch(audit, gallery, engine)
+    processor.face_search.start_index()
+    from .access1 import Access1Integration
+    processor.access1 = Access1Integration(data_dir, audit)
     processor.start()
     start_auto_backup(cfg["faceid"], data_dir)
     app = build_app(cfg, engine, gallery, processor, data_dir, BASE / "static")
