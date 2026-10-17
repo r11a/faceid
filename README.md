@@ -1,5 +1,27 @@
 # FaceID — self-hosted face recognition for Frigate + Home Assistant
 
+## FaceID 6.1: photo search and camera timelines
+
+Open **Gallery & Search** to upload a photo, choose one face if several people are
+present, and see similar enrolled people plus chronological appearances across
+cameras. Search is temporary and does not add anyone to the gallery. **Add to
+gallery** explicitly enrolls the selected face into an existing or new person.
+
+Opening a person shows their reference photos and confirmed history. **Find
+appearances** on an unknown face searches by similarity without assigning a name.
+Use camera/date filters and the similarity slider to refine the timeline; open an
+event to play its Frigate clip. Similarity is not proof of identity.
+
+New observations are indexed automatically. Retained old images are indexed in the
+background at startup, or with **Scan available historical images**. Deleted images
+cannot be reconstructed. Face crops share the configured evidence retention policy;
+vectors stay with the audit history and are removed when that history is purged.
+
+**Access1 is preparation only in 6.1.0.** You can save person/user and camera/reader
+mappings, but no vendor transport is installed and door operation stays disabled.
+The required Access1 product/version/API documentation is still outstanding. See
+[the integration contract](docs/access1.md) before implementing a vendor adapter.
+
 ## FaceID 6.0: a focused product interface for homes and offices
 
 6.0 replaces the legacy single-file dashboard with a maintainable React interface.

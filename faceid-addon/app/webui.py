@@ -18,11 +18,13 @@ from pydantic import BaseModel
 from . import logbuffer, VERSION
 from .engine import FaceEngine, crop_face, find_face_padded
 from .gallery import _atomic_write_json
-from .backup_util import build_backup_gz, write_backup_file, prune_backups
+from .backup_util import build_backup_gz, write_backup_file, prune_backups, validate_backup_dir
 from .calibration import UNKNOWN_LABEL, build_calibration_report
 from .gallery_coach import gallery_coach_report
 from .quality import measure_face_quality
 from .enrollment import choose_enrollment_face
+from .face_search import register_face_routes
+from .access1 import register_access1_routes
 from pathlib import Path as _P
 
 log = logging.getLogger("faceid.web")
@@ -43,6 +45,8 @@ class RenameBody(BaseModel):
 
 def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path) -> FastAPI:
     app = FastAPI(title="FaceID")
+    register_face_routes(app, processor, gallery, engine)
+    register_access1_routes(app, processor, gallery, data_dir)
     capture_previews: dict[str, tuple[float, bytes]] = {}
     capture_preview_lock = threading.Lock()
 
@@ -360,11 +364,22 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
 
     @app.post("/api/unknowns/assign")
     def assign(body: AssignBody):
+        with gallery.assignment_lock:
+            return _assign(body)
+
+    def _assign(body):
+        ids = list(dict.fromkeys(body.ids))[:1000]
+        if not any((gallery.unknown_dir / f"{uid}.json").is_file()
+                   and (gallery.unknown_dir / f"{uid}.jpg").is_file()
+                   for uid in ids if Path(uid).name == uid):
+            raise HTTPException(409, "התמונות כבר טופלו או שלא נבחרו פנים")
         persons_now = gallery.persons()
         slug = body.person if body.person in persons_now else gallery.create_person(body.person)
         name = gallery.persons()[slug]["name"]
         n = 0
-        for uid in body.ids:
+        for uid in ids:
+            if Path(uid).name != uid:
+                continue
             jf = gallery.unknown_dir / f"{uid}.json"
             meta = {}
             if jf.exists():
@@ -377,6 +392,10 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 # Zuordnung ans Original-Event zurückspielen (Mensch bestätigt -> Score 1.0)
                 if processor.set_sub_label and meta.get("event_id"):
                     processor.frigate.set_sub_label(meta["event_id"], name, 1.0)
+        if n == 0:
+            if slug not in persons_now and gallery.persons()[slug]["count"] == 0:
+                gallery.delete_person(slug)
+            raise HTTPException(409, "התמונות כבר טופלו; לא שויכו פנים")
         gallery.refresh_guesses()
         return {"assigned": n, "slug": slug}
 
@@ -671,6 +690,11 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
 
     @app.post("/api/settings")
     def post_settings(body: dict):
+        if body.get("backup_dir"):
+            try:
+                validate_backup_dir(data_dir, Path(body["backup_dir"]))
+            except (OSError, ValueError) as exc:
+                raise HTTPException(400, str(exc)) from exc
         updates = {}
         for k, (lo, hi) in SETTINGS_SPEC.items():
             if k in body:
@@ -701,7 +725,10 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     def backup_now():
         f = cfg["faceid"]
         bdir = _P(f.get("backup_dir") or (data_dir / "backups"))
-        p = write_backup_file(data_dir, bdir)
+        try:
+            p = write_backup_file(data_dir, bdir)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
         prune_backups(bdir, int(f.get("backup_keep", 7)))
         return {"ok": True, "file": str(p)}
 
@@ -753,7 +780,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 if len(norm.parts) != 2 or norm.parts[1] not in {
                     "settings.json", "learning_runs.json", "frigate_sync.json",
                     "camera_profiles.json", "access_control.json", "guest_access.json",
-                    "site_map.json", "schema.json",
+                    "site_map.json", "schema.json", "access1.json",
                     "audit.db"
                 }:
                     continue
@@ -938,6 +965,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         )
         profile["gallery"] = {
             "photos": len(person.get("files") or []),
+            "images": [f"media/persons/{slug}/{file}" for file in (person.get("files") or [])],
             "sources": person.get("sources") or {},
             "recommendation": (
                 "הוסף עוד תמונות מזוויות ומצלמות שונות"
@@ -1164,7 +1192,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
 
     @app.get("/api/privacy")
     def privacy():
-        images = list((data_dir / "audit_images").glob("*.jpg"))
+        images = [*list((data_dir / "audit_images").glob("*.jpg")),
+                  *list((data_dir / "face_search_images").glob("*.jpg"))]
         return {
             "audit_events": (
                 processor.audit.search_events(limit=1)["total"]

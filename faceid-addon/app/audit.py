@@ -311,6 +311,12 @@ class AuditStore:
                 (cutoff,),
             )
             con.execute("DELETE FROM scenarios WHERE end_ts < ?", (cutoff,))
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_samples'").fetchone():
+                con.execute("DELETE FROM face_samples WHERE event_id NOT IN (SELECT event_id FROM events)")
+                con.execute("DELETE FROM face_indexed WHERE event_id NOT IN (SELECT event_id FROM events)")
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='access1_attempts'").fetchone():
+                con.execute("DELETE FROM access1_attempts WHERE ts < ?", (cutoff,))
+        self.prune_face_evidence()
         for image in self.evidence_dir.glob("*.jpg"):
             try:
                 if image.stat().st_mtime < cutoff:
@@ -712,6 +718,36 @@ class AuditStore:
                     removed += 1
                 except OSError:
                     pass
+        return removed + self.prune_face_evidence()
+
+    def prune_face_evidence(self) -> int:
+        """Apply the same configured evidence policy to indexed face crops."""
+        with self._lock, self._connection() as con:
+            if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_samples'").fetchone():
+                return 0
+            rows = con.execute("SELECT s.sample_id,e.status,e.updated_ts FROM face_samples s JOIN events e ON e.event_id=s.event_id ORDER BY e.updated_ts DESC,s.created_ts DESC").fetchall()
+        root = self.path.parent / "face_search_images"
+        kept = {"known":0,"unknown":0}
+        allowed = set()
+        now = time.time()
+        for sample_id,status,updated_ts in rows:
+            path = root / f"{sample_id}.jpg"
+            if not path.is_file():
+                continue
+            kind = "known" if status == "recognized" else "unknown"
+            days = self.evidence_known_days if kind == "known" else self.evidence_unknown_days
+            maximum = self.evidence_known_max if kind == "known" else self.evidence_unknown_max
+            if (days <= 0 or updated_ts >= now-days*86400) and maximum > 0 and kept[kind] < maximum:
+                allowed.add(path.name)
+                kept[kind] += 1
+        removed = 0
+        for path in root.glob("*.jpg"):
+            if path.name not in allowed:
+                try:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+                except OSError:
+                    pass
         return removed
 
     def delete_person_history(self, person: str) -> int:
@@ -723,6 +759,13 @@ class AuditStore:
                 ).fetchall()
             ]
             for event_id in event_ids:
+                if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='access1_attempts'").fetchone():
+                    con.execute("DELETE FROM access1_attempts WHERE face_event_id=?", (event_id,))
+                if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_samples'").fetchone():
+                    for (sample_id,) in con.execute("SELECT sample_id FROM face_samples WHERE event_id=?", (event_id,)).fetchall():
+                        (self.path.parent / "face_search_images" / f"{sample_id}.jpg").unlink(missing_ok=True)
+                    con.execute("DELETE FROM face_samples WHERE event_id=?", (event_id,))
+                    con.execute("DELETE FROM face_indexed WHERE event_id=?", (event_id,))
                 con.execute("DELETE FROM review_history WHERE event_id=?", (event_id,))
                 con.execute("DELETE FROM observations WHERE event_id=?", (event_id,))
                 con.execute("DELETE FROM jobs WHERE event_id=?", (event_id,))

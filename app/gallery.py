@@ -4,6 +4,8 @@ Matching per Cosine-Similarity (Embeddings sind L2-normiert -> Dot-Product).
 Kein Training, kein Overfitting: jedes Bild ist ein eigener Vergleichspunkt.
 """
 import json
+import hashlib
+import unicodedata
 import os
 import re
 import shutil
@@ -49,11 +51,27 @@ def _atomic_save_npy(path: Path, value: np.ndarray):
 
 
 def slugify(name: str) -> str:
-    s = name.strip().lower()
+    normalized = unicodedata.normalize("NFKC", name).strip().casefold()
+    s = normalized
     for a, b in [("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")]:
         s = s.replace(a, b)
+    # Strip accents from Latin characters while keeping the on-disk identifier ASCII.
+    # Scripts without an ASCII representation get a stable,
+    # name-derived suffix instead of all collapsing to the literal directory "person".
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
-    return s or "person"
+    if s:
+        return s
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:10]
+    return f"person-{digest}"
+
+
+def _same_name(a: str, b: str) -> bool:
+    """Compare display names without treating Unicode composition or case as distinct."""
+    return (
+        unicodedata.normalize("NFKC", a).strip().casefold()
+        == unicodedata.normalize("NFKC", b).strip().casefold()
+    )
 
 
 class Gallery:
@@ -74,7 +92,8 @@ class Gallery:
         self.review_queue_max_per_cluster = 12
         self.review_queue_retention_days = 14
         self.review_queue_dedupe_days = 7
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self.assignment_lock = self._lock
         self._cache = {}  # slug -> {"name":..., "emb": np.ndarray, "files": [...]}
         self._ign_emb = np.zeros((0, 512), dtype=np.float32)
         self._ign_ids: list[str] = []
@@ -93,7 +112,7 @@ class Gallery:
                 emb_f = pdir / "embeddings.npy"
                 if not meta_f.exists() or not emb_f.exists():
                     continue
-                meta = json.loads(meta_f.read_text())
+                meta = json.loads(meta_f.read_text(encoding="utf-8"))
                 emb = np.load(emb_f)
                 files, changed = self._repair_person(pdir, meta, emb)
                 self._cache[pdir.name] = {
@@ -112,7 +131,7 @@ class Gallery:
             embs, ids, groups = [], [], []
             for jf in sorted(self.ignored_dir.glob("*.json")):
                 try:
-                    m = json.loads(jf.read_text())
+                    m = json.loads(jf.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     continue
                 embs.append(m["embedding"])
@@ -176,7 +195,7 @@ class Gallery:
             src.rename(td / fname)
         log_f = td / "log.json"
         try:
-            log = json.loads(log_f.read_text()) if log_f.exists() else []
+            log = json.loads(log_f.read_text(encoding="utf-8")) if log_f.exists() else []
         except (json.JSONDecodeError, OSError):
             log = []
         log.insert(0, {"file": fname, "ts": time.time(), "mean_sim": round(mean_sim, 3),
@@ -195,7 +214,7 @@ class Gallery:
         if not log_f.exists():
             return []
         try:
-            log = json.loads(log_f.read_text())
+            log = json.loads(log_f.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return []
         entry = self._cache.get(slug)
@@ -238,7 +257,7 @@ class Gallery:
             log_f = td / "log.json"
             if entry is None or not log_f.exists():
                 return False
-            log = json.loads(log_f.read_text())
+            log = json.loads(log_f.read_text(encoding="utf-8"))
             rec = next((e for e in log if e["file"] == fname), None)
             if rec is None or not (td / fname).exists():
                 return False
@@ -256,7 +275,7 @@ class Gallery:
         (td / fname).unlink(missing_ok=True)
         if log_f.exists():
             try:
-                log = [e for e in json.loads(log_f.read_text()) if e["file"] != fname]
+                log = [e for e in json.loads(log_f.read_text(encoding="utf-8")) if e["file"] != fname]
                 _atomic_write_json(log_f, log)
             except (json.JSONDecodeError, OSError):
                 pass
@@ -313,7 +332,7 @@ class Gallery:
             if entry is None:
                 return False
             duplicate = any(
-                key != slug and value["name"].casefold() == name.casefold()
+                key != slug and _same_name(value["name"], name)
                 for key, value in self._cache.items()
             )
             if duplicate:
@@ -322,15 +341,41 @@ class Gallery:
             self._persist(slug)
             return True
 
+    def embeddings(self, slug: str) -> np.ndarray:
+        """Return a detached reference snapshot for safe photo selection."""
+        with self._lock:
+            entry = self._cache.get(slug)
+            if entry is None:
+                raise KeyError(slug)
+            return entry["emb"].copy()
+
     def create_person(self, name: str) -> str:
         slug = slugify(name)
         with self._lock:
+            # Creating the same display name again is idempotent, even if an older
+            # version used a different slugging scheme for it.
+            for existing_slug, entry in self._cache.items():
+                if _same_name(entry["name"], name):
+                    return existing_slug
+
+            # Different names can legitimately have the same ASCII projection
+            # ("Alex" / "Alex!", or names from different non-Latin scripts). Never
+            # silently turn such a request into the already-existing person.
+            if slug in self._cache or (self.persons_dir / slug).exists():
+                digest = hashlib.sha256(
+                    unicodedata.normalize("NFKC", name).strip().casefold().encode("utf-8")
+                ).hexdigest()[:10]
+                base = f"{slug}-{digest}"
+                slug = base
+                suffix = 2
+                while slug in self._cache or (self.persons_dir / slug).exists():
+                    slug = f"{base}-{suffix}"
+                    suffix += 1
             pdir = self.persons_dir / slug
             pdir.mkdir(exist_ok=True)
-            if slug not in self._cache:
-                self._cache[slug] = {"name": name, "emb": np.zeros((0, 512), dtype=np.float32),
-                                     "files": [], "favorite": False, "sources": {}}
-                self._persist(slug)
+            self._cache[slug] = {"name": name, "emb": np.zeros((0, 512), dtype=np.float32),
+                                 "files": [], "favorite": False, "sources": {}}
+            self._persist(slug)
         return slug
 
     def add_face(self, slug: str, crop_bgr: np.ndarray, embedding: np.ndarray,
@@ -581,7 +626,7 @@ class Gallery:
     def _rewrite_ignored_meta(self, iid: str, updates: dict):
         jf = self.ignored_dir / f"{iid}.json"
         try:
-            m = json.loads(jf.read_text())
+            m = json.loads(jf.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return
         m.update(updates)
@@ -606,7 +651,7 @@ class Gallery:
             img_f = self.ignored_dir / f"{iid}.jpg"
             if not jf.exists() or not img_f.exists():
                 continue
-            meta = json.loads(jf.read_text())
+            meta = json.loads(jf.read_text(encoding="utf-8"))
             crop = cv2.imread(str(img_f))
             if crop is None:
                 continue
@@ -637,7 +682,7 @@ class Gallery:
             img = self.unknown_dir / f"{uid}.jpg"
             if not jf.exists() or not img.exists():
                 return False
-            meta = json.loads(jf.read_text())
+            meta = json.loads(jf.read_text(encoding="utf-8"))
             iid = f"i{uid.lstrip('ui')}"
             img.rename(self.ignored_dir / f"{iid}.jpg")
             grp = group or f"g{iid}"
@@ -703,7 +748,7 @@ class Gallery:
         out = []
         for jf in sorted(self.ignored_dir.glob("*.json"), reverse=True):
             try:
-                m = json.loads(jf.read_text())
+                m = json.loads(jf.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
             out.append({"id": jf.stem, "camera": m.get("camera", ""), "ts": m.get("ts", 0),
@@ -716,7 +761,7 @@ class Gallery:
         clusters: dict[str, list] = {}
         for jf in sorted(self.ignored_dir.glob("*.json"), reverse=True):
             try:
-                m = json.loads(jf.read_text())
+                m = json.loads(jf.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
             grp = m.get("group") or f"g{jf.stem}"
@@ -732,7 +777,7 @@ class Gallery:
             img = self.ignored_dir / f"{iid}.jpg"
             if not jf.exists() or not img.exists():
                 return False
-            meta = json.loads(jf.read_text())
+            meta = json.loads(jf.read_text(encoding="utf-8"))
             uid = f"u{int(time.time() * 1000)}"
             img.rename(self.unknown_dir / f"{uid}.jpg")
             meta.update(ts=time.time(), event_id="", restored=True)
@@ -763,7 +808,7 @@ class Gallery:
             now = time.time()
             for jf in self.unknown_dir.glob("*.json"):
                 try:
-                    m = json.loads(jf.read_text())
+                    m = json.loads(jf.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     continue
                 if now - m.get("ts", 0) < self.review_queue_dedupe_days * 86400:
@@ -780,9 +825,10 @@ class Gallery:
         return uid
 
     def _delete_unknown_files(self, uid: str):
-        (self.unknown_dir / f"{uid}.json").unlink(missing_ok=True)
-        (self.unknown_dir / f"{uid}.jpg").unlink(missing_ok=True)
-        (self.unknown_dir / f"{uid}_full.jpg").unlink(missing_ok=True)
+        with self._lock:
+            (self.unknown_dir / f"{uid}.json").unlink(missing_ok=True)
+            (self.unknown_dir / f"{uid}.jpg").unlink(missing_ok=True)
+            (self.unknown_dir / f"{uid}_full.jpg").unlink(missing_ok=True)
 
     def prune_unknown_queue(self) -> dict:
         """Bound the review inbox by age, representative cluster and global size.
@@ -869,7 +915,7 @@ class Gallery:
         out = []
         for jf in sorted(self.unknown_dir.glob("*.json"), reverse=True):
             try:
-                m = json.loads(jf.read_text())
+                m = json.loads(jf.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
             out.append({"id": jf.stem, **{k: v for k, v in m.items() if k != "embedding"},
@@ -893,30 +939,32 @@ class Gallery:
         return sorted(clusters.values(), key=len, reverse=True)
 
     def assign_unknown(self, uid: str, slug: str):
-        jf = self.unknown_dir / f"{uid}.json"
-        img_f = self.unknown_dir / f"{uid}.jpg"
-        if not jf.exists() or not img_f.exists():
-            return False
-        meta = json.loads(jf.read_text())
-        crop = cv2.imread(str(img_f))
-        self.add_face(slug, crop, np.array(meta["embedding"], dtype=np.float32),
-                      source={"camera": meta.get("camera"),
-                              "event_ts": meta.get("event_ts") or meta.get("ts")})
-        jf.unlink()
-        img_f.unlink()
-        (self.unknown_dir / f"{uid}_full.jpg").unlink(missing_ok=True)
-        return True
+        with self._lock:
+            jf = self.unknown_dir / f"{uid}.json"
+            img_f = self.unknown_dir / f"{uid}.jpg"
+            if not jf.exists() or not img_f.exists():
+                return False
+            meta = json.loads(jf.read_text(encoding="utf-8"))
+            crop = cv2.imread(str(img_f))
+            self.add_face(slug, crop, np.array(meta["embedding"], dtype=np.float32),
+                          source={"camera": meta.get("camera"),
+                                  "event_ts": meta.get("event_ts") or meta.get("ts")})
+            jf.unlink()
+            img_f.unlink()
+            (self.unknown_dir / f"{uid}_full.jpg").unlink(missing_ok=True)
+            return True
 
     def refresh_guesses(self):
         """Verbleibende Unknowns gegen die aktuelle Galerie neu bewerten (nach Zuordnungen)."""
-        for jf in self.unknown_dir.glob("*.json"):
-            try:
-                m = json.loads(jf.read_text())
-            except (json.JSONDecodeError, OSError):
-                continue
-            _, name, score = self.match(np.array(m["embedding"], dtype=np.float32))
-            m["guess"], m["guess_score"] = name, round(float(score), 3)
-            _atomic_write_json(jf, m)
+        with self._lock:
+            for jf in self.unknown_dir.glob("*.json"):
+                try:
+                    m = json.loads(jf.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                _, name, score = self.match(np.array(m["embedding"], dtype=np.float32))
+                m["guess"], m["guess_score"] = name, round(float(score), 3)
+                _atomic_write_json(jf, m)
 
     def discard_unknown(self, uid: str):
         self._delete_unknown_files(uid)

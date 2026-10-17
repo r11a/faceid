@@ -19,7 +19,7 @@ ROLE_TABS = {
 MUTATING_PREFIXES = {
     "operator": (
         "/api/persons", "/api/unknowns", "/api/audit",
-        "/api/intercom", "/api/liveness", "/api/guests", "/api/site-map",
+        "/api/intercom", "/api/liveness", "/api/guests", "/api/site-map", "/api/faces",
     ),
     "viewer": (),
 }
