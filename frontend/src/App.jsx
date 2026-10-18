@@ -14,7 +14,7 @@ import { CamerasPage, GuestsPage, IntercomPage, LivenessPage } from "./pages/Sec
 import { AutomationsPage, HealthPage } from "./pages/Management.jsx";
 import { AdvancedPage, CalibrationPage, LearningPage, SettingsPage } from "./pages/Advanced.jsx";
 
-const VERSION = "6.1.0";
+const VERSION = "6.1.1";
 const pages = {
   home: { title: "תמונת מצב", subtitle: "כל מה שחשוב עכשיו", icon: Home, component: DashboardPage },
   review: { title: "דורש טיפול", subtitle: "אישור מהיר של אירועים לא ודאיים", icon: ClipboardCheck, component: ReviewPage },
