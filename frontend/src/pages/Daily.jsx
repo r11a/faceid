@@ -85,31 +85,6 @@ function EventModal({ eventId, people, onClose, onChanged }) {
   </Modal>;
 }
 
-export function DashboardPage({ navigate }) {
-  const dashboard = useResource("dashboard", { poll: 15000 });
-  const health = useResource("health", { poll: 15000 });
-  const [eventId, setEventId] = useState(null);
-  if (dashboard.loading) return <Loading text="מכין תמונת מצב…" />;
-  if (dashboard.error) return <ErrorState error={dashboard.error} retry={dashboard.reload} />;
-  const data = dashboard.data || {};
-  const summary = data.summary || {};
-  const online = health.data?.status === "ok";
-  return <>
-    <PageHeader eyebrow="מרכז הפעלה" title="שלום, הנה מה שקורה עכשיו" description="המידע החשוב מוצג כאן. כלי כיול והגדרות מחכים באזור המתקדם." actions={<button className="button primary" onClick={() => navigate("review")}><ClipboardCheck />לבדיקת אירועים{health.data?.queue ? ` (${health.data.queue})` : ""}</button>} />
-    <div className="metrics-grid">
-      <Metric icon={ShieldAlert} label="מצב המערכת" value={online ? "תקינה" : "דורש בדיקה"} note={online ? "כל השירותים מגיבים" : "פתח את מרכז התקינות"} tone={online ? "green" : "red"} />
-      <Metric icon={UserCheck} label="זיהויים היום" value={summary.recognized_today ?? summary.today ?? 0} note={`${summary.events_today ?? 0} אירועים היום`} tone="turquoise" />
-      <Metric icon={ClipboardCheck} label="ממתינים לאישור" value={health.data?.queue ?? 0} note="תמונות שנשמרו באופן מבוקר" tone="amber" />
-      <Metric icon={Users} label="אנשים במערכת" value={data.people?.length || 0} note={`${summary.seen_today ?? 0} נראו היום`} tone="purple" />
-    </div>
-    <div className="dashboard-columns">
-      <Panel className="people-overview"><div className="panel-heading"><div><span className="eyebrow">אנשים</span><h2>מי נראה לאחרונה</h2></div><button className="text-button" onClick={() => navigate("people")}>לכל האנשים <ChevronLeft /></button></div><div className="people-card-grid">{(data.people || []).slice(0, 8).map((person) => <button className="person-card" key={person.slug} onClick={() => navigate("people")}><PersonAvatar person={person} /><div><h3>{person.name}{person.favorite && <Star className="favorite" />}</h3><p><MapPin />{person.last_camera || "לא נראה עדיין"}</p><span>{relativeTime(person.last_seen)}</span></div><div className="person-score"><strong>{percent(person.avg_score)}</strong><small>דיוק ממוצע</small></div></button>)}</div>{!data.people?.length && <Empty icon={Users} title="עדיין אין אנשים" text="התחל בהטמעה קצרה של אדם ראשון." action={<button className="button primary" onClick={() => navigate("people")}><Plus />הוספת אדם</button>} />}</Panel>
-      <Panel className="recent-panel"><div className="panel-heading"><div><span className="eyebrow">עכשיו</span><h2>אירועים אחרונים</h2></div><button className="text-button" onClick={() => navigate("events")}>לכל האירועים <ChevronLeft /></button></div><div className="recent-list">{(data.recent || []).map((event) => { const info = decision[event.status] || [event.status, "neutral"]; return <button key={event.event_id} onClick={() => setEventId(event.event_id)}><EventThumb event={event} /><span><b>{event.person || "לא מוכר"}</b><small>{event.camera} · {relativeTime(event.start_ts || event.updated_ts)}</small></span><Badge tone={info[1]}>{percent(event.score)}</Badge></button>; })}</div></Panel>
-    </div>
-    {eventId && <EventModal eventId={eventId} people={data.people || []} onClose={() => setEventId(null)} onChanged={dashboard.reload} />}
-  </>;
-}
-
 export function EventsPage() {
   const users = useResource("users");
   const [filters, setFilters] = useState({ q: "", person: "", status: "", camera: "", date_from: "", date_to: "" });
@@ -179,7 +154,7 @@ export function PeoplePage({ navigate }) {
   </>;
 }
 
-function PersonEditor({ person, onClose, onSaved }) {
+export function PersonEditor({ person, onClose, onSaved }) {
   const [name, setName] = useState(person.name || "");
   const [files, setFiles] = useState([]);
   const [saving, setSaving] = useState(false);

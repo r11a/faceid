@@ -7,16 +7,17 @@ import {
 import { api } from "./api.js";
 import { useResource } from "./hooks.js";
 import { Badge, ToastProvider } from "./ui.jsx";
-import { DashboardPage, EventsPage, PeoplePage, ReviewPage } from "./pages/Daily.jsx";
+import { EventsPage, PeoplePage, ReviewPage } from "./pages/Daily.jsx";
+import { DashboardPage } from "./pages/Home.jsx";
 import { FacesPage } from "./pages/Faces.jsx";
 import { Access1Page } from "./pages/Access1.jsx";
 import { CamerasPage, GuestsPage, IntercomPage, LivenessPage } from "./pages/Security.jsx";
 import { AutomationsPage, HealthPage } from "./pages/Management.jsx";
 import { AdvancedPage, CalibrationPage, LearningPage, SettingsPage } from "./pages/Advanced.jsx";
 
-const VERSION = "6.1.1";
+const VERSION = "6.2.0";
 const pages = {
-  home: { title: "תמונת מצב", subtitle: "כל מה שחשוב עכשיו", icon: Home, component: DashboardPage },
+  home: { title: "מבט כללי", subtitle: "אירועים ומיקומים אחרונים", icon: Home, component: DashboardPage },
   review: { title: "דורש טיפול", subtitle: "אישור מהיר של אירועים לא ודאיים", icon: ClipboardCheck, component: ReviewPage },
   events: { title: "אירועים ותחקור", subtitle: "חיפוש, קליפים ומסלולים", icon: Activity, component: EventsPage },
   people: { title: "אנשים", subtitle: "תמונות והופעות של האנשים שלך", icon: Users, component: PeoplePage },
@@ -72,7 +73,7 @@ function Shell() {
     if (!q) return [];
     return Object.entries(pages).filter(([, item]) => `${item.title} ${item.subtitle}`.toLowerCase().includes(q)).slice(0, 6);
   }, [search]);
-  return <div className="app-shell">
+  return <div className={`app-shell ${page === "home" ? "shell-home" : ""}`}>
     {drawer && <button className="drawer-scrim" onClick={() => setDrawer(false)} aria-label="סגירת תפריט" />}
     <aside className={`sidebar ${drawer ? "open" : ""}`}>
       <div className="brand"><span className="brand-mark"><Images /></span><div><strong>FaceID</strong><small>מרכז זיהוי חכם</small></div><button className="drawer-close" onClick={() => setDrawer(false)}><X /></button></div>
