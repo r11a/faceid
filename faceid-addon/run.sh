@@ -108,7 +108,7 @@ faceid:
   visit_gap_minutes: $(cfg_json '.visit_gap_minutes // 15')
   calibration_target_far: $(cfg_json '.calibration_target_far')
   scenario_window: $(cfg_json '.scenario_window')
-  camera_graph: $(cfg_json '.camera_graph_json')
+  camera_graph: $(cfg_json '(.camera_graph_json // "{}") | if type == "string" then fromjson else . end')
   reid_enabled: $(cfg_json '.reid_enabled')
   reid_ttl: $(cfg_json '.reid_ttl')
   reid_threshold: $(cfg_json '.reid_threshold')

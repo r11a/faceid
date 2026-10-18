@@ -1,5 +1,18 @@
 # Changelog
 
+## 6.1.1 — 2026-10-18
+
+- **Fix Home Assistant app startup after 6.1.0:** the JSON camera-graph option is
+  decoded to a real mapping before writing YAML. Version 6.1.0 encoded the JSON
+  text as a string, causing `ScenarioManager` to fail with
+  `AttributeError: 'str' object has no attribute 'items'` at startup.
+- **Compatible recovery:** startup also accepts existing JSON-string camera graphs
+  and validates their structure before passing them to scenario and appearance
+  services. Existing camera links and gallery data are preserved.
+- **Startup regression coverage:** executes the actual add-on encoder with jq,
+  initializes both camera-graph consumers and runs the full application bootstrap
+  with model loading, networking and HTTP serving replaced by test doubles.
+
 ## 6.1.0 — 2026-10-18
 
 - **Photo search:** upload a photo to compare against the reference gallery and

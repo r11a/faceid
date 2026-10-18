@@ -39,6 +39,26 @@ logbuffer.install()   # damit die Weboberflaeche das Log zeigen kann
 log = logging.getLogger("faceid")
 
 
+def parse_camera_graph(value) -> dict:
+    """Accept native YAML maps and the JSON string emitted by add-on 6.1.0."""
+    if isinstance(value, str):
+        if not value.strip():
+            return {}
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("faceid.camera_graph must contain a valid JSON object") from exc
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or any(
+        not isinstance(camera, str) or not isinstance(neighbors, list)
+        or any(not isinstance(neighbor, str) for neighbor in neighbors)
+        for camera, neighbors in value.items()
+    ):
+        raise ValueError("faceid.camera_graph must map camera names to lists of camera names")
+    return value
+
+
 def main():
     cfg = yaml.safe_load((BASE / "config.yaml").read_text())
     data_dir = BASE / "data"
@@ -122,7 +142,7 @@ def main():
         int(cfg["faceid"].get("unknown_evidence_max", 300)),
     )
     f = cfg["faceid"]
-    camera_graph = f.get("camera_graph") or {}
+    camera_graph = parse_camera_graph(f.get("camera_graph"))
     scenario_manager = ScenarioManager(
         audit,
         window_seconds=float(f.get("scenario_window", 90)),
