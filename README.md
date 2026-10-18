@@ -2,7 +2,7 @@
 
 ## FaceID 6.1: photo search and camera timelines
 
-Update to **6.1.1** if the Home Assistant app stopped starting after 6.1.0. It
+Update to **6.2.0** if the Home Assistant app stopped starting after 6.1.0. It
 corrects camera-graph configuration encoding without resetting data or links.
 
 Open **Gallery & Search** to upload a photo, choose one face if several people are

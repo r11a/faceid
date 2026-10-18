@@ -1,5 +1,13 @@
 # Changelog
 
+## 6.2.0 — 2026-10-18
+
+- Simplified home with swipeable chronological activity and last-location people rails.
+- Select a known person or unknown face to view cross-camera appearances, with explicit face selection for multi-face events.
+- Person details play available clips in chronological sequence, skip unavailable clips, and allow jumping to individual locations. Older history is paginated in both the strip and the detail view.
+- Direct add-person and unknown-face actions reuse the existing enrollment and face-search services.
+- Last locations respect operator identity corrections; recently reviewed old events no longer displace newer occurrences.
+
 ## 6.1.1 — 2026-10-18
 
 - **Fix Home Assistant app startup after 6.1.0:** the JSON camera-graph option is

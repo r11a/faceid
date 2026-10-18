@@ -52,6 +52,36 @@ class FaceSearchTests(unittest.TestCase):
         self.assertEqual(self.search.timeline([vector()], date_from=200)['total'], 1)
         self.assertEqual(self.audit.event_detail('early')['event']['status'], 'unknown')
 
+    def test_home_recent_includes_unknowns_and_more_than_eight_events(self):
+        for i in range(12):
+            self.event(f'home-{i}', 'door', 100 + i, person='Alice' if i % 2 else None)
+        rows = self.client.get('/api/dashboard').json()['recent']
+        self.assertEqual(len(rows), 12)
+        self.assertIn('unknown', {row['status'] for row in rows})
+
+    def test_last_location_respects_reviewed_identity(self):
+        self.gallery.create_person('Alice')
+        self.gallery.create_person('Bob')
+        self.event('old', 'yard', 100, person='Alice')
+        self.event('wrong', 'door', 200, person='Alice')
+        self.audit.set_ground_truth('wrong', 'Bob', 'operator')
+        cards = {row['name']: row for row in self.client.get('/api/dashboard').json()['people']}
+        self.assertEqual(cards['Alice']['last_camera'], 'yard')
+        self.assertEqual(cards['Bob']['last_camera'], 'door')
+        self.audit.set_ground_truth('wrong', '__unknown__', 'operator')
+        cards = {row['name']: row for row in self.client.get('/api/dashboard').json()['people']}
+        self.assertEqual(cards['Alice']['last_camera'], 'yard')
+        self.assertIsNone(cards['Bob']['last_camera'])
+
+    def test_home_selects_latest_occurrences_not_recent_reviews(self):
+        self.event('old', 'door', 1, person='Alice')
+        for i in range(60):
+            self.event(f'new-{i}', 'yard', 100 + i, person='Alice')
+        self.audit.set_ground_truth('old', 'Alice', 'operator')
+        rows = self.client.get('/api/dashboard').json()['recent']
+        self.assertEqual(len(rows), 60)
+        self.assertNotIn('old', {row['event_id'] for row in rows})
+
     def test_known_timeline_includes_old_events_without_vectors_but_respects_review(self):
         slug = self.gallery.create_person('רונן')
         self.event('a', 'yard', 100, person='רונן')

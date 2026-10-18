@@ -35,9 +35,11 @@ def session():
 @app.get("/api/users")
 def users():
     return {"recommended_photos": {"minimum": 5, "maximum": 10}, "users": [
-        {"slug": "ronen", "name": "רונן", "count": 7, "photo": None, "favorite": True,
+        {"slug": "ronen", "name": "רונן", "count": 7, "photo": "api/cameras/ronen/frame", "favorite": True,
+         "last_seen": 1792249260, "last_camera": "דלת כניסה",
          "state": "ready", "state_label": "מוכן לזיהוי", "statistics": {"appearances": 142, "last_camera": "דלת כניסה", "avg_score": .78}},
-        {"slug": "moshe", "name": "משה", "count": 3, "photo": None, "favorite": False,
+        {"slug": "moshe", "name": "משה", "count": 3, "photo": "api/cameras/moshe/frame", "favorite": False,
+         "last_seen": 1792249200, "last_camera": "משרד",
          "state": "new", "state_label": "צריך עוד תמונות", "statistics": {"appearances": 12, "last_camera": "משרד", "avg_score": .64}},
     ]}
 
@@ -52,7 +54,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "6.1.1", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
+    return {"status": "ok", "version": "6.2.0", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
             "backend": "CPUExecutionProvider", "mqtt": {"connected": True, "entities": 18},
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,
@@ -62,7 +64,10 @@ def health():
 
 @app.get("/api/dashboard")
 def dashboard():
-    return {"summary": {"recognized_today": 18, "events_today": 31, "seen_today": 2}, "people": users()["users"], "recent": [], "events": [],
+    return {"summary": {"recognized_today": 18, "events_today": 31, "seen_today": 2}, "people": users()["users"], "recent": [
+        {"event_id": f"qa-{i}", "start_ts": 1792249200 + i * 600, "camera": ["כניסה", "מסדרון", "חניה"][i % 3],
+         "status": "unknown" if i % 3 == 0 else "recognized", "person": None if i % 3 == 0 else "רונן"}
+        for i in range(1, 10)], "events": [],
             "gallery": {"photos": 0, "recommendation": "בדיקת ממשק"}}
 
 
@@ -87,6 +92,24 @@ def activity():
 @app.get("/api/activity/{event_id}/image")
 def activity_image(event_id: str):
     return camera_frame("Event " + event_id)
+
+
+@app.get("/api/activity/{event_id}/clip")
+def activity_clip(event_id: str):
+    video = ROOT / '.venv' / 'home-qa.mp4'
+    if event_id == 'qa-2' or not video.is_file():
+        return Response(status_code=404)
+    return FileResponse(video, media_type='video/mp4')
+
+
+@app.get("/api/faces/event/{event_id}")
+def event_faces(event_id: str):
+    return {"samples": [{"sample_id": f"{event_id}-face-{i}", "image": f"api/activity/{event_id}/image"} for i in range(2 if event_id == 'qa-3' else 1)]}
+
+
+@app.get("/media/unknowns/{filename}")
+def unknown_image(filename: str):
+    return camera_frame("Unknown")
 
 
 @app.get("/api/activity/{event_id}/references")

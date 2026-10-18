@@ -22,6 +22,7 @@ jobs:
         working-directory: frontend
         run: |
           npm install --ignore-scripts
+          npm test
           npm run build
           git diff --exit-code -- ../static
 

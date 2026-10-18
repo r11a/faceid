@@ -1279,7 +1279,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             ),
             "people": cards,
             "recent": (
-                processor.audit.recent(limit=8, status="recognized")
+                processor.audit.search_events(limit=60)["events"]
                 if processor.audit else []
             ),
         }

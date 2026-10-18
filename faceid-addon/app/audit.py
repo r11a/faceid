@@ -776,21 +776,27 @@ class AuditStore:
 
     def person_statistics(self):
         now = time.time()
+        # Operator review takes precedence over the original recognition.
+        identities = """
+            SELECT *, COALESCE(ground_truth, person) AS identity FROM events
+            WHERE (ground_truth IS NOT NULL AND ground_truth != '__unknown__')
+               OR (ground_truth IS NULL AND status='recognized' AND person IS NOT NULL)
+        """
         with self._lock, self._connection() as con:
             con.row_factory = sqlite3.Row
             totals = con.execute(
-                """
-                SELECT person, COUNT(*) AS appearances, AVG(score) AS avg_score,
+                f"""
+                WITH identified AS ({identities})
+                SELECT identity AS person, COUNT(*) AS appearances, AVG(score) AS avg_score,
                        MAX(start_ts) AS last_seen,
                        SUM(CASE WHEN date(start_ts, 'unixepoch', 'localtime')
                                       = date('now', 'localtime')
                                 THEN 1 ELSE 0 END) AS today,
                        SUM(CASE WHEN start_ts>=? THEN 1 ELSE 0 END) AS last_7_days,
                        SUM(CASE WHEN start_ts>=? THEN 1 ELSE 0 END) AS last_30_days
-                FROM events
-                WHERE status='recognized' AND person IS NOT NULL
-                  AND COALESCE(occurrence,'')!='presence_update'
-                GROUP BY person
+                FROM identified
+                WHERE COALESCE(occurrence,'')!='presence_update'
+                GROUP BY identity
                 """,
                 (now - 7 * 86400, now - 30 * 86400),
             ).fetchall()
@@ -798,17 +804,19 @@ class AuditStore:
             for raw in totals:
                 row = dict(raw)
                 last = con.execute(
-                    """
-                    SELECT camera, score, event_id FROM events
-                    WHERE status='recognized' AND person=?
+                    f"""
+                    WITH identified AS ({identities})
+                    SELECT camera, score, event_id, start_ts FROM identified
+                    WHERE identity=?
                     ORDER BY start_ts DESC LIMIT 1
                     """,
                     (row["person"],),
                 ).fetchone()
                 cameras = con.execute(
-                    """
-                    SELECT camera, COUNT(*) AS count FROM events
-                    WHERE status='recognized' AND person=?
+                    f"""
+                    WITH identified AS ({identities})
+                    SELECT camera, COUNT(*) AS count FROM identified
+                    WHERE identity=?
                       AND COALESCE(occurrence,'')!='presence_update'
                     GROUP BY camera ORDER BY count DESC, camera
                     """,
@@ -817,6 +825,7 @@ class AuditStore:
                 result[row["person"]] = {
                     **row,
                     "avg_score": round(float(row["avg_score"] or 0), 4),
+                    "last_seen": last["start_ts"] if last else row["last_seen"],
                     "last_camera": last["camera"] if last else None,
                     "last_score": float(last["score"] or 0) if last else 0.0,
                     "last_event_id": last["event_id"] if last else None,
