@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { api } from "./api.js";
 import { useResource } from "./hooks.js";
+import { AlertCenter } from "./AlertCenter.jsx";
 import { Badge, ToastProvider } from "./ui.jsx";
 import { EventsPage, PeoplePage, ReviewPage } from "./pages/Daily.jsx";
 import { DashboardPage } from "./pages/Home.jsx";
@@ -15,7 +16,7 @@ import { CamerasPage, GuestsPage, IntercomPage, LivenessPage } from "./pages/Sec
 import { AutomationsPage, HealthPage } from "./pages/Management.jsx";
 import { AdvancedPage, CalibrationPage, LearningPage, SettingsPage } from "./pages/Advanced.jsx";
 
-const VERSION = "6.2.0";
+const VERSION = "6.3.0";
 const pages = {
   home: { title: "מבט כללי", subtitle: "אירועים ומיקומים אחרונים", icon: Home, component: DashboardPage },
   review: { title: "דורש טיפול", subtitle: "אישור מהיר של אירועים לא ודאיים", icon: ClipboardCheck, component: ReviewPage },
@@ -93,7 +94,7 @@ function Shell() {
         <button className="mobile-menu" onClick={() => setDrawer(true)}><Menu /></button>
         <div className="top-title"><div className={`status-dot ${systemOk ? "online" : "offline"}`} /><div><strong>{info.title}</strong><small>{info.subtitle}</small></div></div>
         <div className="global-search"><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="חיפוש מסך או פעולה…" />{searchResults.length > 0 && <div className="search-popover">{searchResults.map(([id, item]) => <button onClick={() => { navigate(id); setSearch(""); }} key={id}><item.icon /><span><b>{item.title}</b><small>{item.subtitle}</small></span></button>)}</div>}</div>
-        <div className="top-actions"><div className="system-pill"><span className={systemOk ? "ok" : "bad"} />{systemOk ? "מחובר" : "דורש בדיקה"}</div><time>{clock.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}</time><button className="icon-button" onClick={() => navigate("review")} title="התראות"><Bell />{reviewCount > 0 && <i />}</button><button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="ערכת נושא">{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" onClick={() => navigate("health")} title="עזרה ותקינות"><CircleHelp /></button></div>
+        <div className="top-actions"><div className="system-pill"><span className={systemOk ? "ok" : "bad"} />{systemOk ? "מחובר" : "דורש בדיקה"}</div><time>{clock.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}</time><AlertCenter /><button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="ערכת נושא">{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" onClick={() => navigate("health")} title="עזרה ותקינות"><CircleHelp /></button></div>
       </header>
       <div className="mobile-context"><Badge tone={systemOk ? "success" : "danger"}>{systemOk ? "המערכת מחוברת" : "דורש בדיקה"}</Badge><span>{clock.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })} · v{VERSION}</span></div>
       <div className="page-content"><PageBoundary page={page}><CurrentPage navigate={navigate} /></PageBoundary></div>

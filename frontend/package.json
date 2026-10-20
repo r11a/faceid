@@ -1,7 +1,7 @@
 {
   "name": "faceid-ui",
   "private": true,
-  "version": "6.2.0",
+  "version": "6.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -15,5 +15,8 @@
     "react-dom": "19.2.8",
     "vite": "8.2.1",
     "vitest": "4.1.0"
+  },
+  "devDependencies": {
+    "react-test-renderer": "19.2.8"
   }
 }

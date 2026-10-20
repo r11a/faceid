@@ -1,5 +1,16 @@
 # Changelog
 
+## 6.3.0 — 2026-10-21
+
+- Upgrade InsightFace to 2.1 while retaining buffalo_l, 640px detection, recognition thresholds and liveness requirements; expose actual runtime providers and bounded inference timings.
+- Separate live and clip workers, prioritize live inference, recover each job queue independently, and defer contended events without losing evidence. Identical snapshots do not count as new evidence; failed processing remains retryable.
+- Add opt-in fast snapshot cadence per camera and realtime dashboard/appearance updates with polling fallback.
+- Enroll a new or existing person directly from explicitly selected camera faces, with quality checks, deduplication, per-image results and retained rejected evidence.
+- Select reference faces from already assigned history, including users with no reference photos.
+- Open detection clips immediately, serve cached files or stream upstream with byte-range support, and preload only the next sequence clip metadata. Missing sequence clips are skipped with a visible count.
+- Configure critical cameras, per-person recognition alerts and white/black lists. Confirmed blacklisted identities receive red detection/video outlines; list membership does not change Access1 access policy.
+- Persist and deduplicate in-app recognition alerts. Discover an HA last-alert sensor; optional phone notification automation remains user-configured.
+
 ## 6.2.0 — 2026-10-18
 
 - Simplified home with swipeable chronological activity and last-location people rails.

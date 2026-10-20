@@ -18,16 +18,19 @@ export function HealthPage() {
   const frigateOk = [true, "ok", "connected"].includes(r.frigate?.connected ?? r.frigate?.status);
   const mqttOk = [true, "ok", "connected"].includes(r.mqtt?.connected ?? r.mqtt?.status);
   const runtime = r.advanced?.runtime || h.runtime || {};
+  const engine = h.engine || {};
+  const provider = engine.models?.recognition?.providers?.join(", ") || engine.providers?.join(", ") || runtime.provider || h.provider;
   const checks = [
     ["FaceID", true, `גרסה ${h.version || "—"}`],
     ["Frigate", frigateOk, r.frigate?.message || r.frigate?.url || "חיבור מאובטח"],
     ["Home Assistant / MQTT", mqttOk, r.mqtt?.message || `${r.mqtt?.entities || 0} ישויות`],
-    ["מנוע זיהוי", Boolean(h.backend || runtime.provider), h.backend || runtime.provider || "לא דווח"],
+    ["מנוע זיהוי", Boolean(provider || h.backend), provider || h.backend || "לא דווח"],
   ];
   return <>
     <PageHeader eyebrow="תקינות" title={checks.every(([, ok]) => ok) ? "המערכת פועלת כשורה" : "יש רכיבים שדורשים בדיקה"} description="מסך אחד שמתרגם את המצב הטכני לתשובה ברורה ומה אפשר לעשות הלאה." actions={<button className="button secondary" onClick={() => { health.reload(); report.reload(); }}><RefreshCw />בדיקה מחדש</button>} />
     <div className="metrics-grid"><Metric icon={Gauge} label="תור בדיקה" value={h.queue || 0} note="תמונות ממתינות לאישור" tone={h.queue > 100 ? "amber" : "green"} /><Metric icon={Activity} label="בעיבוד עכשיו" value={h.processing || 0} note={`${h.open_events || 0} אירועים פתוחים`} tone="turquoise" /><Metric icon={Users} label="אנשים" value={h.persons || 0} note="גלריות פעילות" tone="purple" /><Metric icon={Database} label="עבודות רקע" value={h.pending_jobs?.length || h.pending_jobs || 0} note="פעולות ארוכות שנשמרות" tone="amber" /></div>
     <Panel className="health-list"><div className="panel-heading"><div><span className="eyebrow">שירותים</span><h2>בדיקת חיבורים</h2></div></div>{checks.map(([name, ok, note]) => <div className="health-row" key={name}><span className={ok ? "good" : "bad"}>{ok ? <CheckCircle2 /> : <AlertTriangle />}</span><div><b>{name}</b><small>{note}</small></div><Badge tone={ok ? "success" : "danger"}>{ok ? "תקין" : "דורש טיפול"}</Badge></div>)}</Panel>
+    <Panel><details><summary>מדידות מהירות ומנוע</summary><p>InsightFace {engine.runtime?.insightface || "—"} · {engine.model_pack || "—"} · {provider || "לא דווח"}</p><div className="metrics-grid compact"><Metric label="עיבוד תמונה — חציון" value={engine.inference?.p50_ms == null ? "—" : `${Math.round(engine.inference.p50_ms)} ms`} /><Metric label="עיבוד תמונה — P95" value={engine.inference?.p95_ms == null ? "—" : `${Math.round(engine.inference.p95_ms)} ms`} note={`${engine.inference?.samples || 0} מדידות · ${engine.inference?.failures || 0} שגיאות`} /><Metric label="המתנה בתור חי — P95" value={h.performance?.snapshot_queue_wait?.p95_ms == null ? "—" : `${Math.round(h.performance.snapshot_queue_wait.p95_ms)} ms`} /><Metric label="קליפים בתור נפרד" value={h.performance?.clip_queue ?? "—"} /></div><p>המדידות הן לעיבוד ולתורים בשרת. הן אינן כוללות השהיית צילום במצלמה או פתיחת דלת.</p></details></Panel>
     <div className="health-columns"><Panel><div className="panel-heading"><div><span className="eyebrow">ביצועים</span><h2>עומס ומשאבים</h2></div></div><div className="resource-list"><div><Cpu /><span><b>מעבד / ספק הרצה</b><small>{runtime.provider || h.provider || "CPU"}</small></span></div><div><MemoryStick /><span><b>זיכרון</b><small>{runtime.memory || "מנוהל אוטומטית"}</small></span></div><div><HardDrive /><span><b>אחסון ראיות</b><small>{r.storage?.evidence || "מדיניות שמירה מוגבלת פעילה"}</small></span></div></div></Panel><Panel><div className="panel-heading"><div><span className="eyebrow">אבחון</span><h2>המלצה נוכחית</h2></div></div>{checks.every(([, ok]) => ok) ? <Empty icon={ShieldCheck} title="אין צורך בפעולה" text="החיבורים פעילים, התורים בשליטה והמנוע מגיב." /> : <div className="guidance">{checks.filter(([, ok]) => !ok).map(([name]) => <div key={name}><AlertTriangle />בדוק את החיבור של {name} בהגדרות התוסף</div>)}</div>}</Panel></div>
   </>;
 }

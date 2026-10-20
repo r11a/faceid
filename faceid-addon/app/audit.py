@@ -6,6 +6,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from .realtime import RevisionFeed
+
 
 class AuditStore:
     def __init__(self, path: Path, retention_days: int = 90):
@@ -14,6 +16,7 @@ class AuditStore:
         self.evidence_dir = self.path.parent / "audit_images"
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self.revisions = RevisionFeed()
         self.evidence_known_days = 30
         self.evidence_unknown_days = 14
         self.evidence_known_max = 300
@@ -69,6 +72,8 @@ class AuditStore:
         try:
             with con:
                 yield con
+            if con.total_changes:
+                self.revisions.publish()
         finally:
             con.close()
 
@@ -311,11 +316,16 @@ class AuditStore:
                 (cutoff,),
             )
             con.execute("DELETE FROM scenarios WHERE end_ts < ?", (cutoff,))
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recognition_alerts'").fetchone():
+                con.execute("DELETE FROM recognition_alerts WHERE ts < ?", (cutoff,))
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_samples'").fetchone():
                 con.execute("DELETE FROM face_samples WHERE event_id NOT IN (SELECT event_id FROM events)")
                 con.execute("DELETE FROM face_indexed WHERE event_id NOT IN (SELECT event_id FROM events)")
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='access1_attempts'").fetchone():
                 con.execute("DELETE FROM access1_attempts WHERE ts < ?", (cutoff,))
+        alert_cleanup = getattr(self, "_alert_cleanup", None)
+        if alert_cleanup:
+            alert_cleanup()
         self.prune_face_evidence()
         for image in self.evidence_dir.glob("*.jpg"):
             try:
@@ -752,6 +762,9 @@ class AuditStore:
 
     def delete_person_history(self, person: str) -> int:
         with self._lock, self._connection() as con:
+            has_alerts = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recognition_alerts'").fetchone()
+            if has_alerts:
+                con.execute("DELETE FROM recognition_alerts WHERE person=?", (person,))
             event_ids = [
                 row[0] for row in con.execute(
                     "SELECT event_id FROM events WHERE person=? "
@@ -759,6 +772,8 @@ class AuditStore:
                 ).fetchall()
             ]
             for event_id in event_ids:
+                if has_alerts:
+                    con.execute("DELETE FROM recognition_alerts WHERE event_id=?", (event_id,))
                 if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='access1_attempts'").fetchone():
                     con.execute("DELETE FROM access1_attempts WHERE face_event_id=?", (event_id,))
                 if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_samples'").fetchone():
@@ -770,6 +785,9 @@ class AuditStore:
                 con.execute("DELETE FROM observations WHERE event_id=?", (event_id,))
                 con.execute("DELETE FROM jobs WHERE event_id=?", (event_id,))
                 con.execute("DELETE FROM events WHERE event_id=?", (event_id,))
+        alert_cleanup = getattr(self, "_alert_cleanup", None)
+        if alert_cleanup:
+            alert_cleanup()
         for event_id in event_ids:
             self.evidence_path(event_id).unlink(missing_ok=True)
         return len(event_ids)
@@ -1026,7 +1044,7 @@ class AuditStore:
             )
             return status
 
-    def pending_jobs(self, limit: int = 100):
+    def pending_jobs(self, limit: int = 100, *, kind: str | None = None):
         now = time.time()
         with self._lock, self._connection() as con:
             con.row_factory = sqlite3.Row
@@ -1036,9 +1054,10 @@ class AuditStore:
                 FROM jobs j JOIN events e ON e.event_id=j.event_id
                 WHERE j.status='pending' AND j.available_ts <= ?
                   AND e.status='processing'
+                    AND (? IS NULL OR j.kind=?)
                 ORDER BY j.updated_ts LIMIT ?
                 """,
-                (now, max(1, min(limit, 500))),
+                (now, kind, kind, max(1, min(limit, 500))),
             ).fetchall()
             return [dict(row) for row in rows]
 

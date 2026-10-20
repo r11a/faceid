@@ -217,6 +217,81 @@ def register_face_routes(app, processor, gallery, engine):
     processor.face_search = service
     tokens, token_lock = {}, threading.Lock()
 
+    def confirmed_event(event_id, person):
+        people = gallery.persons()
+        if person not in people:
+            raise HTTPException(404, 'האדם אינו קיים בגלריה')
+        with audit._connection() as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute('SELECT event_id,camera,start_ts,status,person,ground_truth FROM events WHERE event_id=?', (event_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, 'האירוע אינו קיים')
+        identity = row['ground_truth'] if row['ground_truth'] is not None else row['person'] if row['status'] == 'recognized' else None
+        if identity != people[person]['name']:
+            raise HTTPException(409, 'האירוע אינו משויך לאדם שנבחר; אשר תחילה את זהותו')
+        return dict(row)
+
+    def remember_face(vector, encoded, usable, context=None):
+        with token_lock:
+            now = time.time()
+            for key in list(tokens):
+                if tokens[key][0] < now:
+                    tokens.pop(key)
+            while len(tokens) >= 20:
+                tokens.pop(next(iter(tokens)))
+            token = secrets.token_urlsafe(24)
+            tokens[token] = (now + 600, vector, encoded, usable, context)
+        return token
+
+    @app.get('/api/faces/event/{event_id}/references')
+    def history_reference_candidates(event_id: str, person: str):
+        """Preview explicit choices from assigned history; opening it never enrolls."""
+        event = confirmed_event(event_id, person)
+        service.prune_images()
+        with audit._connection() as con:
+            rows = con.execute('SELECT sample_id,embedding FROM face_samples WHERE event_id=? ORDER BY created_ts,sample_id', (event_id,)).fetchall()
+        selected = []
+        for sample_id, blob in rows:
+            image = cv2.imread(str(service.image_dir / f'{sample_id}.jpg'))
+            if image is not None:
+                selected.append((sample_id, image, np.frombuffer(blob, dtype=np.float32), True))
+        if not selected:
+            path = audit.evidence_path(event_id)
+            image = cv2.imread(str(path)) if path.is_file() else None
+            if image is None and getattr(processor, 'frigate', None) is not None:
+                image = processor.frigate.snapshot(event_id, crop=True)
+            if image is None:
+                raise HTTPException(410, 'תמונת האירוע כבר אינה זמינה; העלה תמונת ייחוס חדשה מעמוד חיפוש פנים')
+            if engine is None:
+                raise HTTPException(503, 'מנוע הפנים אינו זמין כרגע; נסה שוב או העלה תמונה')
+            for face in engine.faces(image)[:8]:
+                quality = measure_face_quality(image, face, min_face_px=60,
+                    min_quality=max(.32, getattr(processor, 'min_face_quality', .35)))
+                selected.append((None, crop_face(image, face.bbox), face.normed_embedding, quality.usable))
+        if not selected:
+            raise HTTPException(422, 'לא נמצאו פנים לבחירה בתמונה שנשמרה; העלה תמונת ייחוס ברורה יותר')
+        candidates = []
+        for sample_id, crop, vector, detector_usable in selected:
+            if crop is None or not crop.size:
+                continue
+            candidate, reason = gallery.prepare_reference(crop, vector)
+            ok, encoded = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
+            if not ok:
+                continue
+            usable = candidate is not None and detector_usable
+            if not detector_usable and candidate is not None:
+                reason = 'low_quality'
+            context = {'person': person, 'event_id': event_id, 'sample_id': sample_id,
+                       'source': {'camera': event['camera'], 'event_ts': event['start_ts'],
+                                  'event_id': event_id, 'enrollment': 'assigned_history'}}
+            token = remember_face(vector, encoded.tobytes(), usable, context)
+            candidates.append({'token': token, 'sample_id': sample_id, 'usable': usable,
+                'reason': reason, 'preview': 'data:image/jpeg;base64,' + base64.b64encode(encoded).decode()})
+        if not candidates:
+            raise HTTPException(422, 'לא נמצאו פנים תקינות לבחירה; העלה תמונת ייחוס ברורה יותר')
+        return {'event_id': event_id, 'person': person, 'candidates': candidates,
+                'expires_in': 600, 'status': 'needs_selection'}
+
     @app.get('/api/faces/index')
     def index_status():
         return dict(service.index_status)
@@ -269,12 +344,7 @@ def register_face_routes(app, processor, gallery, engine):
         scale = min(1.,512/max(h,w))
         selected_crop = cv2.resize(selected_crop,(max(1,int(w*scale)),max(1,int(h*scale))))
         _, crop = cv2.imencode('.jpg',selected_crop,[cv2.IMWRITE_JPEG_QUALITY,90])
-        with token_lock:
-            now=time.time()
-            for key in list(tokens):
-                if tokens[key][0]<now: tokens.pop(key)
-            while len(tokens)>=20: tokens.pop(next(iter(tokens)))
-            token=secrets.token_urlsafe(24); tokens[token]=(now+600,vector,crop.tobytes(),quality.usable)
+        token = remember_face(vector, crop.tobytes(), quality.usable)
         return {'status':'ready','token':token,'face_index':original_index,'preview':'data:image/jpeg;base64,'+base64.b64encode(crop).decode(),
                 'matches':service.gallery_matches(vector), 'expires_in':600}
 
@@ -291,6 +361,21 @@ def register_face_routes(app, processor, gallery, engine):
             if bool(body.get('person')) == bool(body.get('name')):
                 raise HTTPException(400,'בחר אדם קיים או שם לאדם חדש')
             with gallery.assignment_lock:
+                context = saved[4]
+                if context:
+                    if body.get('person') != context['person']:
+                        raise HTTPException(409, 'בחירת הפנים שייכת לאדם אחר')
+                    confirmed_event(context['event_id'], context['person'])
+                    if context.get('sample_id'):
+                        with audit._connection() as con:
+                            exists = con.execute('SELECT 1 FROM face_samples WHERE event_id=? AND sample_id=?',
+                                (context['event_id'], context['sample_id'])).fetchone()
+                        if not exists:
+                            raise HTTPException(410, 'תמונת הפנים כבר אינה זמינה; בחר תמונה שוב')
+                crop_image=cv2.imdecode(np.frombuffer(saved[2],dtype=np.uint8),cv2.IMREAD_COLOR)
+                candidate, reason = gallery.prepare_reference(crop_image, saved[1])
+                if candidate is None:
+                    raise HTTPException(422, 'איכות הפנים אינה מספיקה לתמונת ייחוס: ' + reason)
                 slug=body.get('person')
                 if slug:
                     if slug not in gallery.persons(): raise HTTPException(404,'האדם אינו קיים בגלריה')
@@ -299,11 +384,13 @@ def register_face_routes(app, processor, gallery, engine):
                     if not isinstance(name,str) or not name.strip() or len(name)>200:
                         raise HTTPException(400,'יש להזין שם תקין')
                     slug=gallery.create_person(name.strip())
-                crop_image=cv2.imdecode(np.frombuffer(saved[2],dtype=np.uint8),cv2.IMREAD_COLOR)
-                filename=gallery.add_face(slug,crop_image,saved[1],source={'camera':'upload'})
+                status, filename=gallery.add_reference(slug,candidate,
+                    source=context['source'] if context else {'camera':'upload'})
             tokens.pop(token,None)
         gallery.refresh_guesses()
-        return {'added':1,'slug':slug,'file':filename}
+        count = gallery.persons()[slug]['count']
+        return {'added':int(status == 'learned'),'duplicates':int(status == 'duplicate'),
+                'slug':slug,'file':filename,'reference_count':count,'ready':count > 0}
 
     @app.get('/api/faces/timeline')
     def timeline(person: str | None=None, unknown_id: str | None=None, event_id: str | None=None,

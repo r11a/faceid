@@ -14,9 +14,40 @@ from app.main import parse_camera_graph
 from app.scenarios import ScenarioManager
 from app.reid import AppearanceReID
 from app import main as main_module
+from app.alerting import AlertStore
 
 
 class StartupConfigTests(unittest.TestCase):
+    def test_alerts_are_ready_before_workers_and_routes_reuse_the_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'config.yaml').write_text(yaml.safe_dump({
+                'frigate': {'url': 'http://frigate.invalid:5000'},
+                'mqtt': {'host': 'mqtt.invalid'},
+                'faceid': {'liveness_enabled': False},
+            }), encoding='utf-8')
+            started = []
+            original_build = main_module.build_app
+
+            def verify_start(processor):
+                self.assertIsInstance(getattr(processor, 'alerts', None), AlertStore)
+                self.assertIs(processor.alerts.processor.camera_profiles, processor.camera_profiles)
+                started.append(processor.alerts)
+
+            def verify_build(*args):
+                app = original_build(*args)
+                self.assertIs(args[3].alerts, started[0])
+                return app
+
+            with patch.object(main_module, 'BASE', root), \
+                 patch.object(main_module, 'FaceEngine', return_value=SimpleNamespace(faces=lambda image: [])), \
+                 patch.object(main_module.EventProcessor, 'start', autospec=True, side_effect=verify_start), \
+                 patch.object(main_module, 'build_app', side_effect=verify_build), \
+                 patch.object(main_module, 'start_auto_backup'), \
+                 patch.object(main_module.uvicorn, 'run'):
+                main_module.main()
+            self.assertEqual(len(started), 1)
+
     def test_complete_startup_with_home_assistant_610_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

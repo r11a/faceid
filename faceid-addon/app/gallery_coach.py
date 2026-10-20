@@ -8,7 +8,7 @@ import numpy as np
 
 
 def _image_metrics(path: Path) -> tuple[float, float]:
-    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    image = cv2.cvtColor(path, cv2.COLOR_BGR2GRAY) if isinstance(path, np.ndarray) else cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if image is None or image.size == 0:
         return 0.0, 0.0
     sharpness = min(1.0, float(cv2.Laplacian(image, cv2.CV_64F).var()) / 220.0)

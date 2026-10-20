@@ -25,6 +25,8 @@ from .quality import measure_face_quality
 from .enrollment import choose_enrollment_face
 from .face_search import register_face_routes
 from .access1 import register_access1_routes
+from .realtime import register_realtime_routes
+from .alerting import register_alert_routes
 from pathlib import Path as _P
 
 log = logging.getLogger("faceid.web")
@@ -47,6 +49,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     app = FastAPI(title="FaceID")
     register_face_routes(app, processor, gallery, engine)
     register_access1_routes(app, processor, gallery, data_dir)
+    register_realtime_routes(app, processor)
+    register_alert_routes(app, processor, gallery)
     capture_previews: dict[str, tuple[float, bytes]] = {}
     capture_preview_lock = threading.Lock()
 
@@ -160,8 +164,10 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         for slug, person in gallery.persons().items():
             report = coach.get(slug, {})
             count = int(person.get("count", 0))
-            if count < 3:
-                state, label = "new", "צריך עוד תמונות"
+            if count == 0:
+                state, label = "new", "אין תמונות ייחוס"
+            elif count < 3:
+                state, label = "ready", "פעיל לזיהוי ראשוני · מומלץ להוסיף זוויות"
             elif report.get("review_count", 0):
                 state, label = "review", "כדאי לשפר תמונות"
             else:
@@ -171,6 +177,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 "slug": slug, "name": person["name"], "count": count,
                 "photo": f"media/persons/{slug}/{files[0]}" if files else None,
                 "favorite": bool(person.get("favorite")), "state": state,
+                "watchlist": person.get("watchlist", "normal"),
+                "notify_on_recognition": bool(person.get("notify_on_recognition")),
                 "state_label": label, "advice": report.get("advice", []),
                 "statistics": statistics.get(person["name"], {}),
             })
@@ -342,7 +350,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         count = gallery.persons().get(slug, {}).get("count", 0)
         return {
             "added": added, "skipped": skipped, "details": details, "count": count,
-            "ready": count >= 5,
+            "ready": count > 0,
             "next_step": (
                 "יש מספיק תמונות בסיסיות; עברו מול מצלמה ובדקו זיהויים"
                 if count >= 5 else f"מומלץ להוסיף עוד {5 - count} תמונות מזוויות שונות"
@@ -363,45 +371,62 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         return JSONResponse(clusters)
 
     @app.post("/api/unknowns/assign")
-    def assign(body: AssignBody):
+    def assign(body: AssignBody, request: Request):
         with gallery.assignment_lock:
-            return _assign(body)
+            return _assign(body, request)
 
-    def _assign(body):
+    def _assign(body, request):
         ids = list(dict.fromkeys(body.ids))[:1000]
         if not any((gallery.unknown_dir / f"{uid}.json").is_file()
                    and (gallery.unknown_dir / f"{uid}.jpg").is_file()
-                   for uid in ids if Path(uid).name == uid):
+                   for uid in ids if gallery.valid_unknown_id(uid)):
             raise HTTPException(409, "התמונות כבר טופלו או שלא נבחרו פנים")
+        person = body.person.strip()
+        if not person or len(person) > 100:
+            raise HTTPException(400, "יש להזין שם באורך 1–100 תווים")
         persons_now = gallery.persons()
-        slug = body.person if body.person in persons_now else gallery.create_person(body.person)
-        name = gallery.persons()[slug]["name"]
-        n = 0
+        slug = person if person in persons_now else next(
+            (key for key, item in persons_now.items() if item["name"] == person), None)
+        reviewer = (request.headers.get("x-remote-user-name")
+                    or request.headers.get("x-forwarded-user") or "operator")
+        n = duplicates = 0
+        results = []
         for uid in ids:
-            if Path(uid).name != uid:
+            candidate, reason = gallery.prepare_unknown_enrollment(uid)
+            if candidate is None:
+                results.append({"id": uid, "status": "skipped", "reason": reason})
                 continue
-            jf = gallery.unknown_dir / f"{uid}.json"
-            meta = {}
-            if jf.exists():
-                try:
-                    meta = json.loads(jf.read_text())
-                except (json.JSONDecodeError, OSError):
-                    pass
-            if gallery.assign_unknown(uid, slug):
+            if slug is None:
+                slug = gallery.create_person(person)
+            name = gallery.persons()[slug]["name"]
+            status = gallery.enroll_unknown(uid, slug, candidate)
+            results.append({"id": uid, "status": status, "reason": status})
+            if status == "learned":
                 n += 1
-                # Zuordnung ans Original-Event zurückspielen (Mensch bestätigt -> Score 1.0)
+            elif status == "duplicate":
+                duplicates += 1
+            if status in ("learned", "duplicate"):
+                meta = candidate["meta"]
+                if processor.audit is not None and meta.get("event_id"):
+                    processor.audit.set_ground_truth(meta["event_id"], name, reviewer,
+                                                     action="review_queue_enroll")
                 if processor.set_sub_label and meta.get("event_id"):
                     processor.frigate.set_sub_label(meta["event_id"], name, 1.0)
-        if n == 0:
-            if slug not in persons_now and gallery.persons()[slug]["count"] == 0:
-                gallery.delete_person(slug)
-            raise HTTPException(409, "התמונות כבר טופלו; לא שויכו פנים")
-        gallery.refresh_guesses()
-        return {"assigned": n, "slug": slug}
+        if n or duplicates:
+            gallery.refresh_guesses()
+        reference_count = gallery.persons()[slug]["count"] if slug else 0
+        return {"assigned": n, "slug": slug, "gallery_photos_added": n,
+                "duplicates": duplicates, "skipped": len(results) - n - duplicates,
+                "results": results, "reference_count": reference_count,
+                "ready": reference_count > 0}
 
     @app.post("/api/unknowns/resolve")
     def resolve_unknowns(body: AssignBody, request: Request):
         """Human-confirm queue events without turning every crop into gallery data."""
+        with gallery.assignment_lock:
+            return _resolve_unknowns(body, request)
+
+    def _resolve_unknowns(body, request):
         persons_now = gallery.persons()
         if body.person in persons_now:
             name = persons_now[body.person]["name"]
@@ -414,7 +439,9 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         reviewer = (request.headers.get("x-remote-user-name")
                     or request.headers.get("x-forwarded-user") or "operator")
         resolved = labeled = 0
-        for uid in body.ids[:1000]:
+        for uid in list(dict.fromkeys(body.ids))[:1000]:
+            if not gallery.valid_unknown_id(uid):
+                continue
             jf = gallery.unknown_dir / f"{uid}.json"
             try:
                 meta = json.loads(jf.read_text(encoding="utf-8"))
@@ -451,18 +478,20 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         }
 
     @app.post("/api/unknowns/auto_assign")
-    def auto_assign():
-        """Alle Unknowns mit Galerie-Match >= match_threshold der vorgeschlagenen Person zuordnen."""
+    def auto_assign(request: Request):
+        """Confirm safe gallery matches without automatically learning references."""
         thr = float(cfg["faceid"].get("match_threshold", 0.5))
         assigned: dict[str, int] = {}
-        for it in gallery.unknowns():
-            slug, name, score = gallery.match(it["embedding"])
-            if slug and score >= thr and gallery.assign_unknown(it["id"], slug):
-                assigned[name] = assigned.get(name, 0) + 1
-                if processor.set_sub_label and it.get("event_id"):
-                    processor.frigate.set_sub_label(it["event_id"], name, score)
-        gallery.refresh_guesses()
-        return {"assigned": assigned, "total": sum(assigned.values())}
+        with gallery.assignment_lock:
+            for it in gallery.unknowns():
+                if it["embedding"] is None:
+                    continue
+                slug, name, score = gallery.match(it["embedding"])
+                if slug and score >= thr:
+                    result = _resolve_unknowns(AssignBody(ids=[it["id"]], person=slug), request)
+                    assigned[name] = assigned.get(name, 0) + result["resolved"]
+            gallery.refresh_guesses()
+        return {"assigned": assigned, "total": sum(assigned.values()), "gallery_photos_added": 0}
 
     @app.post("/api/unknowns/ignore")
     def ignore(body: AssignBody):
@@ -875,56 +904,71 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
 
     @app.get("/api/activity/{event_id}/clip")
     def activity_clip(event_id: str, request: Request, download: bool = False):
-        """Serve a bounded local copy so browser byte ranges survive HA ingress."""
+        """Serve cached bytes immediately, otherwise proxy Frigate's byte stream."""
+        from urllib.parse import quote
+        from starlette.background import BackgroundTask
         if processor.audit is None or processor.audit.event_detail(event_id) is None:
             raise HTTPException(404, "Unknown event")
+        response_headers = {"Cache-Control": "private, max-age=300"}
+        disposition = "attachment" if download else "inline"
+        safe_event_id = "".join(char for char in event_id if char.isalnum() or char in "-_")[:80] or "event"
+        response_headers["Content-Disposition"] = f'{disposition}; filename="faceid-{safe_event_id}.mp4"'
         if processor.media_store is not None:
-            path = processor.media_store.clip_path(event_id)
-            if path is None:
-                raise HTTPException(
-                    404, "No event clip was found; the recording fallback also failed."
-                )
-            headers = {"Cache-Control": "private, max-age=300"}
-            disposition = "attachment" if download else "inline"
-            safe_event_id = "".join(
-                char for char in event_id if char.isalnum() or char in "-_"
-            )[:80] or "event"
-            headers["Content-Disposition"] = (
-                f'{disposition}; filename="faceid-{safe_event_id}.mp4"'
-            )
-            return FileResponse(path, media_type="video/mp4", headers=headers)
+            path = processor.media_store.cached_clip_path(event_id)
+            if path is not None:
+                return FileResponse(path, media_type="video/mp4", headers=response_headers)
 
-        # Compatibility path for callers constructing EventProcessor without a media store.
-        headers = {}
-        if request.headers.get("range"):
-            headers["Range"] = request.headers["range"]
+        headers = {"Accept-Encoding": "identity"}
+        for name in ("Range", "If-Range"):
+            if request.headers.get(name):
+                headers[name] = request.headers[name]
         try:
             upstream = processor.frigate.request(
-                "GET", f"/api/events/{event_id}/clip.mp4",
-                headers=headers, stream=True, timeout=processor.frigate.timeout * 8,
+                "GET", f"/api/events/{quote(event_id, safe='')}/clip.mp4",
+                headers=headers, stream=True,
+                timeout=(processor.frigate.timeout, processor.frigate.timeout * 8),
             )
+            if upstream.status_code == 404 and hasattr(processor.frigate, "event"):
+                upstream.close()
+                metadata = processor.frigate.event(event_id)
+                # Preserve the recording fallback for this exact finished event.
+                # An ongoing event has no bounded recording clip yet.
+                if metadata and metadata.get("camera") and metadata.get("start_time") and metadata.get("end_time"):
+                    start = max(0.0, float(metadata["start_time"]) - 2.0)
+                    end = float(metadata["end_time"]) + 2.0
+                    if end > start:
+                        camera = quote(str(metadata["camera"]), safe="")
+                        upstream = processor.frigate.request(
+                            "GET", f"/api/{camera}/start/{start:.3f}/end/{end:.3f}/clip.mp4",
+                            headers=headers, stream=True,
+                            timeout=(processor.frigate.timeout, processor.frigate.timeout * 8),
+                        )
         except Exception as exc:
             raise HTTPException(502, f"Frigate clip request failed: {exc}") from exc
+        if upstream.status_code == 416:
+            content_range = upstream.headers.get("content-range")
+            upstream.close()
+            return Response(status_code=416, headers={"Content-Range": content_range} if content_range else {})
         if upstream.status_code not in (200, 206):
             upstream.close()
             raise HTTPException(
-                404, "No clip is available. Check Frigate recording retention."
+                404, "The clip is not available yet, or the recording has expired in Frigate."
             )
 
         def chunks():
             try:
-                yield from upstream.iter_content(chunk_size=1 << 18)
+                yield from upstream.iter_content(chunk_size=1 << 16)
             finally:
                 upstream.close()
 
-        response_headers = {"Cache-Control": "private, max-age=300"}
-        for name in ("content-range", "accept-ranges", "content-length"):
+        for name in ("content-range", "accept-ranges", "content-length", "etag", "last-modified"):
             if upstream.headers.get(name):
                 response_headers[name.title()] = upstream.headers[name]
         return StreamingResponse(
             chunks(), status_code=upstream.status_code,
             media_type=upstream.headers.get("content-type", "video/mp4"),
             headers=response_headers,
+            background=BackgroundTask(upstream.close),
         )
 
     @app.get("/api/activity/{event_id}/references")
@@ -1258,6 +1302,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 "photo": f"media/persons/{slug}/{files[0]}" if files else None,
                 "reference_photos": int(person.get("count", len(files))),
                 "favorite": bool(person.get("favorite")),
+                "watchlist": person.get("watchlist", "normal"),
+                "notify_on_recognition": bool(person.get("notify_on_recognition")),
                 "appearances": int(person_stats.get("appearances", 0)),
                 "today": int(person_stats.get("today", 0)),
                 "last_7_days": int(person_stats.get("last_7_days", 0)),
@@ -1292,6 +1338,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         night_min_face_px: int | None = None
         burst_frames: int = 8
         high_resolution: bool = False
+        fast_recognition: bool | None = None
+        critical: bool | None = None
         require_second_factor: bool = True
         liveness_mode: str | None = None
         roi: list[float] | None = None
@@ -1472,6 +1520,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 mode=body.mode, night_min_face_px=body.night_min_face_px,
                 burst_frames=body.burst_frames,
                 high_resolution=body.high_resolution,
+                fast_recognition=body.fast_recognition,
+                critical=body.critical,
                 require_second_factor=body.require_second_factor,
                 liveness_mode=body.liveness_mode,
                 roi=body.roi,
@@ -1807,6 +1857,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 "persons": len(gallery.persons()),
                 "queue": len(list((data_dir / "unknowns").glob("*.json"))),
                 "processing": processor.queue.qsize(),
+                "performance": processor.performance() if hasattr(processor, "performance") else {},
                 "open_events": len(processor.events),
                 "pending_jobs": len(jobs),
                 "engine": engine.health() if hasattr(engine, "health") else {},

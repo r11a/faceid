@@ -3,6 +3,8 @@ import { Camera, ChevronLeft, Clock3, ImageOff, Images, Search, Upload, UserPlus
 import { api, assetUrl, query } from "../api.js";
 import { useResource } from "../hooks.js";
 import { Badge, Empty, ErrorState, Loading, Modal, PageHeader, Panel, dateTime, percent, useToast } from "../ui.jsx";
+import { EventVideo } from "../EventVideo.jsx";
+import { isBlacklistedEvent } from "../alerts.js";
 
 const dayLabel = (value) => new Date(value * 1000).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
@@ -12,16 +14,40 @@ function FaceImage({ src, alt }) {
   return !src || failed ? <span className="face-placeholder"><ImageOff /></span> : <img src={src.startsWith("data:") ? src : assetUrl(src)} alt={alt || "פנים"} onError={() => setFailed(true)} loading="lazy" />;
 }
 
-function Evidence({ event, onClose, onSimilar }) {
-  const [clip, setClip] = useState(false);
-  const [error, setError] = useState("");
+function Evidence({ event, people, onClose, onSimilar }) {
   return <Modal title={`${event.ground_truth || event.person || "פנים לא מזוהות"} · ${event.camera}`} subtitle={dateTime(event.start_ts || event.updated_ts)} onClose={onClose} wide>
-    <div className="face-evidence"><FaceImage src={event.image} />{clip ? <video controls autoPlay src={assetUrl(`api/activity/${encodeURIComponent(event.event_id)}/clip`)} onError={() => setError("הקליפ אינו זמין עוד ב־Frigate")} /> : <button className="button primary" onClick={() => setClip(true)}>צפייה בקליפ</button>}{error && <p role="alert">{error}</p>}
+    <div className={`face-evidence ${isBlacklistedEvent(event, people) ? "blacklist-outline" : ""}`}><FaceImage src={event.image} /><EventVideo eventId={event.event_id} />
     {event.sample_id && <button className="button secondary" onClick={() => { onSimilar({ sample_id: event.sample_id }); onClose(); }}><Search />חפש פנים דומות לאלה</button>}</div>
   </Modal>;
 }
 
-export function FaceExplorer({ source: initialSource, title, onEnroll }) {
+function HistoryReferenceChooser({ event, person, onClose, onAdded }) {
+  const choices = useResource(`faces/event/${encodeURIComponent(event.event_id)}/references?${query({ person })}`);
+  const [saving, setSaving] = useState(null);
+  const [saved, setSaved] = useState({});
+  const [summary, setSummary] = useState(null);
+  const toast = useToast();
+  const reasons = { too_small: "הפנים קטנות מדי", blurred: "התמונה מטושטשת", poor_illumination: "תאורה לא מתאימה", invalid_embedding: "נתוני פנים לא תקינים", low_quality: "איכות הפנים אינה מספיקה" };
+  const add = async candidate => {
+    setSaving(candidate.token);
+    try {
+      const result = await api("faces/enroll", { method: "POST", body: JSON.stringify({ token: candidate.token, person }) });
+      setSaved(current => ({ ...current, [candidate.token]: result.added ? "נוספה לגלריה" : "כבר קיימת בגלריה" }));
+      setSummary(result);
+      toast(result.added ? "תמונת הייחוס נוספה והאדם מוכן לזיהוי ראשוני" : "התמונה כבר מיוצגת בגלריה; לא נוספה כפילות", result.added ? "success" : "info");
+      onAdded?.(result);
+    } catch (error) { toast(error.message, "error"); }
+    finally { setSaving(null); }
+  };
+  return <Modal title="בחר תמונות ייחוס מהאירוע" subtitle={`${event.camera} · ${dateTime(event.start_ts || event.updated_ts)}`} onClose={onClose} wide>
+    <p>בחר במפורש רק פנים ששייכות לאדם זה. אפשר להוסיף כמה תמונות טובות; צפייה באירוע אינה מלמדת את המערכת.</p>
+    {choices.loading ? <Loading text="טוען פנים שנשמרו באירוע…" /> : choices.error ? <><ErrorState error={choices.error} retry={choices.reload} /><a className="button secondary" href="#faces"><Upload />העלה תמונת ייחוס חדשה</a></> : <div className="face-candidates history-reference-choices">{(choices.data?.candidates || []).map((candidate, index) => <div key={candidate.token}><FaceImage src={candidate.preview} alt={`פנים ${index + 1} מהאירוע`} /><p>פנים {index + 1}</p><button className="button primary" disabled={Boolean(saving) || !candidate.usable || Boolean(saved[candidate.token])} onClick={() => add(candidate)}>{saving === candidate.token ? "מוסיף…" : saved[candidate.token] || "הוסף לגלריה"}</button>{!candidate.usable && <p>{reasons[candidate.reason] || "התמונה אינה מתאימה ללימוד; בחר צילום ברור יותר"}</p>}</div>)}</div>}
+    {summary && <p role="status">{summary.reference_count} תמונות ייחוס · {summary.ready ? "מוכן לזיהוי ראשוני" : "נדרשת תמונת ייחוס איכותית"}</p>}
+  </Modal>;
+}
+
+export function FaceExplorer({ source: initialSource, title, onEnroll, onReferencesChanged }) {
+  const people = useResource("users");
   const [source, setSource] = useState(initialSource);
   const [filters, setFilters] = useState({ camera: "", date_from: "", date_to: "", order: "asc", threshold: .55, similar: false });
   const [offset, setOffset] = useState(0);
@@ -29,6 +55,8 @@ export function FaceExplorer({ source: initialSource, title, onEnroll }) {
   const [retry, setRetry] = useState(0);
   const [event, setEvent] = useState(null);
   const [samples, setSamples] = useState(null);
+  const [referenceMode, setReferenceMode] = useState(false);
+  const [referenceEvent, setReferenceEvent] = useState(null);
   const index = useResource("faces/index", { poll: 4000 });
   const indexWasRunning = useRef(false);
   useEffect(() => {
@@ -38,7 +66,7 @@ export function FaceExplorer({ source: initialSource, title, onEnroll }) {
   }, [index.data]);
   const toast = useToast();
   const sourceKey = JSON.stringify(initialSource);
-  useEffect(() => { setSource(initialSource); setOffset(0); setSamples(null); }, [sourceKey]);
+  useEffect(() => { setSource(initialSource); setOffset(0); setSamples(null); setReferenceEvent(null); setReferenceMode(false); }, [sourceKey]);
   const requestKey = JSON.stringify({ ...source, ...filters, offset });
   useEffect(() => {
     const controller = new AbortController();
@@ -69,7 +97,8 @@ export function FaceExplorer({ source: initialSource, title, onEnroll }) {
     catch (error) { toast(error.message, "error"); }
   };
   return <div className="face-explorer">
-    <div className="panel-heading"><div><span className="eyebrow">מכל המצלמות</span><h2>{title || "הופעות הפנים שנבחרו"}</h2><p>{state.data?.mode === "identity" ? "אירועים שזוהו או אושרו כאדם זה" : "התאמות לפי דמיון בפנים — יש לבדוק לפני קביעת זהות"}</p></div>{onEnroll && <button className="button secondary" onClick={onEnroll}><UserPlus />הוסף לגלריה</button>}</div>
+    <div className="panel-heading"><div><span className="eyebrow">מכל המצלמות</span><h2>{title || "הופעות הפנים שנבחרו"}</h2><p>{state.data?.mode === "identity" ? "אירועים שזוהו או אושרו כאדם זה" : "התאמות לפי דמיון בפנים — יש לבדוק לפני קביעת זהות"}</p></div>{source.person && <button className="button primary" onClick={() => { setReferenceMode(value => !value); change("similar", false); }}><UserPlus />{referenceMode ? "סיום בחירת תמונות" : "בחר תמונות ייחוס"}</button>}{onEnroll && <button className="button secondary" onClick={onEnroll}><UserPlus />הוסף לגלריה</button>}</div>
+    {source.person && (referenceMode || (people.data?.users || []).some(person => person.slug === source.person && !person.count)) && <p className="inline-alert">כדי להפעיל זיהוי, בחר תמונות ייחוס מהאירועים שכבר שויכו לאדם. תמונה איכותית אחת מספיקה להתחלה; כמה זוויות משפרות את הזיהוי.</p>}
     <div className="face-filters">
       <label>מצלמה<input value={filters.camera} list="face-camera-options" placeholder="כל המצלמות" onChange={e => change("camera", e.target.value)} /><datalist id="face-camera-options">{(state.data?.cameras || []).map(camera => <option key={camera} value={camera} />)}</datalist></label>
       <label>מתאריך<input type="datetime-local" value={filters.date_from} onChange={e => change("date_from", e.target.value)} /></label>
@@ -81,12 +110,13 @@ export function FaceExplorer({ source: initialSource, title, onEnroll }) {
     {samples && <div><p>בחר את הפנים לחיפוש מתוך האירוע:</p><div className="face-candidates">{samples.map(sample => <button key={sample.sample_id} onClick={() => { setSource({ sample_id: sample.sample_id }); setSamples(null); setOffset(0); }}><FaceImage src={sample.image} /><span>חפש פנים אלה</span></button>)}</div></div>}
     {state.loading ? <Loading text="מחפש הופעות בכל המצלמות…" /> : state.error ? <ErrorState error={state.error} retry={() => setRetry(v => v + 1)} /> : state.data && <>
       <div className="face-result-count"><b>{state.data.total} אירועים</b><span>{state.data.cameras.length} מצלמות</span></div>
-      {groups.map(([day, rows]) => <section className="face-day" key={day}><h3><Clock3 />{day}</h3><div className="face-timeline">{rows.map(row => <button className="face-appearance" key={row.event_id} onClick={() => setEvent(row)}><time>{new Date((row.start_ts ?? row.updated_ts)*1000).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time><FaceImage src={row.image} /><span><b><Camera />{row.camera}</b><small>{row.ground_truth || row.person || "לא זוהה"}</small></span>{row.similarity != null && <Badge tone="info">{percent(row.similarity)} דמיון</Badge>}<ChevronLeft /></button>)}</div></section>)}
+      {groups.map(([day, rows]) => <section className="face-day" key={day}><h3><Clock3 />{day}</h3><div className="face-timeline">{rows.map(row => <div key={row.event_id}><button className={`face-appearance ${isBlacklistedEvent(row, people.data?.users || []) ? "blacklist-outline" : ""}`} onClick={() => referenceMode && source.person && !filters.similar ? setReferenceEvent(row) : setEvent(row)}><time>{new Date((row.start_ts ?? row.updated_ts)*1000).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time><FaceImage src={row.image} /><span><b><Camera />{row.camera}</b><small>{row.ground_truth || row.person || "לא זוהה"}</small></span>{row.similarity != null && <Badge tone="info">{percent(row.similarity)} דמיון</Badge>}<ChevronLeft /></button>{referenceMode && source.person && !filters.similar && <button className="button secondary" onClick={() => setReferenceEvent(row)}>בחר פנים מהאירוע</button>}</div>)}</div></section>)}
       {!state.data.total && <Empty icon={Search} title="לא נמצאו הופעות בטווח שנבחר" text="אפשר להרחיב את התאריכים, לשנות את סף הדמיון או לסרוק את התמונות שנשמרו בהיסטוריה." />}
       {state.data.total > 50 && <div className="face-pagination"><button className="button secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset-50))}>הקודמים</button><span>{offset+1}–{Math.min(offset+50,state.data.total)} מתוך {state.data.total}</span><button className="button secondary" disabled={offset+50 >= state.data.total} onClick={() => setOffset(offset+50)}>הבאים</button></div>}
     </>}
     <details className="face-history-note"><summary>חסרים אירועים ישנים?</summary><p>אירועים מזוהים נשמרים לפי מדיניות ההיסטוריה. חיפוש דומה זמין לאירועים שנאספו מאז 6.1 ולתמונות היסטוריות שעדיין קיימות. תמונות שכבר נמחקו אינן ניתנות לשחזור.</p>{index.data?.running ? <Loading text={`סורק היסטוריה: ${index.data.processed} מתוך ${index.data.total}`} /> : <button className="button secondary" onClick={rebuild}>סרוק תמונות היסטוריות זמינות</button>}{index.data?.error && <p role="alert">{index.data.error}</p>}<button className="text-button" onClick={() => setRetry(v => v+1)}>רענן תוצאות</button></details>
-    {event && <Evidence event={event} onClose={() => setEvent(null)} onSimilar={setSource} />}
+    {event && <Evidence event={event} people={people.data?.users || []} onClose={() => setEvent(null)} onSimilar={setSource} />}
+    {referenceEvent && <HistoryReferenceChooser event={referenceEvent} person={source.person} onClose={() => setReferenceEvent(null)} onAdded={result => { people.reload(); onReferencesChanged?.(result); }} />}
   </div>;
 }
 
@@ -118,8 +148,8 @@ export function FacesPage({ navigate }) {
   const save = async e => {
     e.preventDefault(); setSaving(true);
     try {
-      await api("faces/enroll", { method: "POST", body: JSON.stringify({ token: result.token, ...(enrollPerson ? { person: enrollPerson } : { name }) }) });
-      toast("התמונה נוספה לגלריה"); setEnroll(false); setResult(null); setSource({}); users.reload();
+      const saved = await api("faces/enroll", { method: "POST", body: JSON.stringify({ token: result.token, ...(enrollPerson ? { person: enrollPerson } : { name }) }) });
+      toast(saved.added ? "התמונה נוספה לגלריה" : "התמונה כבר קיימת בגלריה", saved.added ? "success" : "info"); setEnroll(false); setResult(null); setSource({}); users.reload();
     } catch (err) { toast(err.message, "error"); }
     finally { setSaving(false); }
   };

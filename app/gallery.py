@@ -120,12 +120,14 @@ class Gallery:
                     "emb": emb,
                     "files": files,
                     "favorite": bool(meta.get("favorite", False)),
+                    "watchlist": meta.get("watchlist", "normal"),
+                    "notify_on_recognition": bool(meta.get("notify_on_recognition", False)),
                     # Herkunft je Foto (Kamera, Ereigniszeit) — fehlt bei Altbestand
                     "sources": dict(meta.get("sources", {})),
                 }
                 if changed:
                     _atomic_write_json(meta_f,
-                        {"name": meta.get("name", pdir.name), "files": files,
+                        {**meta, "name": meta.get("name", pdir.name), "files": files,
                          "favorite": bool(meta.get("favorite", False))},
                         indent=1)
             embs, ids, groups = [], [], []
@@ -298,6 +300,8 @@ class Gallery:
             pdir / "meta.json",
             {"name": entry["name"], "files": entry["files"],
              "favorite": bool(entry.get("favorite", False)),
+             "watchlist": entry.get("watchlist", "normal"),
+             "notify_on_recognition": bool(entry.get("notify_on_recognition", False)),
              "sources": entry.get("sources", {})},
             indent=1,
         )
@@ -309,10 +313,32 @@ class Gallery:
             return {
                 slug: {"name": e["name"], "count": len(e["files"]), "files": list(e["files"]),
                        "favorite": bool(e.get("favorite", False)),
+                       "watchlist": e.get("watchlist", "normal"),
+                       "notify_on_recognition": bool(e.get("notify_on_recognition", False)),
                        "sources": dict(e.get("sources", {})),
                        "trimmed": self.trimmed(slug)}
                 for slug, e in self._cache.items()
             }
+
+    def alert_policy(self, name):
+        """Read cached policy without loading photo lists or discarded-photo logs."""
+        with self._lock:
+            person = next((entry for entry in self._cache.values() if entry["name"] == name), {})
+            return {"watchlist": person.get("watchlist", "normal"),
+                    "notify_on_recognition": bool(person.get("notify_on_recognition", False))}
+
+    def set_alert_policy(self, slug, *, watchlist=None, notify_on_recognition=None):
+        with self._lock:
+            if slug not in self._cache:
+                return False
+            if watchlist is not None:
+                if watchlist not in {"normal", "white", "black"}:
+                    raise ValueError("Invalid watchlist")
+                self._cache[slug]["watchlist"] = watchlist
+            if notify_on_recognition is not None:
+                self._cache[slug]["notify_on_recognition"] = bool(notify_on_recognition)
+            self._persist(slug)
+            return True
 
     def set_favorite(self, slug: str, fav: bool) -> bool:
         with self._lock:
@@ -435,7 +461,7 @@ class Gallery:
     def _dhash(path, size: int = 8):
         """Perceptual hash — erkennt visuell identische Bilddateien unabhaengig vom
         Erkennungsmodell (z.B. zweimal hochgeladen, oder Alt-Artefakte)."""
-        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        img = cv2.cvtColor(path, cv2.COLOR_BGR2GRAY) if isinstance(path, np.ndarray) else cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
         if img is None:
             return None
         img = cv2.resize(img, (size + 1, size))
@@ -918,9 +944,17 @@ class Gallery:
                 m = json.loads(jf.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
+            if not isinstance(m, dict):
+                continue
+            try:
+                embedding = np.asarray(m.get("embedding"), dtype=np.float32)
+                if embedding.shape != (512,) or not np.isfinite(embedding).all() or np.linalg.norm(embedding) < 1e-6:
+                    embedding = None
+            except (TypeError, ValueError):
+                embedding = None
             out.append({"id": jf.stem, **{k: v for k, v in m.items() if k != "embedding"},
                         "has_full": (self.unknown_dir / f"{jf.stem}_full.jpg").exists(),
-                        "embedding": np.array(m["embedding"], dtype=np.float32)})
+                        "embedding": embedding})
         return out
 
     def unknown_clusters(self, eps: float = 0.45):
@@ -930,29 +964,97 @@ class Gallery:
             return []
         from sklearn.cluster import DBSCAN
 
+        unclustered = [[{k: v for k, v in it.items() if k != "embedding"}]
+                       for it in items if it["embedding"] is None]
+        items = [it for it in items if it["embedding"] is not None]
+        if not items:
+            return unclustered
         X = np.stack([it["embedding"] for it in items])
         labels = DBSCAN(eps=eps, min_samples=1, metric="cosine").fit(X).labels_
         clusters = {}
         for it, lb in zip(items, labels):
             it.pop("embedding")
             clusters.setdefault(int(lb), []).append(it)
-        return sorted(clusters.values(), key=len, reverse=True)
+        return sorted(list(clusters.values()) + unclustered, key=len, reverse=True)
+
+    @staticmethod
+    def valid_unknown_id(uid: str) -> bool:
+        return bool(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", uid))
+
+    def prepare_unknown_enrollment(self, uid: str):
+        """Validate the already-selected camera face; never detect another face in its crop."""
+        if not self.valid_unknown_id(uid):
+            return None, "invalid_id"
+        jf = self.unknown_dir / f"{uid}.json"
+        image = self.unknown_dir / f"{uid}.jpg"
+        if not jf.is_file() or not image.is_file():
+            return None, "missing"
+        try:
+            meta = json.loads(jf.read_text(encoding="utf-8"))
+            candidate, reason = self.prepare_reference(cv2.imread(str(image)), meta["embedding"])
+        except (OSError, ValueError, TypeError, KeyError):
+            return None, "invalid_embedding"
+        if candidate is not None:
+            candidate.update(meta=meta, image=image)
+        return candidate, reason
+
+    def prepare_reference(self, crop, embedding):
+        """One quality policy for explicitly selected camera reference images."""
+        try:
+            embedding = np.asarray(embedding, dtype=np.float32)
+            norm = float(np.linalg.norm(embedding))
+            if embedding.shape != (512,) or not np.isfinite(embedding).all() or not np.isfinite(norm) or norm < 1e-6:
+                return None, "invalid_embedding"
+            embedding = embedding / norm
+        except (OSError, ValueError, TypeError, KeyError):
+            return None, "invalid_embedding"
+        if crop is None or crop.size == 0:
+            return None, "unreadable_image"
+        if min(crop.shape[:2]) < 60:
+            return None, "too_small"
+        from .gallery_coach import _image_metrics
+        sharpness, illumination = _image_metrics(crop)
+        if sharpness < 0.3:
+            return None, "blurred"
+        if illumination < 0.35:
+            return None, "poor_illumination"
+        return {"crop": crop, "embedding": embedding, "quality": {"sharpness": sharpness,
+                "illumination": illumination, "face_px": min(crop.shape[:2])}}, "eligible"
+
+    def enroll_unknown(self, uid: str, slug: str, candidate=None) -> str:
+        with self._lock:
+            if candidate is None:
+                candidate, reason = self.prepare_unknown_enrollment(uid)
+                if candidate is None:
+                    return reason
+            meta = candidate["meta"]
+            status, _ = self.add_reference(slug, candidate, source={
+                "camera": meta.get("camera"), "event_ts": meta.get("event_ts") or meta.get("ts"),
+                "event_id": meta.get("event_id"), "enrollment": "camera_review"})
+            self.discard_unknown(uid)
+            return status
+
+    def add_reference(self, slug, candidate, source=None):
+        """Add an approved reference once; return its actual addition status."""
+        with self._lock:
+            entry = self._cache[slug]
+            embedding = candidate["embedding"]
+            duplicate = bool(len(entry["emb"]) and np.max(entry["emb"] @ embedding) >= 0.90)
+            image_hash = self._dhash(candidate["crop"])
+            if not duplicate and image_hash is not None:
+                for fname in entry["files"]:
+                    existing_hash = self._dhash(self.persons_dir / slug / fname)
+                    if existing_hash is not None and np.count_nonzero(image_hash != existing_hash) <= 2:
+                        duplicate = True
+                        break
+            if duplicate:
+                return "duplicate", None
+            filename = self.add_face(slug, candidate["crop"], embedding,
+                                     source={**(source or {}), "quality": candidate["quality"]})
+            return "learned", filename
 
     def assign_unknown(self, uid: str, slug: str):
-        with self._lock:
-            jf = self.unknown_dir / f"{uid}.json"
-            img_f = self.unknown_dir / f"{uid}.jpg"
-            if not jf.exists() or not img_f.exists():
-                return False
-            meta = json.loads(jf.read_text(encoding="utf-8"))
-            crop = cv2.imread(str(img_f))
-            self.add_face(slug, crop, np.array(meta["embedding"], dtype=np.float32),
-                          source={"camera": meta.get("camera"),
-                                  "event_ts": meta.get("event_ts") or meta.get("ts")})
-            jf.unlink()
-            img_f.unlink()
-            (self.unknown_dir / f"{uid}_full.jpg").unlink(missing_ok=True)
-            return True
+        return self.enroll_unknown(uid, slug) == "learned"
 
     def refresh_guesses(self):
         """Verbleibende Unknowns gegen die aktuelle Galerie neu bewerten (nach Zuordnungen)."""
@@ -962,7 +1064,13 @@ class Gallery:
                     m = json.loads(jf.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     continue
-                _, name, score = self.match(np.array(m["embedding"], dtype=np.float32))
+                try:
+                    embedding = np.asarray(m["embedding"], dtype=np.float32)
+                    if embedding.shape != (512,) or not np.isfinite(embedding).all():
+                        continue
+                except (KeyError, TypeError, ValueError):
+                    continue
+                _, name, score = self.match(embedding)
                 m["guess"], m["guess_score"] = name, round(float(score), 3)
                 _atomic_write_json(jf, m)
 
