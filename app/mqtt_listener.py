@@ -11,6 +11,7 @@ import logging
 import queue
 import threading
 import time
+from contextlib import nullcontext
 from collections import deque
 
 import paho.mqtt.client as mqtt
@@ -47,6 +48,11 @@ class EventProcessor:
         self.dispatcher = dispatcher
         self.ai_context = ai_context
         self.queue: "queue.Queue[dict]" = queue.Queue(maxsize=200)
+        self.clip_queue: "queue.Queue[dict]" = queue.Queue(maxsize=50)
+        self._jobs_lock = threading.RLock()
+        self._deferred_jobs = {}
+        self._timing_lock = threading.Lock()
+        self._timings = {}
         self.events: dict[str, dict] = {}  # event_id -> Zustand
         self.recent = deque(maxlen=100)  # Ringpuffer für die UI
         self.client: mqtt.Client | None = None
@@ -135,6 +141,7 @@ class EventProcessor:
             "start_time": start_time or time.time(), "end_time": end_time,
             "decision": DecisionAccumulator(self.policy),
             "liveness_history": [], "liveness": None,
+            "processing_lock": threading.Lock(),
         }
         st.update(extra)
         if self.audit:
@@ -156,6 +163,7 @@ class EventProcessor:
         c.loop_start()
         self._check_frigate()
         threading.Thread(target=self._worker, daemon=True, name="faceid-worker").start()
+        threading.Thread(target=self._worker, args=("clip",), daemon=True, name="faceid-clip-worker").start()
         threading.Thread(target=self._finalizer, daemon=True, name="faceid-finalizer").start()
         if self.audit:
             self.audit.recover_running_jobs()
@@ -200,9 +208,14 @@ class EventProcessor:
             self._dispatch_pending_jobs()
 
     def _dispatch_pending_jobs(self):
+        with self._jobs_lock:
+            self._dispatch_pending_jobs_locked()
+
+    def _dispatch_pending_jobs_locked(self):
         if not self.audit:
             return
-        for job in self.audit.pending_jobs():
+        jobs = [*self.audit.pending_jobs(kind="snapshot"), *self.audit.pending_jobs(limit=50, kind="clip")]
+        for job in jobs:
             eid, kind = job["event_id"], job["kind"]
             if not self.camera_enabled(job["camera"]):
                 self.audit.finalize(
@@ -219,12 +232,17 @@ class EventProcessor:
             if key in self._queued_jobs:
                 continue
             try:
-                self.queue.put_nowait({"eid": eid, "kind": kind})
+                work_queue = self.clip_queue if kind == "clip" else self.queue
+                work_queue.put_nowait({"eid": eid, "kind": kind, "queued_at": time.perf_counter()})
                 self._queued_jobs.add(key)
             except queue.Full:
-                break
+                continue
 
     def _enqueue_job(self, eid: str, kind: str = "snapshot") -> bool:
+        with self._jobs_lock:
+            return self._enqueue_job_locked(eid, kind)
+
+    def _enqueue_job_locked(self, eid: str, kind: str = "snapshot") -> bool:
         if (eid, kind) in self._queued_jobs:
             return True
         if self.audit:
@@ -232,10 +250,25 @@ class EventProcessor:
             self._dispatch_pending_jobs()
             return (eid, kind) in self._queued_jobs
         try:
-            self.queue.put_nowait({"eid": eid, "kind": kind})
+            work_queue = self.clip_queue if kind == "clip" else self.queue
+            work_queue.put_nowait({"eid": eid, "kind": kind, "queued_at": time.perf_counter()})
+            self._queued_jobs.add((eid, kind))
             return True
         except queue.Full:
             return False
+
+    def _flush_deferred_jobs(self):
+        with self._jobs_lock:
+            for key, item in list(self._deferred_jobs.items()):
+                state = self.events.get(item["eid"])
+                if state and state["processing_lock"].locked():
+                    continue
+                try:
+                    work_queue = self.clip_queue if item.get("kind") == "clip" else self.queue
+                    work_queue.put_nowait(item)
+                except queue.Full:
+                    continue
+                self._deferred_jobs.pop(key, None)
 
     def _check_frigate(self):
         """Beim Start einmal nachsehen, ob Frigate ueberhaupt antwortet.
@@ -263,6 +296,9 @@ class EventProcessor:
         client.subscribe(f"{self.prefix}/v1/review/set")
         client.publish(f"{self.prefix}/status", "online", retain=True)
         self._publish_discovery()
+        alerts = getattr(self, "alerts", None)
+        if alerts is not None:
+            alerts.publish_discovery(client)
 
     def _on_message(self, client, userdata, msg):
         try:
@@ -316,73 +352,115 @@ class EventProcessor:
                 self.audit.mark_ended(eid, st["end_time"])
         if st["done"] or st["attempts"] >= self.max_attempts:
             return
-        if after.get("has_snapshot") and time.time() - st["last_try"] >= self.retry_secs:
+        if after.get("has_snapshot") and time.time() - st["last_try"] >= self.recognition_interval(cam):
             st["last_try"] = time.time()
             if not self._enqueue_job(eid, "snapshot"):
                 log.warning("queue full, skipping event %s", eid)
 
     # ---------- Verarbeitung ----------
 
-    def _worker(self):
+    def recognition_interval(self, camera):
+        profile = self.camera_profiles.get(camera) if self.camera_profiles else {}
+        return min(self.retry_secs, .35) if profile.get("fast_recognition") else self.retry_secs
+
+    def record_timing(self, stage, seconds):
+        with self._timing_lock:
+            self._timings.setdefault(stage, deque(maxlen=128)).append(max(0.0, seconds) * 1000)
+
+    def performance(self):
+        with self._timing_lock:
+            samples = {name: sorted(values) for name, values in self._timings.items() if values}
+        report = {name: {"samples": len(values), "p50_ms": round(values[len(values)//2], 2),
+                         "p95_ms": round(values[min(len(values)-1, int(len(values)*.95))], 2)}
+                  for name, values in samples.items()}
+        return {**report, "live_queue": self.queue.qsize(), "clip_queue": self.clip_queue.qsize()}
+
+    def _worker(self, kind="snapshot"):
+        work_queue = self.clip_queue if kind == "clip" else self.queue
         while True:
-            item = self.queue.get()
-            eid = item["eid"]
-            kind = item.get("kind", "snapshot")
-            try:
+            self._work_once(work_queue)
+
+    def _work_once(self, work_queue):
+        item = work_queue.get()
+        eid = item["eid"]
+        kind = item.get("kind", "snapshot")
+        started = time.perf_counter()
+        state = self.events.get(eid)
+        event_lock = state.get("processing_lock") if state else None
+        locked = False
+        deferred = False
+        try:
+            # Never discard evidence on lock contention or stall other cameras.
+            if event_lock is not None:
+                locked = event_lock.acquire(blocking=kind == "clip")
+                if not locked:
+                    with self._jobs_lock:
+                        self._deferred_jobs[(eid, kind)] = item
+                    deferred = True
+                    return
+            self.record_timing(f"{kind}_queue_wait", started - item.get("queued_at", started))
+            if self.audit:
+                self.audit.mark_job_running(eid, kind)
+            state = self.events.get(eid)
+            if state is not None and not self.camera_enabled(state["camera"]):
                 if self.audit:
-                    self.audit.mark_job_running(eid, kind)
-                state = self.events.get(eid)
-                if state is not None and not self.camera_enabled(state["camera"]):
-                    if self.audit:
-                        self.audit.finalize(
-                            eid, "camera_disabled",
-                            end_ts=state.get("end_time") or time.time(),
-                        )
-                        self.audit.complete_job(eid, kind)
-                    state["done"] = True
-                    continue
-                if kind == "clip":
-                    self._process_clip(eid)
-                else:
-                    self._process(eid)
-                if self.audit:
+                    self.audit.finalize(
+                        eid, "camera_disabled",
+                        end_ts=state.get("end_time") or time.time(),
+                    )
                     self.audit.complete_job(eid, kind)
-            except ClipNotReady as e:
-                state = self.events.get(eid)
-                retries = int((state or {}).get("clip_not_ready_retries", 0)) + 1
+                state["done"] = True
+                return
+            if kind == "clip":
+                background = self.engine.background_work() if hasattr(self.engine, "background_work") else nullcontext()
+                with background:
+                    self._process_clip(eid)
+            else:
+                self._process(eid)
+            if self.audit:
+                self.audit.complete_job(eid, kind)
+        except ClipNotReady as e:
+            state = self.events.get(eid)
+            retries = int((state or {}).get("clip_not_ready_retries", 0)) + 1
+            if state is not None:
+                state["clip_not_ready_retries"] = retries
+                state["clip_queued"] = False
+            status = "pending"
+            if self.audit:
+                self.audit.observation(
+                    eid, int((state or {}).get("attempts", 0)),
+                    "clip_not_ready", source="clip",
+                )
+                status = self.audit.retry_job(
+                    eid, kind, str(e), delay=self.clip_retry_seconds,
+                    max_attempts=self.clip_retry_attempts,
+                )
+            if status == "failed" or retries >= self.clip_retry_attempts:
                 if state is not None:
-                    state["clip_not_ready_retries"] = retries
-                    state["clip_queued"] = False
-                status = "pending"
-                if self.audit:
-                    self.audit.observation(
-                        eid, int((state or {}).get("attempts", 0)),
-                        "clip_not_ready", source="clip",
-                    )
-                    status = self.audit.retry_job(
-                        eid, kind, str(e), delay=self.clip_retry_seconds,
-                        max_attempts=self.clip_retry_attempts,
-                    )
-                if status == "failed" or retries >= self.clip_retry_attempts:
-                    if state is not None:
-                        state["clip_analyzed"] = True
-                    log.warning(
-                        "event %s: clip remained unavailable after %d attempts; continuing without clip evidence",
-                        eid, retries,
-                    )
-                else:
-                    log.info(
-                        "event %s: clip not ready; retry %d/%d in %.0fs",
-                        eid, retries + 1, self.clip_retry_attempts,
-                        self.clip_retry_seconds,
-                    )
-            except Exception as e:
-                if self.audit:
-                    self.audit.retry_job(eid, kind, str(e))
-                log.exception("error while handling event %s (%s)", eid, kind)
-            finally:
-                self._queued_jobs.discard((eid, kind))
-                self.queue.task_done()
+                    state["clip_analyzed"] = True
+                log.warning(
+                    "event %s: clip remained unavailable after %d attempts; continuing without clip evidence",
+                    eid, retries,
+                )
+            else:
+                log.info(
+                    "event %s: clip not ready; retry %d/%d in %.0fs",
+                    eid, retries + 1, self.clip_retry_attempts,
+                    self.clip_retry_seconds,
+                )
+        except Exception as e:
+            if self.audit:
+                self.audit.retry_job(eid, kind, str(e))
+            log.exception("error while handling event %s (%s)", eid, kind)
+        finally:
+            if locked:
+                event_lock.release()
+            self.record_timing(kind, time.perf_counter() - started)
+            with self._jobs_lock:
+                if not deferred:
+                    self._queued_jobs.discard((eid, kind))
+            work_queue.task_done()
+            self._flush_deferred_jobs()
 
     def _process_clip(self, eid: str):
         st = self.events.get(eid)
@@ -417,12 +495,26 @@ class EventProcessor:
         st = self.events.get(eid)
         if st is None or st["done"]:
             return
-        st["attempts"] += 1
+        try:
+            self._process_snapshot(eid)
+        except Exception:
+            st.pop("candidate_fingerprint", None)
+            raise
+        else:
+            fingerprint = st.pop("candidate_fingerprint", None)
+            if fingerprint is not None:
+                st["snapshot_fingerprint"] = fingerprint
+
+    def _process_snapshot(self, eid: str):
+        st = self.events.get(eid)
+        if st is None or st["done"]:
+            return
         camera_profile = (
             self.camera_profiles.get(st["camera"])
             if self.camera_profiles is not None else None
         )
         img = None
+        fetch_started = time.perf_counter()
         source = "snapshot"
         st["access1_evidence_ts"] = None
         if camera_profile and camera_profile.get("high_resolution"):
@@ -437,11 +529,18 @@ class EventProcessor:
                     break
         if img is None:
             img = self.frigate.snapshot(eid, crop=True)
+        self.record_timing("snapshot_fetch", time.perf_counter() - fetch_started)
         if img is None:
+            st["attempts"] += 1
             if self.audit:
                 self.audit.observation(eid, st["attempts"], "no_snapshot")
             log.info("event %s (%s): no snapshot from Frigate", eid, st["camera"])
             return
+        fingerprint = hashlib.sha256(img.tobytes()).hexdigest()
+        if fingerprint == st.get("snapshot_fingerprint"):
+            return
+        st["candidate_fingerprint"] = fingerprint
+        st["attempts"] += 1
         st["context_frame"] = img
         if self.body_recognition is not None:
             try:
@@ -739,8 +838,21 @@ class EventProcessor:
             now = time.time()
             for cam in list(self.present.keys()):
                 self._publish_presence(cam)  # abgelaufene Personen austragen -> ggf. 'niemand'
-            for eid in list(self.events.keys()):
-                st = self.events[eid]
+            self._finalize_events(now)
+
+    def _finalize_events(self, now=None):
+        now = time.time() if now is None else now
+        for eid in list(self.events.keys()):
+            st = self.events.get(eid)
+            if st is None:
+                continue
+            with self._jobs_lock:
+                if any(key in self._queued_jobs for key in ((eid, "snapshot"), (eid, "clip"))):
+                    continue
+            event_lock = st["processing_lock"]
+            if not event_lock.acquire(blocking=False):
+                continue
+            try:
                 expired = now - st["created"] > 600
                 if not (st["ended"] or expired):
                     continue
@@ -863,6 +975,9 @@ class EventProcessor:
                     margin=final_margin, confirmations=confirmations,
                 )
                 self.events.pop(eid, None)
+            finally:
+                event_lock.release()
+                self._flush_deferred_jobs()
 
     # ---------- Publish ----------
 
@@ -982,6 +1097,13 @@ class EventProcessor:
                 "runner_up": decision.runner_up,
                 "runner_up_score": round(float(decision.runner_up_score), 3),
             })
+        alerts = getattr(self, "alerts", None)
+        if alerts is not None:
+            try:
+                alerts.record(event_id=eid, camera=st["camera"], status=payload["decision"],
+                              person=name, score=score, ts=st.get("start_time"))
+            except Exception:
+                log.exception("Could not record recognition alert %s", eid)
         actionable = st.get("recognition_occurrence") != "presence_update"
         if actionable:
             self.recent.appendleft(payload)

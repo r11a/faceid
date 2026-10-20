@@ -61,15 +61,22 @@ class EventMediaStore:
         except OSError:
             return False
 
-    def clip_path(self, event_id: str, *, refresh: bool = False) -> Path | None:
-        """Return a playable local MP4, downloading it at most once concurrently."""
+    def cached_clip_path(self, event_id: str) -> Path | None:
+        """Look up a playable cache entry without fetching any upstream media."""
         target = self._path(event_id)
-        if not refresh and self._valid_mp4(target):
+        if self._valid_mp4(target):
             try:
                 os.utime(target, None)
             except OSError:
                 pass
             return target
+        return None
+
+    def clip_path(self, event_id: str, *, refresh: bool = False) -> Path | None:
+        """Return a playable local MP4, downloading it at most once concurrently."""
+        target = self._path(event_id)
+        if not refresh and (cached := self.cached_clip_path(event_id)) is not None:
+            return cached
         lock = self._lock_for(event_id)
         try:
             with lock:

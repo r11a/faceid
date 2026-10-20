@@ -26,6 +26,7 @@ class RuntimeHealth:
             warnings.append("standalone data path is not a separate mount; an image replacement may lose learning data")
         queue_size = self.processor.queue.qsize()
         checks["processing_queue"] = queue_size
+        checks["background_clip_queue"] = self.processor.clip_queue.qsize() if hasattr(self.processor, "clip_queue") else 0
         if queue_size > 150:
             warnings.append("processing queue is close to capacity")
         checks["worker_threads"] = {

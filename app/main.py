@@ -14,6 +14,7 @@ from .mqtt_listener import EventProcessor
 from .webui import build_app
 from .backup_util import start_auto_backup, validate_backup_dir
 from .audit import AuditStore
+from .alerting import AlertStore
 from .scenarios import ScenarioManager
 from .reid import AppearanceReID
 from .integrations import IntegrationDispatcher
@@ -177,6 +178,7 @@ def main():
     processor.camera_profiles = CameraProfiles(
         data_dir / "camera_profiles.json", default_min_face_px=processor.min_face_px
     )
+    processor.alerts = AlertStore(audit, gallery, processor)
     processor.visits = VisitService(
         audit, processor.camera_profiles,
         gap_minutes=int(f.get("visit_gap_minutes", 15)),

@@ -39,6 +39,8 @@ class CameraProfiles:
             "night_min_face_px": int(stored.get("night_min_face_px", stored.get("min_face_px", self.default_min_face_px))),
             "burst_frames": int(stored.get("burst_frames", 8)),
             "high_resolution": bool(stored.get("high_resolution", mode == "intercom")),
+            "fast_recognition": bool(stored.get("fast_recognition", False)),
+            "critical": bool(stored.get("critical", False)),
             "require_second_factor": bool(stored.get("require_second_factor", mode == "intercom")),
             "liveness_mode": stored.get(
                 "liveness_mode", "required" if mode == "intercom" else "advisory"
@@ -52,6 +54,8 @@ class CameraProfiles:
         burst_frames: int = 8, high_resolution: bool = False,
         require_second_factor: bool = True, liveness_mode: str | None = None,
         roi: list | None = None, enabled: bool | None = None,
+        fast_recognition: bool | None = None,
+        critical: bool | None = None,
     ) -> dict:
         camera = str(camera).strip()
         if not camera:
@@ -85,6 +89,8 @@ class CameraProfiles:
                 "night_min_face_px": night_min_face_px,
                 "burst_frames": burst_frames,
                 "high_resolution": bool(high_resolution),
+                "fast_recognition": bool(stored.get("fast_recognition", False) if fast_recognition is None else fast_recognition),
+                "critical": bool(stored.get("critical", False) if critical is None else critical),
                 "require_second_factor": bool(require_second_factor),
                 "liveness_mode": liveness_mode,
                 "roi": roi,

@@ -1,8 +1,38 @@
 # FaceID — self-hosted face recognition for Frigate + Home Assistant
 
+## FaceID 6.3: faster operation and explicit camera enrollment
+
+- **New person from cameras:** open Needs Review, select clear faces of one person,
+  choose New User, enter a name and choose **Assign & Learn**. The result reports
+  accepted references, duplicates and rejected images. Assign Only confirms history
+  without training. A reference enables initial matching; additional viewpoints and
+  an actual recognition check are still recommended before operational use.
+- **Already assigned events:** open the person and select reference faces from their
+  appearance history. Multiple faces require an explicit choice. Expired images
+  cannot be recovered unless Frigate still has the snapshot.
+- **Fast recognition:** enable Fast Recognition in the selected camera's settings.
+  This reduces waiting between Frigate snapshot updates; it does not lower decision
+  thresholds or guarantee subsecond recognition. Identical snapshots are ignored.
+  Live jobs and inference have priority over clip work. Health shows measured
+  inference and queue timings; these are not camera-to-door measurements.
+- **Video:** clicking a detection opens its clip immediately. Cached clips use local
+  byte-range serving; other clips stream from Frigate. Source availability, codec and
+  network conditions still determine startup time. Only the next clip metadata is
+  prefetched during a sequence.
+- **Alerts and lists:** camera settings include Critical Camera; person editing
+  includes Notify On Recognition and normal/white/black classification. Confirmed
+  blacklisted identities receive a red outline. These lists do not grant or deny
+  physical access. In-app popups and the bell show persisted recognition alerts.
+- **Home Assistant:** MQTT discovery creates a Last Alert sensor with person,
+  camera, reasons and event ID as attributes. Phone push is optional; configure
+  `blueprints/automation/faceid/recognition_alert.yaml` with your notification service.
+- InsightFace is now pinned to 2.1, with the same buffalo_l recognition model,
+  preprocessing size and decision policy. A real-model compatibility test is opt-in
+  (`FACEID_ENGINE_MODEL_ROOT`); site performance/accuracy require on-site measurement.
+
 ## FaceID 6.1: photo search and camera timelines
 
-Update to **6.2.0** if the Home Assistant app stopped starting after 6.1.0. It
+Update to **6.1.1 or newer** if the Home Assistant app stopped starting after 6.1.0. It
 corrects camera-graph configuration encoding without resetting data or links.
 
 Open **Gallery & Search** to upload a photo, choose one face if several people are

@@ -5,6 +5,7 @@ import { useResource } from "../hooks.js";
 import { Empty, ErrorState, Loading, Modal, dateTime, relativeTime } from "../ui.jsx";
 import { chronological, clipAfter, eventTime, identityForEvent, latestPeople } from "../home.js";
 import { PersonEditor } from "./Daily.jsx";
+import { EventVideo } from "../EventVideo.jsx";
 
 function Photo({ src, name = "פנים", className = "" }) {
   const [failed, setFailed] = useState(false);
@@ -32,28 +33,23 @@ function Rail({ label, children, resetKey, className = "" }) {
 }
 
 function useAppearances(selection, page, retry) {
-  const [state, setState] = useState({ loading: false, data: null, error: null });
   const sourceKey = JSON.stringify(selection?.source || null);
-  useEffect(() => {
-    if (!sourceKey || sourceKey === "null") { setState({ loading: false, data: null, error: null }); return; }
-    const controller = new AbortController();
-    setState({ loading: true, data: null, error: null });
-    api(`faces/timeline?${query({ ...JSON.parse(sourceKey), order: "desc", limit: 60, offset: page * 60 })}`, { signal: controller.signal })
-      .then(data => { if (!controller.signal.aborted) setState({ loading: false, data, error: null }); })
-      .catch(error => { if (!controller.signal.aborted) setState({ loading: false, data: null, error }); });
-    return () => controller.abort();
-  }, [sourceKey, page, retry]);
+  const state = useResource(`faces/timeline?${query({ ...JSON.parse(sourceKey), order: "desc", limit: 60, offset: page * 60 })}`, {
+    enabled: sourceKey !== "null", realtime: true, poll: 15000,
+  });
+  useEffect(() => { if (retry) state.reload(); }, [retry, state.reload]);
   return state;
 }
 
-function ClipSequence({ events }) {
-  const rows = chronological(events);
+export function ClipSequence({ events, people = [] }) {
+  const [sequence, setSequence] = useState(null);
+  const rows = sequence || chronological(events);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [finished, setFinished] = useState(false);
   const [unavailable, setUnavailable] = useState(0);
   const current = rows[index];
-  const advance = failed => {
+  const advance = (failed = false) => {
     if (failed) setUnavailable(value => value + 1);
     const next = clipAfter(index, rows.length);
     if (next === null) { setPlaying(false); setFinished(true); }
@@ -61,15 +57,14 @@ function ClipSequence({ events }) {
   };
   if (!rows.length) return null;
   return <div className="home-sequence">
-    <div className="home-video-stage">{playing ? <video key={current.event_id} controls autoPlay playsInline
-      src={assetUrl(`api/activity/${encodeURIComponent(current.event_id)}/clip`)} onEnded={() => advance(false)} onError={() => advance(true)} /> : <>
+    <div className="home-video-stage">{playing ? <EventVideo eventId={current.event_id} nextEventId={rows[index + 1]?.event_id} onEnded={() => advance(false)} onUnavailable={() => advance(true)} className={identityForEvent(current, people)?.watchlist === "black" ? "blacklist-outline" : ""} /> : <>
       <Photo src={current.image || `api/activity/${encodeURIComponent(current.event_id)}/image`} name="תמונת האירוע" />
-      <button className="button primary" onClick={() => { setIndex(0); setUnavailable(0); setFinished(false); setPlaying(true); }}><Play />{finished ? "נגן שוב" : "נגן רצף"}</button>
+      <button className="button primary" onClick={() => { setSequence(chronological(events)); setIndex(0); setUnavailable(0); setFinished(false); setPlaying(true); }}><Play />{finished ? "נגן שוב" : "נגן רצף"}</button>
     </>}</div>
     <div className="home-video-caption"><b><Camera />{current.camera || "מצלמה לא ידועה"}</b><span>{dateTime(eventTime(current))}</span><span>{index + 1} / {rows.length}</span></div>
     {unavailable > 0 && <p className="home-muted" role="status">{unavailable} קליפים לא זמינים — דולגו</p>}
     {finished && <p role="status">הרצף הסתיים</p>}
-    <ol className="home-route">{rows.map((row, i) => <li key={row.event_id}><button className={i === index ? "active" : ""} aria-current={i === index ? "step" : undefined} onClick={() => { setIndex(i); setPlaying(true); setFinished(false); }}><span>{i + 1}</span><b>{row.camera || "—"}</b><time>{dateTime(eventTime(row))}</time><Play /></button></li>)}</ol>
+    <ol className="home-route">{rows.map((row, i) => <li key={row.event_id}><button className={i === index ? "active" : ""} aria-current={i === index ? "step" : undefined} onClick={() => { setSequence(rows); setIndex(i); setPlaying(true); setFinished(false); }}><span>{i + 1}</span><b>{row.camera || "—"}</b><time>{dateTime(eventTime(row))}</time><Play /></button></li>)}</ol>
   </div>;
 }
 
@@ -78,13 +73,14 @@ function HistoryPages({ page, count, total, onChange }) {
 }
 
 export function DashboardPage({ navigate }) {
-  const dashboard = useResource("dashboard", { poll: 15000 });
+  const dashboard = useResource("dashboard", { poll: 15000, realtime: true });
   const [selection, setSelection] = useState(null);
   const [page, setPage] = useState(0);
   const [retry, setRetry] = useState(0);
   const [editor, setEditor] = useState(false);
   const [picker, setPicker] = useState(false);
   const [details, setDetails] = useState(false);
+  const [playbackEvent, setPlaybackEvent] = useState(null);
   const [candidates, setCandidates] = useState(null);
   const [resolving, setResolving] = useState(false);
   const [selectionError, setSelectionError] = useState(null);
@@ -99,16 +95,16 @@ export function DashboardPage({ navigate }) {
   const selectPerson = person => { select({ name: person.name, photo: person.photo, person, source: { person: person.slug } }); setDetails(true); };
   const selectEvent = async event => {
     const person = identityForEvent(event, people);
-    if (person) { selectPerson(person); return; }
+    if (person) { select({ name: person.name, photo: person.photo, person, source: { person: person.slug } }); return; }
     const choice = { name: "לא מזוהה", photo: event.image || `api/activity/${encodeURIComponent(event.event_id)}/image`, source: { event_id: event.event_id } };
-    if (event.sample_id) { select({ ...choice, source: { sample_id: event.sample_id } }); setDetails(true); return; }
+    if (event.sample_id) { select({ ...choice, source: { sample_id: event.sample_id } }); return; }
     request.current?.abort(); const controller = new AbortController(); request.current = controller;
     setResolving(true); setSelectionError(null);
     try {
       const data = await api(`faces/event/${encodeURIComponent(event.event_id)}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
       if (data.samples.length > 1) { setCandidates(data.samples); return; }
-      select(data.samples.length ? { ...choice, source: { sample_id: data.samples[0].sample_id } } : choice); setDetails(true);
+      select(data.samples.length ? { ...choice, source: { sample_id: data.samples[0].sample_id } } : choice);
     } catch (error) { if (!controller.signal.aborted) setSelectionError(error); }
     finally { if (!controller.signal.aborted) setResolving(false); }
   };
@@ -117,6 +113,7 @@ export function DashboardPage({ navigate }) {
   const loading = selection && appearances.loading;
   const error = selection ? appearances.error : null;
   const showDetails = () => setDetails(true);
+  const openEvent = event => { setPlaybackEvent(event); if (!selection) selectEvent(event); };
   if (dashboard.loading) return <Loading />;
   if (dashboard.error) return <ErrorState error={dashboard.error} retry={dashboard.reload} />;
   return <div className="home-workspace">
@@ -128,7 +125,7 @@ export function DashboardPage({ navigate }) {
       {resolving && <Loading text="מאתר פנים…" />}
       {selectionError && <ErrorState error={selectionError} />}
       {loading ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : rows.length ? <Rail label="אירועים" resetKey={`${currentSource}-${page}`} className="home-event-rail">
-        {rows.map(event => { const person = identityForEvent(event, people); return <button className="home-event-card" key={event.event_id} onClick={() => selection ? showDetails() : selectEvent(event)}>
+        {rows.map(event => { const person = identityForEvent(event, people); return <button className={`home-event-card ${person?.watchlist === "black" ? "blacklist-outline" : ""}`} key={event.event_id} onClick={() => openEvent(event)}>
           <Photo src={event.image || `api/activity/${encodeURIComponent(event.event_id)}/image`} name={selection?.name || person?.name || "לא מזוהה"} />
           <div><b>{selection?.name || person?.name || "לא מזוהה"}</b><span><Camera />{event.camera || "—"}</span><time>{dateTime(eventTime(event))}</time></div>
         </button>; })}
@@ -136,16 +133,21 @@ export function DashboardPage({ navigate }) {
       {selection && !loading && !error && <HistoryPages page={page} count={rows.length} total={appearances.data?.total || 0} onChange={setPage} />}
     </section>
     <section className="home-section" aria-labelledby="home-people-title"><div className="home-section-heading"><h2 id="home-people-title">מיקום אחרון</h2><button className="text-button" onClick={() => navigate("people")}>כל האנשים <ArrowLeft /></button></div>
-      {people.length ? <Rail label="אנשים"><>{people.map(person => <button className={`home-person-card ${selection?.person?.slug === person.slug ? "selected" : ""}`} key={person.slug} onClick={() => selectPerson(person)} aria-pressed={selection?.person?.slug === person.slug}>
+      {people.length ? <Rail label="אנשים"><>{people.map(person => <button className={`home-person-card ${person.watchlist === "black" ? "blacklist-outline" : ""} ${selection?.person?.slug === person.slug ? "selected" : ""}`} key={person.slug} onClick={() => selectPerson(person)} aria-pressed={selection?.person?.slug === person.slug}>
         <Photo src={person.photo} name={person.name} /><b>{person.name}</b><span><MapPin />{person.last_camera || "טרם נראה"}</span><time title={dateTime(person.last_seen)}>{relativeTime(person.last_seen)}</time>
       </button>)}</></Rail> : <Empty icon={Users} title="הוסף אדם כדי להתחיל" />}
     </section>
     {editor && <PersonEditor person={{ name: "", files: [] }} onClose={() => setEditor(false)} onSaved={() => { setEditor(false); dashboard.reload(); }} />}
     {picker && <UnknownPicker onClose={() => setPicker(false)} onSelect={value => { select(value); setPicker(false); setDetails(true); }} />}
-    {candidates && <Modal title="בחר פנים" onClose={() => { request.current?.abort(); setCandidates(null); setResolving(false); }}><div className="face-candidates">{candidates.map((sample, index) => <button key={sample.sample_id} onClick={() => { select({ name: "לא מזוהה", photo: sample.image, source: { sample_id: sample.sample_id } }); setDetails(true); }}><Photo src={sample.image} /><span>פנים {index + 1}</span></button>)}</div></Modal>}
+    {playbackEvent && <Modal title="וידאו האירוע" subtitle={`${playbackEvent.camera || "מצלמה לא ידועה"} · ${dateTime(eventTime(playbackEvent))}`} onClose={() => { request.current?.abort(); setResolving(false); setPlaybackEvent(null); }} wide>
+      <EventVideo eventId={playbackEvent.event_id} className={identityForEvent(playbackEvent, people)?.watchlist === "black" ? "blacklist-outline" : ""} />
+      {resolving && <p role="status">מאתר פנים…</p>}
+      {selection && !resolving && !candidates && <button className="button secondary" onClick={() => { setPlaybackEvent(null); setDetails(true); }}>פרטים ורצף הופעות</button>}
+    </Modal>}
+    {candidates && <Modal title="בחר פנים" onClose={() => { request.current?.abort(); setCandidates(null); setResolving(false); }}><div className="face-candidates">{candidates.map((sample, index) => <button key={sample.sample_id} onClick={() => { select({ name: "לא מזוהה", photo: sample.image, source: { sample_id: sample.sample_id } }); setPlaybackEvent(null); setDetails(true); }}><Photo src={sample.image} /><span>פנים {index + 1}</span></button>)}</div></Modal>}
     {details && selection && <Modal title={selection.name} onClose={() => setDetails(false)} wide>
       <div className="home-person-summary"><Photo src={selection.photo} name={selection.name} /><div><b><MapPin />{selection.person?.last_camera || rows.at(-1)?.camera || "—"}</b><time>{dateTime(selection.person?.last_seen || eventTime(rows.at(-1) || {}))}</time>{!selection.person && <span className="home-muted">התאמות דומות · זהות לא מאומתת</span>}</div></div>
-      {loading ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : <><div className="home-sequence-heading"><h3>רצף הופעות</h3><span className="home-muted">{rows.length} מתוך {appearances.data?.total || 0} · מהישן לחדש</span></div>{rows.length ? <ClipSequence key={`${currentSource}-${page}`} events={rows} /> : <Empty icon={Camera} title="אין אירועים להצגה" />}{(appearances.data?.total || 0) > 60 && <HistoryPages page={page} count={rows.length} total={appearances.data.total} onChange={setPage} />}</>}
+      {loading ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : <><div className="home-sequence-heading"><h3>רצף הופעות</h3><span className="home-muted">{rows.length} מתוך {appearances.data?.total || 0} · מהישן לחדש</span></div>{rows.length ? <ClipSequence key={`${currentSource}-${page}`} events={rows} people={people} /> : <Empty icon={Camera} title="אין אירועים להצגה" />}{(appearances.data?.total || 0) > 60 && <HistoryPages page={page} count={rows.length} total={appearances.data.total} onChange={setPage} />}</>}
       <div className="home-detail-actions"><button className="button secondary" onClick={() => setDetails(false)}>חזרה לאירועים</button><button className="text-button" onClick={() => { location.hash = `/faces?${query(selection.source)}`; }}>חיפוש מורחב <ArrowLeft /></button></div>
     </Modal>}
   </div>;

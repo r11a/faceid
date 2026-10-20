@@ -54,7 +54,7 @@ def body():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "6.2.0", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
+    return {"status": "ok", "version": "6.3.0", "persons": 2, "queue": 4, "processing": 1, "open_events": 0, "suggest_threshold": .4,
             "backend": "CPUExecutionProvider", "mqtt": {"connected": True, "entities": 18},
             "engine": {"providers": ["CPUExecutionProvider"]}, "ai": {"enabled": False},
             "frames": {"last_backend": "ffmpeg-auto", "cache_hits": 18,

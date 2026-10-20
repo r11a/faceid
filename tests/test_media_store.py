@@ -25,6 +25,16 @@ class FakeFrigate:
 
 
 class EventMediaStoreTests(unittest.TestCase):
+    def test_cached_path_never_downloads_on_cache_miss(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frigate = FakeFrigate()
+            store = EventMediaStore(Path(tmp), frigate)
+            self.assertIsNone(store.cached_clip_path("e1"))
+            self.assertEqual(frigate.downloads, 0)
+            stored = store.clip_path("e1")
+            self.assertEqual(store.cached_clip_path("e1"), stored)
+            self.assertEqual(frigate.downloads, 1)
+
     def test_clip_is_downloaded_once_and_reused(self):
         with tempfile.TemporaryDirectory() as tmp:
             frigate = FakeFrigate()

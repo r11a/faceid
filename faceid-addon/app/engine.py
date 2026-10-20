@@ -2,11 +2,52 @@
 import threading
 import logging
 import time
+from contextlib import contextmanager
+from collections import deque
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 import cv2
 import numpy as np
 
 log = logging.getLogger("faceid.engine")
+
+
+class InferenceLock:
+    """Serialize the model while letting queued live frames precede clip work."""
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._busy = False
+        self._live_waiters = 0
+        self._local = threading.local()
+
+    def __enter__(self):
+        background = getattr(self._local, "background", False)
+        with self._condition:
+            if not background:
+                self._live_waiters += 1
+                self._condition.notify_all()
+            try:
+                self._condition.wait_for(lambda: not self._busy and (not background or self._live_waiters == 0))
+                self._busy = True
+            finally:
+                if not background:
+                    self._live_waiters -= 1
+        return self
+
+    def __exit__(self, *args):
+        with self._condition:
+            self._busy = False
+            self._condition.notify_all()
+
+    @contextmanager
+    def background_work(self):
+        previous = getattr(self._local, "background", False)
+        self._local.background = True
+        try:
+            yield
+        finally:
+            self._local.background = previous
 
 
 class FaceEngine:
@@ -20,20 +61,39 @@ class FaceEngine:
         self.providers = providers
         self.available_providers = available
 
+        started = time.perf_counter()
         self.app = FaceAnalysis(
             name="buffalo_l",
             providers=providers,
             allowed_modules=["detection", "recognition"],
+            addons=[],
         )
-        started = time.perf_counter()
         self.app.prepare(ctx_id=0, det_size=(det_size, det_size))
         self.startup_seconds = time.perf_counter() - started
+        self.det_size = det_size
+        self.runtime = {}
+        for package in ("insightface", "onnxruntime"):
+            try:
+                self.runtime[package] = version(package)
+            except PackageNotFoundError:
+                self.runtime[package] = None
+        self.models = {
+            task: {
+                "file": Path(model.model_file).name,
+                "providers": model.session.get_providers(),
+            }
+            for task, model in self.app.models.items()
+        }
         log.info(
             "recognition backend %s, providers=%s, available=%s, startup=%.2fs",
             backend, providers, available, self.startup_seconds,
         )
         # onnxruntime-Sessions sind nicht garantiert threadsafe bei parallelem run()
-        self._lock = threading.Lock()
+        self._lock = InferenceLock()
+        self._metrics_lock = threading.Lock()
+        self._inference_ms = deque(maxlen=256)
+        self._inference_calls = 0
+        self._inference_failures = 0
 
     @staticmethod
     def providers_for_backend(backend: str, available: list[str]):
@@ -58,16 +118,49 @@ class FaceEngine:
         return requested
 
     def health(self):
+        with self._metrics_lock:
+            samples = list(self._inference_ms)
+            inference = {
+                "calls": self._inference_calls,
+                "failures": self._inference_failures,
+                "samples": len(samples),
+            }
+        inference.update({
+            "p50_ms": round(float(np.percentile(samples, 50)), 3) if samples else None,
+            "p95_ms": round(float(np.percentile(samples, 95)), 3) if samples else None,
+        })
         return {
             "backend": self.backend,
             "providers": self.providers,
             "available_providers": self.available_providers,
             "startup_seconds": round(self.startup_seconds, 3),
+            "model_pack": "buffalo_l",
+            "det_size": self.det_size,
+            "runtime": dict(self.runtime),
+            "models": {task: {**model, "providers": list(model["providers"])}
+                       for task, model in self.models.items()},
+            "inference": inference,
         }
 
     def faces(self, bgr: np.ndarray):
         with self._lock:
-            return self.app.get(bgr)
+            # Measure inference only; waiting for another caller is excluded.
+            started = time.perf_counter()
+            failed = False
+            try:
+                return self.app.get(bgr)
+            except Exception:
+                failed = True
+                raise
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                with self._metrics_lock:
+                    self._inference_calls += 1
+                    self._inference_failures += int(failed)
+                    self._inference_ms.append(elapsed_ms)
+
+    def background_work(self):
+        return self._lock.background_work()
 
     @staticmethod
     def best_face(faces, min_px: int = 48, min_det: float = 0.55):

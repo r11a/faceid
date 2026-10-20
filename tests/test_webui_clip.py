@@ -1,4 +1,5 @@
 import tempfile
+import asyncio
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.webui import build_app
 from app.camera_profiles import CameraProfiles
@@ -23,6 +25,9 @@ class FakeMedia:
     def clip_path(self, event_id):
         return self.path if event_id == "e1" else None
 
+    def cached_clip_path(self, event_id):
+        return self.clip_path(event_id)
+
     def status(self, event_id):
         return {"cached": True, "has_clip": True}
 
@@ -36,6 +41,102 @@ class FakeGallery:
 
 
 class WebUIClipTests(unittest.TestCase):
+    def test_uncached_clip_streams_range_without_downloading_full_clip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls, closed = [], []
+            class Upstream:
+                status_code = 206
+                headers = {"content-range": "bytes 4-7/100", "content-length": "4", "accept-ranges": "bytes", "content-type": "video/mp4"}
+                def iter_content(self, chunk_size):
+                    yield b"part"
+                def close(self):
+                    closed.append(True)
+            def request(method, path, **kwargs):
+                calls.append((method, path, kwargs))
+                return Upstream()
+            def unexpected_download(*args, **kwargs):
+                self.fail("playback must not wait for a complete cache download")
+            processor = SimpleNamespace(
+                audit=FakeAudit(),
+                media_store=SimpleNamespace(cached_clip_path=lambda _: None, clip_path=unexpected_download),
+                frigate=SimpleNamespace(timeout=1, request=request),
+            )
+            app = build_app({"faceid": {"auth": {}}}, SimpleNamespace(), FakeGallery(), processor, Path(tmp), Path(__file__).parents[1] / "static")
+            response = TestClient(app).get("/api/activity/e1/clip", headers={"Range": "bytes=4-7", "If-Range": '"clip-version"'})
+            self.assertEqual(response.status_code, 206)
+            self.assertEqual(response.content, b"part")
+            self.assertEqual(response.headers["content-range"], "bytes 4-7/100")
+            self.assertEqual(calls[0][2]["headers"]["Range"], "bytes=4-7")
+            self.assertEqual(calls[0][2]["headers"]["If-Range"], '"clip-version"')
+            self.assertTrue(calls[0][2]["stream"])
+            self.assertTrue(closed)
+
+            # Response construction must not read the body: first bytes can be
+            # sent before the second upstream chunk is requested.
+            reads = []
+            def chunks(chunk_size):
+                reads.append("first")
+                yield b"part"
+                reads.append("second")
+                yield b"rest"
+            Upstream.iter_content = lambda self, chunk_size: chunks(chunk_size)
+            route = next(route for route in app.routes if route.path == "/api/activity/{event_id}/clip")
+            response = route.endpoint("e1", Request({"type": "http", "headers": []}))
+            self.assertEqual(reads, [])
+            async def first_chunk():
+                self.assertEqual(await anext(response.body_iterator), b"part")
+                self.assertEqual(reads, ["first"])
+                await response.body_iterator.aclose()
+                await response.background()
+            asyncio.run(first_chunk())
+
+    def test_upstream_unavailable_and_unsatisfiable_ranges_close_connection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            class Upstream:
+                status_code = 416
+                headers = {"content-range": "bytes */100"}
+                closed = False
+                def close(self):
+                    self.closed = True
+            upstream = Upstream()
+            processor = SimpleNamespace(audit=FakeAudit(), media_store=None, frigate=SimpleNamespace(timeout=1, request=lambda *a, **k: upstream))
+            app = build_app({"faceid": {"auth": {}}}, SimpleNamespace(), FakeGallery(), processor, Path(tmp), Path(__file__).parents[1] / "static")
+            response = TestClient(app).get("/api/activity/e1/clip", headers={"Range": "bytes=1000-"})
+            self.assertEqual(response.status_code, 416)
+            self.assertEqual(response.headers["content-range"], "bytes */100")
+            self.assertTrue(upstream.closed)
+            upstream.status_code = 404
+            upstream.closed = False
+            response = TestClient(app).get("/api/activity/e1/clip")
+            self.assertEqual(response.status_code, 404)
+            self.assertIn("not available yet", response.json()["detail"])
+            self.assertTrue(upstream.closed)
+
+    def test_recording_fallback_streams_only_the_finished_event_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            class Upstream:
+                headers = {"content-type": "video/mp4"}
+                def __init__(self, status):
+                    self.status_code = status
+                def close(self):
+                    pass
+                def iter_content(self, chunk_size):
+                    yield b"event-video"
+            def request(method, path, **kwargs):
+                calls.append(path)
+                return Upstream(404 if path.startswith("/api/events/") else 200)
+            metadata = {"camera": "front", "start_time": 100., "end_time": 120.}
+            processor = SimpleNamespace(audit=FakeAudit(), media_store=None, frigate=SimpleNamespace(timeout=1, request=request, event=lambda _: metadata))
+            app = build_app({"faceid": {"auth": {}}}, SimpleNamespace(), FakeGallery(), processor, Path(tmp), Path(__file__).parents[1] / "static")
+            response = TestClient(app).get("/api/activity/e1/clip")
+            self.assertEqual(response.content, b"event-video")
+            self.assertEqual(calls, ["/api/events/e1/clip.mp4", "/api/front/start/98.000/end/122.000/clip.mp4"])
+            calls.clear()
+            metadata["end_time"] = None
+            self.assertEqual(TestClient(app).get("/api/activity/e1/clip").status_code, 404)
+            self.assertEqual(calls, ["/api/events/e1/clip.mp4"])
+
     def test_camera_selection_defaults_on_and_persists_ui_switch(self):
         with tempfile.TemporaryDirectory() as tmp:
             profiles = CameraProfiles(Path(tmp) / "camera_profiles.json")
@@ -139,11 +240,11 @@ class WebUIClipTests(unittest.TestCase):
             self.assertIn("no-store", index.headers["cache-control"])
             self.assertNotIn("etag", index.headers)
             self.assertNotIn("last-modified", index.headers)
-            self.assertEqual(index.headers["x-faceid-ui-version"], "6.2.0")
+            self.assertEqual(index.headers["x-faceid-ui-version"], "6.3.0")
             versioned = TestClient(app).get("/ui-previous-release")
             self.assertEqual(versioned.status_code, 200)
             self.assertEqual(versioned.content, index.content)
-            ui_asset = TestClient(app).get("/assets/faceid-6.2.0.js")
+            ui_asset = TestClient(app).get("/assets/faceid-6.3.0.js")
             self.assertEqual(ui_asset.status_code, 200)
             self.assertIn("immutable", ui_asset.headers["cache-control"])
             self.assertEqual(ui_asset.headers["x-content-type-options"], "nosniff")

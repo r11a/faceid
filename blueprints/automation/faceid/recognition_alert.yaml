@@ -1,0 +1,56 @@
+blueprint:
+  name: FaceID — recognition alerts
+  description: >-
+    Forwards configured critical-camera, per-person and blacklist alerts to your
+    chosen notification service. Import this blueprint, select an existing notify
+    service and enable the automation. FaceID itself does not configure phone push.
+    One notification is sent for each FaceID encounter, with combined alert reasons.
+  domain: automation
+  input:
+    mqtt_prefix:
+      name: FaceID MQTT prefix
+      default: faceid
+      selector:
+        text: {}
+    notify_service:
+      name: Notification service
+      description: "For example notify.mobile_app_your_phone or notify.notify"
+      default: notify.notify
+      selector:
+        text: {}
+    faceid_url:
+      name: FaceID browser URL
+      description: The URL you normally use to open FaceID.
+      default: ""
+      selector:
+        text: {}
+
+mode: parallel
+max: 50
+variables:
+  prefix: !input mqtt_prefix
+  faceid_url: !input faceid_url
+trigger_variables:
+  alert_prefix: !input mqtt_prefix
+
+trigger:
+  - platform: mqtt
+    topic: "{{ alert_prefix }}/v1/alerts"
+
+condition:
+  - condition: template
+    value_template: "{{ trigger.topic == prefix ~ '/v1/alerts' }}"
+
+action:
+  - service: !input notify_service
+    data:
+      title: "FaceID · {{ trigger.payload_json.camera }}"
+      message: >-
+        {{ trigger.payload_json.person | default('אדם לא מוכר', true) }}
+        · {% if 'blacklist' in trigger.payload_json.reasons %}רשימה שחורה
+        {% elif 'critical_camera' in trigger.payload_json.reasons %}מצלמה קריטית
+        {% else %}התראת אדם{% endif %}
+      data:
+        tag: "faceid-alert-{{ trigger.payload_json.event_id }}"
+        url: "{{ faceid_url }}"
+        clickAction: "{{ faceid_url }}"
