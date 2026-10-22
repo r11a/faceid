@@ -4,18 +4,21 @@ from pathlib import Path
 import re
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
+root = Path('/opt/faceid')
+sys.path.insert(0, str(root))
 import app.main
 import app.webui
 import app.mqtt_listener
 from app.access1_setup import prepare_certificate
 from websockets.legacy.client import connect
 
-root = Path('/opt/faceid')
+assert Path(app.main.__file__).resolve().is_relative_to(root)
 index = (root / 'static/index.html').read_text()
 assets = re.findall(r'(?:src|href)=["\'](?:\./)?(assets/[^"\']+)["\']', index)
 assert assets and all((root / 'static' / asset).is_file() for asset in assets)
