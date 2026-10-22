@@ -67,7 +67,7 @@ jobs:
           defined = {}
           for f in Path("app").glob("*.py"):
               tree = ast.parse(f.read_text())
-              defined[f.stem] = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))} | \
+              defined[f.stem] = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))} | \
                                 {t.id for n in ast.walk(tree) if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
           errors = []
           for f in Path("app").glob("*.py"):
