@@ -50,10 +50,10 @@ background at startup, or with **Scan available historical images**. Deleted ima
 cannot be reconstructed. Face crops share the configured evidence retention policy;
 vectors stay with the audit history and are removed when that history is purged.
 
-**Access1 is preparation only in 6.1.0.** You can save person/user and camera/reader
-mappings, but no vendor transport is installed and door operation stays disabled.
-The required Access1 product/version/API documentation is still outstanding. See
-[the integration contract](docs/access1.md) before implementing a vendor adapter.
+**Access1 connection is available in 6.4.0.** Pair through HA ingress using a
+one-time code from compatible Access1, then manage all people/reader mappings and
+permissions in Access1. Requests require fresh authenticated camera evidence and
+confirmed liveness. See [setup and recovery](docs/access1.md).
 
 ## FaceID 6.0: a focused product interface for homes and offices
 

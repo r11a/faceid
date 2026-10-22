@@ -1,5 +1,15 @@
 # Changelog
 
+## 6.4.0 — 2026-10-22
+
+- Merge the Access1 identity connector and HA administrator pairing wizard without replacing FaceID 6.3.0 recognition, enrollment, alerts or video behavior.
+- Manage identity-to-user and camera-to-reader mappings in Access1; publish a private HTTPS UUID/name directory without biometric media or permissions.
+- Require fresh live evidence, confirmed liveness and actual authenticated verified Frigate HTTPS before presenting an identity; no relay/manual-open fallback or request replay.
+- Retain camera UUIDs across temporary disable/re-enable and recheck camera enablement before submitting queued evidence.
+- Preserve prior Access1 request history as historical records; document full backup, legacy mapping reconfiguration, revocation and certificate maintenance.
+- Add scoped pairing credentials, administrator checks, TLS setup/validation, bounded result queries, safe localized diagnostics and wizard regression tests.
+- Pin the websocket client dependency and validate the built HA add-on image offline in CI.
+
 ## 6.3.0 — 2026-10-21
 
 - Upgrade InsightFace to 2.1 while retaining buffalo_l, 640px detection, recognition thresholds and liveness requirements; expose actual runtime providers and bounded inference timings.

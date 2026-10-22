@@ -1,42 +1,72 @@
-# Access1 integration boundary
+# Access1 connection (FaceID 6.4.0)
 
-FaceID 6.1.0 contains mapping preparation and an internal provider contract, not a
-working connection to a particular Access1 product. Product/vendor identity,
-software version, authentication method and API/SDK documentation must be supplied
-before the vendor adapter can be implemented or enabled. There are intentionally
-no guessed HTTP endpoints, remote-unlock calls or fabricated Access1 events.
+FaceID recognizes people and submits bounded identity evidence. Access1 maps
+people to existing users and cameras to readers, owns authorization and execution,
+and records the outcome. Lists in FaceID never grant access.
 
-The intended flow is:
+## Connect the installations
 
-1. Choose an existing Access1 user for each FaceID person (stable FaceID slug).
-2. Map selected FaceID cameras to existing Access1 readers.
-3. A confirmed face recognition with confirmed liveness from a fresh authenticated
-   live recording frame presents a biometric credential to the mapped reader.
-4. Access1 checks its user's permissions, schedules and access rules, performs the
-   allowed access operation, and records its own biometric event. Denial remains
-   a denial; a transport timeout is unconfirmed, never reported as a grant.
+1. Use compatible FaceID-enabled Access1 on the same private HA add-on network.
+   Back up the full add-on data and relevant /ssl material before upgrading.
+2. Open FaceID through HA ingress as an active owner or system administrator.
+3. In **Access1**, copy FaceID's installation UUID to Access1, create a one-time
+   setup code there, and paste the code into FaceID.
+4. Review and approve the installation in Access1. The wizard verifies both
+   directions over HTTPS and persists scoped credentials only after approval.
+5. In Access1, map cameras in Doors and FaceID identities in existing user cards.
+   Keep requests disabled during setup and isolated acceptance testing.
+6. Verify authorized/denied users, duplicate requests, stale evidence, connection
+   loss and restart before enabling access on approved test equipment.
 
-The provider object injected into `Access1Integration(..., provider=...)` exposes:
+The ordinary directory contains UUIDs and names only: no face photos, embeddings
+or exported access permissions. FaceID's directory uses private HTTPS port 8601;
+Access1's supported setup endpoint is a local-* add-on hostname on HTTPS 8445.
+No directory host port is published. Standalone FaceID recognition still works,
+but the administrator pairing wizard requires real HA ingress and Supervisor.
 
-- `users() -> list[{id, name}]`
-- `readers() -> list[{id, name}]`
-- `present_biometric(user_id, reader_id, credential_type, request_id,
-  face_event_id, occurred_at, score) -> {decision, event_id}`
+## Recognition and safety
 
-`decision` must be `granted` or `denied`, and `event_id` must be the actual Access1
-biometric transaction identifier. The adapter must honor `request_id` for
-idempotency and use a bounded network timeout. It must exercise Access1's credential
-authorization API rather than an administrative door-release endpoint. A grant is
-an authorization result; it does not prove a door physically opened.
+Only fresh high-resolution evidence from an ongoing event can be submitted.
+Frigate must use authenticated HTTPS, active certificate verification and a
+successful authenticated session. The connector checks actual client state;
+a source label alone is insufficient. Ordinary recognition remains available
+when Access1 evidence is blocked.
 
-Only `secure_live_hires` evidence less than ten seconds old from a still-running
-event is eligible. Cached event snapshots have no verified capture timestamp, and
-historical clip frames are ineligible. The request is claimed in SQLite before
-calling the provider. An unconfirmed transaction is not automatically replayed.
-Distinct new recognition events can present a credential even when normal
-notifications are suppressed as continuing presence.
+Configure access cameras with liveness **required**, and verify the installed
+liveness model. The connector requires confirmed liveness, finite evidence age
+below 10 seconds and unchanged person/camera identities. Snapshot fallback,
+clip processing, body-only matches and manually reviewed history cannot request
+access. The initial maximum age is 10 seconds; Access1 independently enforces its
+own accepted age and clock policy.
 
-Mapping settings are stored in `access1.json`, included in gallery backups and
-restored with other settings. Attempts are kept in the existing audit database.
-With no provider installed, the UI shows `awaiting_api`, no directory entry is
-claimed as verified, and attempts to enable the connection are refused.
+A durable record precedes the sole event POST. A lost response leads to bounded
+result GET queries, never another POST or startup replay. Authorization,
+dispatch, execution and physical door-open confirmation remain distinct.
+Bluetooth Required, APB, schedules and other Access1 rules remain authoritative.
+
+## Identity, backup and recovery
+
+The installation and person UUIDs survive rename/restart. Temporarily disabling
+a camera hides it from the directory without rotating its UUID. Actual removal
+from the source catalogue removes its saved mapping; recreating it receives a
+new identity. Legacy FaceID-local user/reader mappings are not automatically
+imported: review the prior backup and configure them in Access1. Existing
+request history is retained as non-executable historical records.
+
+Protect /data/access1.json, /data/access1-connector.json, /data/access1-wizard-tls/
+and each person's access1-identity.json (paths relative to FaceID's data folder).
+Use a full HA add-on backup: the FaceID UI export does not include wizard secrets
+and TLS keys. Never clone a paired site's identity/credentials to another site.
+Local disconnect is not server-side revocation; disable/revoke the credential in
+Access1 when required. Restore the matching data backup with an older image.
+
+Wizard directory certificates last 365 days. Automatic renewal is not implemented;
+plan renewal/re-pairing on both sides without disabling TLS verification.
+
+## Source integration
+
+Imported from handoff-faceid-access1-20261022 (connector source 6.2.9), merged onto
+FaceID 6.3.0 while preserving its recognition engine, enrollment, alerts, video,
+queues, realtime updates and dependencies. Added live camera-trust checks and
+stable UUID retention across temporary camera disable/re-enable. No production
+pairing or door operation is performed by the source release process.

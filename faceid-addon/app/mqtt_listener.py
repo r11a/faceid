@@ -725,6 +725,8 @@ class EventProcessor:
                     "evidence_ts": st.get("access1_evidence_ts"),
                     "event_ended": bool(st.get("end_time")),
                     "liveness_confirmed": bool((st.get("liveness") or {}).get("confirmed")),
+                    "liveness_score": (st.get("liveness") or {}).get("score"),
+                    "liveness_frames": (st.get("liveness") or {}).get("live_frames", 0),
                 })
             if self.audit and actionable:
                 self.audit.save_evidence(eid, crop)
