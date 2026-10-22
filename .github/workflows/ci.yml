@@ -7,6 +7,21 @@ on:
   pull_request:
 
 jobs:
+  addon-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build actual Home Assistant add-on image
+        run: docker build --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:bookworm -t faceid-ci:local faceid-addon
+      - name: Validate packaged application without network or site data
+        run: >-
+          docker run --rm --pull=never --network none --read-only
+          --tmpfs /tmp:rw,noexec,nosuid,size=64m
+          -e PYTHONDONTWRITEBYTECODE=1
+          -v "$PWD/tests/check_addon_image.py:/check_addon_image.py:ro"
+          --entrypoint /opt/faceid/venv/bin/python
+          faceid-ci:local /check_addon_image.py
+
   smoke:
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +67,7 @@ jobs:
           defined = {}
           for f in Path("app").glob("*.py"):
               tree = ast.parse(f.read_text())
-              defined[f.stem] = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))} | \
+              defined[f.stem] = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))} | \
                                 {t.id for n in ast.walk(tree) if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
           errors = []
           for f in Path("app").glob("*.py"):

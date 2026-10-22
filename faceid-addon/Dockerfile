@@ -3,7 +3,7 @@ FROM $BUILD_FROM
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-venv python3-dev build-essential curl ca-certificates ffmpeg \
+        python3-venv python3-dev build-essential curl ca-certificates openssl ffmpeg \
         libglib2.0-0 libgl1 libxcb1 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 

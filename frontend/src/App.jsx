@@ -16,14 +16,14 @@ import { CamerasPage, GuestsPage, IntercomPage, LivenessPage } from "./pages/Sec
 import { AutomationsPage, HealthPage } from "./pages/Management.jsx";
 import { AdvancedPage, CalibrationPage, LearningPage, SettingsPage } from "./pages/Advanced.jsx";
 
-const VERSION = "6.3.0";
+const VERSION = "6.4.0";
 const pages = {
   home: { title: "מבט כללי", subtitle: "אירועים ומיקומים אחרונים", icon: Home, component: DashboardPage },
   review: { title: "דורש טיפול", subtitle: "אישור מהיר של אירועים לא ודאיים", icon: ClipboardCheck, component: ReviewPage },
   events: { title: "אירועים ותחקור", subtitle: "חיפוש, קליפים ומסלולים", icon: Activity, component: EventsPage },
   people: { title: "אנשים", subtitle: "תמונות והופעות של האנשים שלך", icon: Users, component: PeoplePage },
   faces: { title: "גלריה וחיפוש", subtitle: "חפש פנים וצפה בהופעות מכל המצלמות", icon: Images, component: FacesPage },
-  access1: { title: "בקרת כניסה", subtitle: "משתמשים וקוראים ב־Access1", icon: DoorOpen, component: Access1Page },
+  access1: { title: "בקרת כניסה", subtitle: "חיבור ותוצאות Access1", icon: DoorOpen, component: Access1Page },
   live: { title: "מצלמות", subtitle: "תמונה חיה ואיכות זיהוי", icon: Camera, component: CamerasPage },
   intercom: { title: "כניסה ואינטרקום", subtitle: "בדיקת פנים ברזולוציה גבוהה", icon: DoorOpen, component: IntercomPage },
   liveness: { title: "הגנה מזיוף", subtitle: "בדיקת אדם חי מול תמונה או מסך", icon: ShieldCheck, component: LivenessPage },

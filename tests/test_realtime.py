@@ -11,7 +11,7 @@ class RealtimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_commits_wake_stream_but_reads_and_rollbacks_do_not(self):
         with tempfile.TemporaryDirectory() as tmp:
             audit = AuditStore(Path(tmp) / 'audit.db')
-            stream = audit.revisions.stream(heartbeat=0.02)
+            stream = audit.revisions.stream(heartbeat=0.25)
             initial = await anext(stream)
             self.assertIn('event: revision', initial)
             before = audit.revisions.revision

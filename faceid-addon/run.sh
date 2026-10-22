@@ -1,4 +1,4 @@
-#!/usr/bin/env bashio
+#!/usr/bin/with-contenv bashio
 set -e
 
 # Optionen direkt aus /data/options.json lesen — robust gegenüber
@@ -60,6 +60,15 @@ mqtt:
   user: $(jq -cn --arg value "${MQTT_USER}" '$value')
   password: $(jq -cn --arg value "${MQTT_PASSWORD}" '$value')
 faceid:
+  access1_connector:
+    enabled: $(cfg_json '.access1_enabled // false')
+    bind_address: $(cfg_json '.access1_bind_address // ""')
+    directory_token: $(cfg_json '.access1_directory_token // ""')
+    tls_cert: $(cfg_json '.access1_tls_cert // "/ssl/faceid/directory.pem"')
+    tls_key: $(cfg_json '.access1_tls_key // "/ssl/faceid/directory-key.pem"')
+    access1_url: $(cfg_json '.access1_url // ""')
+    access1_token: $(cfg_json '.access1_token // ""')
+    access1_ca: $(cfg_json '.access1_ca // "/ssl/access1-mobile/backend-ca.pem"')
   port: 8600
   mqtt_prefix: $(cfg_json '.mqtt_prefix')
   backend: $(cfg_json '.backend')
@@ -133,6 +142,7 @@ faceid:
   review_queue_retention_days: $(cfg_json '.review_queue_retention_days // 14')
   review_queue_dedupe_days: $(cfg_json '.review_queue_dedupe_days // 7')
 EOF
+chmod 600 /opt/faceid/config.yaml
 
 # Galerie + Modell-Cache im persistenten /data-Volume (überlebt Updates)
 mkdir -p /data/faceid /data/model-cache

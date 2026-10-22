@@ -208,7 +208,13 @@ def main():
     processor.face_search = FaceSearch(audit, gallery, engine)
     processor.face_search.start_index()
     from .access1 import Access1Integration
-    processor.access1 = Access1Integration(data_dir, audit)
+    processor.access1 = None
+    try:
+        processor.access1 = Access1Integration(data_dir, audit, gallery=gallery,
+            processor=processor, options=f.get('access1_connector') or {})
+        processor.access1.start()
+    except Exception:
+        log.error('Optional Access1 module unavailable; recognition continues unchanged')
     processor.start()
     start_auto_backup(cfg["faceid"], data_dir)
     app = build_app(cfg, engine, gallery, processor, data_dir, BASE / "static")

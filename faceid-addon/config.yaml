@@ -1,5 +1,5 @@
 name: FaceID
-version: "6.3.0"
+version: "6.4.0"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -12,7 +12,7 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8600
-ingress_entry: ui-6.3.0
+ingress_entry: ui-6.4.0
 panel_icon: mdi:face-recognition
 panel_title: FaceID
 ports:
@@ -23,10 +23,19 @@ backup_exclude:
   - model-cache
   - model-cache/**
 map:
+  - ssl:ro
   - share:rw
 services:
   - mqtt:want
 options:
+  access1_enabled: false
+  access1_bind_address: ""
+  access1_directory_token: ""
+  access1_tls_cert: "/ssl/faceid/directory.pem"
+  access1_tls_key: "/ssl/faceid/directory-key.pem"
+  access1_url: ""
+  access1_token: ""
+  access1_ca: "/ssl/access1-mobile/backend-ca.pem"
   mqtt_prefix: faceid
   backend: auto
   frigate_url: https://192.168.1.10:8971
@@ -103,6 +112,14 @@ options:
   cameras: []
   discovery_cameras: []
 schema:
+  access1_enabled: "bool"
+  access1_bind_address: "str"
+  access1_directory_token: "password"
+  access1_tls_cert: "str"
+  access1_tls_key: "str"
+  access1_url: "str"
+  access1_token: "password"
+  access1_ca: "str"
   mqtt_prefix: str
   backend: list(auto|cpu|cuda|openvino)
   frigate_url: url
@@ -181,3 +198,6 @@ schema:
     - str
   discovery_cameras:
     - str
+
+# Access1 pairing verifies the current HA administrator.
+homeassistant_api: true
