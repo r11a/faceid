@@ -2,3 +2,7 @@ frontend/index.html text eol=lf
 faceid-addon/run.sh text eol=lf
 static/** text eol=lf
 faceid-addon/static/** text eol=lf
+
+# Font files must retain their original bytes in both build contexts.
+*.woff binary
+*.woff2 binary
