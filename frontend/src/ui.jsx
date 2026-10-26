@@ -27,6 +27,18 @@ export function ToastProvider({ children }) {
 
 export const useToast = () => useContext(ToastContext);
 
+export function FaceScore({ event, source = false }) {
+  const similar = event?.similarity != null;
+  const value = similar ? event.similarity : event?.score;
+  if (source || typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) return null;
+  const score = Math.round(value * 100);
+  const label = `${similar ? "דמיון" : "התאמה"} ${score}%`;
+  return <span className={`face-score ${similar ? "face-score-similar" : ""}`} role="img" aria-label={label} title={label}>
+    <svg viewBox="0 0 36 36" aria-hidden="true"><circle className="face-score-track" cx="18" cy="18" r="16" /><circle className="face-score-value" cx="18" cy="18" r="16" pathLength="100" strokeDasharray={`${score} 100`} /></svg>
+    <span>{score}<small>%</small></span>
+  </span>;
+}
+
 export function Panel({ children, className = "" }) {
   return <section className={`panel ${className}`}>{children}</section>;
 }
@@ -133,7 +145,7 @@ export function Modal({ title, subtitle, children, onClose, wide = false }) {
   return <div className="modal-backdrop" onMouseDown={onClose}>
     <div className={`modal ${wide ? "wide" : ""}`} onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
       <header><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="icon-button" onClick={onClose} aria-label="סגירה"><X /></button></header>
-      <div className="modal-body">{children}</div>
+      <div className="modal-body" tabIndex={0} aria-label="תוכן החלון">{children}</div>
     </div>
   </div>;
 }

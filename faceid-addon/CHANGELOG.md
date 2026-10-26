@@ -1,5 +1,12 @@
 # Changelog
 
+## 6.5.6 — 2026-10-26
+
+- Add a subtle translucent circular match score on event photos; distinguish similarity from recognition matching and omit missing scores.
+- People with reference images show an active recognition status; image-quality advice is a separate hint and does not imply recognition is disabled.
+- Dialogs have one bounded, keyboard-accessible scrolling body. Face timelines no longer trap scrolling inside a second viewport; scroll tracks remain hidden.
+- Recognition decisions, thresholds, reference images and camera settings are unchanged.
+
 ## 6.5.5 — 2026-10-26
 
 - Person playback opens on the latest event with video beside a chronological thumbnail list. Play selected event and play full sequence are distinct actions.

@@ -1,6 +1,7 @@
 import tempfile
 import asyncio
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -41,6 +42,24 @@ class FakeGallery:
 
 
 class WebUIClipTests(unittest.TestCase):
+    def test_reference_quality_advice_does_not_disable_recognition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gallery = SimpleNamespace(persons=lambda: {
+                "david": {"name": "David", "count": 18, "files": ["face.jpg"]},
+                "new": {"name": "New", "count": 0},
+                "initial": {"name": "Initial", "count": 1},
+            })
+            app = build_app({"faceid": {}}, SimpleNamespace(), gallery, SimpleNamespace(audit=None), Path(tmp), Path(__file__).parents[1] / "static")
+            with patch("app.webui.gallery_coach_report", return_value={"people": [{"slug":"david", "review_count":3}]}):
+                rows = {p["slug"]:p for p in TestClient(app).get("/api/users").json()["users"]}
+            self.assertEqual(rows["david"]["state"], "ready")
+            self.assertEqual(rows["david"]["state_label"], "פעיל לזיהוי")
+            self.assertEqual(rows["david"]["quality_label"], "מומלץ לשפר חלק מהתמונות")
+            self.assertEqual(rows["initial"]["state"], "ready")
+            self.assertEqual(rows["initial"]["quality_label"], "מומלץ להוסיף זוויות")
+            self.assertEqual(rows["new"]["state"], "new")
+            self.assertIsNone(rows["new"]["quality_label"])
+
     def test_dashboard_filters_confirmed_identity_before_pagination(self):
         from app.audit import AuditStore
         with tempfile.TemporaryDirectory() as tmp:
@@ -266,11 +285,11 @@ class WebUIClipTests(unittest.TestCase):
             self.assertIn("no-store", index.headers["cache-control"])
             self.assertNotIn("etag", index.headers)
             self.assertNotIn("last-modified", index.headers)
-            self.assertEqual(index.headers["x-faceid-ui-version"], "6.5.5")
+            self.assertEqual(index.headers["x-faceid-ui-version"], "6.5.6")
             versioned = TestClient(app).get("/ui-previous-release")
             self.assertEqual(versioned.status_code, 200)
             self.assertEqual(versioned.content, index.content)
-            ui_asset = TestClient(app).get("/assets/faceid-6.5.5.js")
+            ui_asset = TestClient(app).get("/assets/faceid-6.5.6.js")
             self.assertEqual(ui_asset.status_code, 200)
             self.assertIn("immutable", ui_asset.headers["cache-control"])
             self.assertEqual(ui_asset.headers["x-content-type-options"], "nosniff")
