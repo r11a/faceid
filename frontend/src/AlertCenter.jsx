@@ -36,7 +36,7 @@ export function AlertCenter() {
         if (again && !controller.signal.aborted) { again = false; void load(); }
       }
     };
-    const unsubscribe = subscribeRealtime(load);
+    const unsubscribe = subscribeRealtime(load, { immediate: true });
     void load();
     const timer = setInterval(load, 5000);
     return () => { controller.abort(); unsubscribe(); clearInterval(timer); };
@@ -44,10 +44,10 @@ export function AlertCenter() {
   const view = id => { setEventId(id); setPopup(null); setOpen(false); };
   return <>
     <button className="icon-button" onClick={() => { setOpen(true); setUnread(0); setPopup(null); }} title="התראות זיהוי" aria-label={`התראות זיהוי${unread ? ` · ${unread} חדשות` : ""}`}><Bell />{unread > 0 && <i />}</button>
-    {createPortal(<>
+    {createPortal(<div className="workspace-app workspace-portals" dir="rtl">
       {popup && <div className={`recognition-popup ${popup.watchlist === "black" ? "blacklist-outline" : ""}`} role="alert"><button className="icon-button" aria-label="סגירת התראה" onClick={() => setPopup(null)}><X /></button><b>{popup.person || "אדם לא מוכר"} · {popup.camera}</b><span>{popup.reasons.map(reason => alertReasons[reason] || reason).join(" · ")}</span><button className="button primary" onClick={() => view(popup.event_id)}>צפייה באירוע ובקליפ</button></div>}
       {open && <Modal title="התראות זיהוי" subtitle="מצלמות קריטיות, אנשים במעקב ורשימה שחורה" onClose={() => setOpen(false)}>{history.loading ? <Loading /> : history.error ? <ErrorState error={history.error} retry={history.reload} /> : history.data?.alerts?.length ? <div className="recognition-alert-list">{[...history.data.alerts].reverse().map(alert => <button className={`button secondary ${alert.watchlist === "black" ? "blacklist-outline" : ""}`} key={alert.id} onClick={() => view(alert.event_id)}><b>{alert.person || "אדם לא מוכר"} · {alert.camera}</b><span>{alert.reasons.map(reason => alertReasons[reason] || reason).join(" · ")}</span><small>{dateTime(alert.ts)}</small></button>)}</div> : <Empty title="אין התראות עדיין" />}</Modal>}
       {eventId && <EventModal eventId={eventId} people={users.data?.users || []} onClose={() => setEventId(null)} />}
-    </>, document.body)}
+    </div>, document.body)}
   </>;
 }

@@ -1,19 +1,20 @@
 import { assetUrl } from "./api.js";
 
-const listeners = new Set();
+const listeners = new Map();
 let stream = null;
 let timer = null;
 
-export function subscribeRealtime(listener) {
-  listeners.add(listener);
+export function subscribeRealtime(listener, { immediate = false } = {}) {
+  listeners.set(listener, immediate);
   if (!stream && typeof EventSource !== "undefined") {
     stream = new EventSource(assetUrl("api/updates"));
     stream.addEventListener("revision", () => {
+      for (const [notify, urgent] of listeners) if (urgent) notify();
       // A fixed debounce window also bounds latency during continuous writes.
       if (timer !== null) return;
       timer = setTimeout(() => {
         timer = null;
-        for (const notify of listeners) notify();
+        for (const [notify, urgent] of listeners) if (!urgent) notify();
       }, 150);
     });
   }

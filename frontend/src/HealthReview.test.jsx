@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HealthPage } from "./pages/Management.jsx";
 import { EventModal, EventsPage } from "./pages/Daily.jsx";
 import { ActionGroup, ActionsMenu, ToastProvider, useToast } from "./ui.jsx";
-import { useResource } from "./hooks.js";
+import { useImageRetry, useResource } from "./hooks.js";
 import { api } from "./api.js";
 
-vi.mock("./hooks.js", () => ({ useResource: vi.fn() }));
+vi.mock("./hooks.js", async importOriginal => ({ ...await importOriginal(), useResource: vi.fn() }));
 vi.mock("./api.js", () => ({ api: vi.fn(), assetUrl: path => `/ingress/${path}`, query: () => "" }));
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let renderer;
@@ -16,7 +16,7 @@ beforeEach(() => {
   vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn(), setTimeout: vi.fn() });
   api.mockReset();
 });
-afterEach(async () => { if (renderer) await act(() => renderer.unmount()); renderer = null; vi.unstubAllGlobals(); });
+afterEach(async () => { if (renderer) await act(() => renderer.unmount()); renderer = null; vi.useRealTimers(); vi.unstubAllGlobals(); });
 function resources(values) {
   useResource.mockImplementation(path => ({ data: values[path] || {}, loading: false, reload: vi.fn() }));
 }
@@ -111,5 +111,44 @@ describe("shared secondary actions", () => {
     await act(() => renderer.root.findByProps({ role: "menu" }).props.onKeyDown(event));
     expect(event.stopPropagation).toHaveBeenCalledOnce();
     expect(renderer.root.findAllByProps({ role: "menu" })).toHaveLength(0);
+  });
+});
+
+
+describe("actual notification timing", () => {
+  it("shows measured event and publish latency without inventing camera latency", () => {
+    resources({ health: { performance: { mqtt_to_recognition: { p95_ms: 543.2 }, confirmed_to_notification: { p95_ms: 12.4 } } }, "system-report": {} });
+    const html = renderToStaticMarkup(<HealthPage />);
+    expect(html).toContain("543 ms"); expect(html).toContain("12 ms");
+    expect(html).toContain("מקבלת האירוע ב־MQTT");
+    expect(html).toContain("עד הכנסה לתור הפרסום");
+  });
+});
+
+
+describe("transient image delivery", () => {
+  function Probe({ src }) { const image = useImageRetry(src); return <img src={image.url} data-failed={image.failed} onError={image.onError} />; }
+  it("retries a not-yet-persisted image without reloading the page and stays bounded", async () => {
+    vi.useFakeTimers();
+    await act(() => { renderer = create(<Probe src="api/activity/new/image" />); });
+    await act(() => renderer.root.findByType("img").props.onError());
+    expect(renderer.root.findByType("img").props["data-failed"]).toBe(true);
+    await act(() => vi.advanceTimersByTime(400));
+    expect(renderer.root.findByType("img").props.src).toContain("faceid_retry=1");
+    await act(() => renderer.root.findByType("img").props.onError());
+    await act(() => vi.advanceTimersByTime(1200));
+    expect(renderer.root.findByType("img").props.src).toContain("faceid_retry=2");
+    await act(() => renderer.root.findByType("img").props.onError());
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("cancels a pending retry when switching to a different person's image", async () => {
+    vi.useFakeTimers();
+    await act(() => { renderer = create(<Probe src="person/alice.jpg" />); });
+    await act(() => renderer.root.findByType("img").props.onError());
+    await act(() => renderer.update(<Probe src="person/bob.jpg" />));
+    await act(() => vi.advanceTimersByTime(2000));
+    expect(renderer.root.findByType("img").props.src).toBe("person/bob.jpg");
+    expect(renderer.root.findByType("img").props["data-failed"]).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Camera, ChevronLeft, Clock3, ImageOff, Images, Search, Upload, UserPlus, Users } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
-import { useResource } from "../hooks.js";
+import { useImageRetry, useResource } from "../hooks.js";
 import { Badge, Empty, ErrorState, Loading, Modal, PageHeader, Panel, dateTime, percent, useToast } from "../ui.jsx";
 import { EventVideo } from "../EventVideo.jsx";
 import { isBlacklistedEvent } from "../alerts.js";
@@ -9,9 +9,8 @@ import { isBlacklistedEvent } from "../alerts.js";
 const dayLabel = (value) => new Date(value * 1000).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
 function FaceImage({ src, alt }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
-  return !src || failed ? <span className="face-placeholder"><ImageOff /></span> : <img src={src.startsWith("data:") ? src : assetUrl(src)} alt={alt || "פנים"} onError={() => setFailed(true)} loading="lazy" />;
+  const image = useImageRetry(src);
+  return !src || image.failed ? <span className="face-placeholder"><ImageOff /></span> : <img src={image.url.startsWith("data:") ? image.url : assetUrl(image.url)} alt={alt || "פנים"} onError={image.onError} decoding="async" loading="lazy" />;
 }
 
 function Evidence({ event, people, onClose, onSimilar }) {

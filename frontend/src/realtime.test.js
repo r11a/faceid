@@ -58,3 +58,21 @@ test("a path or enabled change hides the previous person's data before effects r
   expect(resourceState(state, state.path, false)).toEqual({ data: null, error: null, loading: false });
   expect(resourceState(state, state.path, true).data.events).toEqual(["alice"]);
 });
+
+
+test("alert subscribers react immediately while visual refreshes stay coalesced", () => {
+  vi.useFakeTimers();
+  let stream;
+  vi.stubGlobal("EventSource", class {
+    constructor() { stream = this; this.close = vi.fn(); }
+    addEventListener(_, listener) { this.listener = listener; }
+  });
+  const alert = vi.fn(), visual = vi.fn();
+  const stopAlert = subscribeRealtime(alert, { immediate: true });
+  const stopVisual = subscribeRealtime(visual);
+  stream.listener();
+  expect(alert).toHaveBeenCalledOnce(); expect(visual).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(150);
+  expect(alert).toHaveBeenCalledOnce(); expect(visual).toHaveBeenCalledOnce();
+  stopAlert(); stopVisual();
+});

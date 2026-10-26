@@ -8,16 +8,20 @@ class VisitService:
         self.camera_profiles = camera_profiles
         self.gap_seconds = max(60, int(gap_minutes) * 60)
 
-    def list(self, *, person: str | None = None, days: int = 30, limit: int = 200):
+    def list(self, *, person: str | None = None, days: int = 30, limit: int | None = 200):
         rows = self.audit.recognized_timeline(
             person=person, after_ts=time.time() - max(1, min(days, 365)) * 86400
         )
         visits = []
         current = {}
+        roles = {}
         for event in rows:
             name = event["person"]
             previous = current.get(name)
-            role = self.camera_profiles.get(event["camera"])["role"]
+            camera = event["camera"]
+            if camera not in roles:
+                roles[camera] = self.camera_profiles.get(camera)["role"]
+            role = roles[camera]
             starts_entry = role in {"entry", "entry_exit"}
             if (
                 previous is None
@@ -67,10 +71,23 @@ class VisitService:
                 and now - visit["end_ts"] <= self.gap_seconds
             )
         visits.sort(key=lambda item: item["start_ts"], reverse=True)
-        return visits[:max(1, min(limit, 1000))]
+        return visits if limit is None else visits[:max(1, min(limit, 1000))]
 
     def person_statistics(self, person: str, days: int = 30) -> dict:
         visits = self.list(person=person, days=days, limit=1000)
+        return self._statistics(visits)
+
+    def person_statistics_many(self, persons, days: int = 30) -> dict:
+        """Summarize multiple people with one timeline read and camera-role cache."""
+        by_person = {person: [] for person in persons}
+        for visit in self.list(days=days, limit=None):
+            visits = by_person.get(visit["person"])
+            if visits is not None and len(visits) < 1000:
+                visits.append(visit)
+        return {person: self._statistics(visits) for person, visits in by_person.items()}
+
+    @staticmethod
+    def _statistics(visits) -> dict:
         durations = [v["duration_seconds"] for v in visits if v["event_count"] > 1]
         hours = [time.localtime(v["start_ts"]).tm_hour for v in visits]
         common_hour = max(set(hours), key=hours.count) if hours else None

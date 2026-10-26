@@ -1,16 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Camera, ChevronLeft, ChevronRight, MapPin, Play, Search, UserPlus, UserRound, Users, X } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
-import { useResource } from "../hooks.js";
+import { useImageRetry, useResource } from "../hooks.js";
 import { ActionGroup, Empty, ErrorState, Loading, Modal, dateTime, relativeTime } from "../ui.jsx";
 import { chronological, clipAfter, eventTime, identityForEvent, latestPeople } from "../home.js";
 import { PersonEditor } from "./Daily.jsx";
 import { EventVideo } from "../EventVideo.jsx";
 
-function Photo({ src, name = "פנים", className = "" }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
-  return <span className={`home-photo ${className}`}>{src && !failed ? <img src={assetUrl(src)} alt={name} loading="lazy" onError={() => setFailed(true)} /> : <UserRound />}</span>;
+function Photo({ src, name = "פנים", className = "", eager = false }) {
+  const image = useImageRetry(src);
+  return <span className={`home-photo ${className}`}>{src && !image.failed ? <img src={assetUrl(image.url)} alt={name} decoding="async" loading={eager ? "eager" : "lazy"} fetchPriority={eager ? "high" : "low"} onError={image.onError} /> : <UserRound />}</span>;
 }
 
 function Rail({ label, children, resetKey, className = "" }) {
@@ -125,8 +124,8 @@ export function DashboardPage({ navigate }) {
       {resolving && <Loading text="מאתר פנים…" />}
       {selectionError && <ErrorState error={selectionError} />}
       {loading ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : rows.length ? <Rail label="אירועים" resetKey={`${currentSource}-${page}`} className="home-event-rail">
-        {rows.map(event => { const person = identityForEvent(event, people); return <button className={`home-event-card ${person?.watchlist === "black" ? "blacklist-outline" : ""}`} key={event.event_id} onClick={() => openEvent(event)}>
-          <Photo src={event.image || `api/activity/${encodeURIComponent(event.event_id)}/image`} name={selection?.name || person?.name || "לא מזוהה"} />
+        {rows.map((event, index) => { const person = identityForEvent(event, people); return <button className={`home-event-card ${person?.watchlist === "black" ? "blacklist-outline" : ""}`} key={event.event_id} onClick={() => openEvent(event)}>
+          <Photo src={event.image || `api/activity/${encodeURIComponent(event.event_id)}/image`} name={selection?.name || person?.name || "לא מזוהה"} eager={index < 3} />
           <span className="home-event-play" aria-hidden="true"><Play /></span>
           <div className="home-event-copy"><b>{selection?.name || person?.name || "לא מזוהה"}</b><span><Camera />{event.camera || "—"}</span><time>{dateTime(eventTime(event))}</time></div>
         </button>; })}
