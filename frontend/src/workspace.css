@@ -389,3 +389,29 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, #root::-webkit-scrollbar, .wor
 
 .workspace-app .home-sequence-main .home-video-stage>.home-photo { position:absolute; inset:0; height:100%; }
 .workspace-app .home-sequence-main .home-video-stage>.button { position:absolute; inset:auto; top:50%; left:50%; transform:translate(-50%,-50%); z-index:2; }
+
+/* One scroll owner inside dialogs prevents nested timelines trapping the wheel. */
+.workspace-app .modal { display:flex; flex-direction:column; overflow:hidden; max-height:calc(100dvh - 40px); }
+.workspace-app .modal>header { position:relative; flex:0 0 auto; }
+.workspace-app .modal-body { min-height:0; flex:1 1 auto; overflow-y:auto; overscroll-behavior-y:contain; -webkit-overflow-scrolling:touch; }
+.workspace-app .modal .face-timeline-scroll { max-height:none; overflow:visible; overscroll-behavior:auto; }
+.workspace-app .modal-body:focus-visible { outline:1px solid var(--focus); outline-offset:-2px; }
+.workspace-app .person-quality-advice { display:block; color:var(--muted); font-size:11px; margin-top:5px; }
+@media(max-width:760px) { .workspace-app .modal { max-height:calc(100dvh - 20px); } }
+
+/* Compact, translucent match score: color denotes score type, not authorization. */
+.workspace-app .face-appearance-photo, .workspace-app .face-evidence-photo, .workspace-app .home-photo { position:relative; }
+.workspace-app span.face-score { position:absolute; inset-inline-end:5px; bottom:5px; width:32px; height:32px; border-radius:50%; background:rgba(18,20,21,.72); color:#c1d2b4; display:grid; place-items:center; direction:ltr; font-variant-numeric:tabular-nums; }
+.workspace-app span.face-score-similar { color:#c5b9dc; }
+.workspace-app .face-score>svg { position:absolute; inset:0; width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.5; transform:rotate(-90deg); }
+.workspace-app .face-score-track { opacity:.18; }
+.workspace-app .face-score-value { opacity:.85; stroke-linecap:round; }
+.workspace-app .face-score>span { display:block; padding:0; font-size:10px; font-weight:600; line-height:1; color:#f1f1f1; }
+.workspace-app .face-score small { font-size:8px; margin-inline-start:1px; }
+.workspace-app .face-evidence-photo { display:block; width:100%; max-width:240px; height:200px; }
+.workspace-app .face-evidence-photo>img, .workspace-app .face-evidence-photo>.face-placeholder { width:100%; height:100%; object-fit:contain; background:var(--surface-2); border-radius:8px; }
+@media(max-width:760px) { .workspace-app .face-evidence-photo { width:86px; height:100px; grid-row:span 4; } }
+
+.workspace-app .home-route-photo .face-score { width:24px; height:24px; bottom:2px; inset-inline-end:2px; }
+.workspace-app .home-route-photo .face-score>span { font-size:8px; }
+.workspace-app .home-route-photo .face-score small { font-size:6px; }

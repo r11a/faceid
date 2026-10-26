@@ -167,12 +167,12 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             count = int(person.get("count", 0))
             if count == 0:
                 state, label = "new", "אין תמונות ייחוס"
-            elif count < 3:
-                state, label = "ready", "פעיל לזיהוי ראשוני · מומלץ להוסיף זוויות"
-            elif report.get("review_count", 0):
-                state, label = "review", "כדאי לשפר תמונות"
             else:
-                state, label = "ready", "מוכן לזיהוי"
+                state, label = "ready", "פעיל לזיהוי"
+            quality_label = (
+                "מומלץ לשפר חלק מהתמונות" if count and report.get("review_count", 0)
+                else "מומלץ להוסיף זוויות" if 0 < count < 3 else None
+            )
             files = person.get("files") or []
             rows.append({
                 "slug": slug, "name": person["name"], "count": count,
@@ -180,7 +180,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 "favorite": bool(person.get("favorite")), "state": state,
                 "watchlist": person.get("watchlist", "normal"),
                 "notify_on_recognition": bool(person.get("notify_on_recognition")),
-                "state_label": label, "advice": report.get("advice", []),
+                "state_label": label, "quality_label": quality_label, "advice": report.get("advice", []),
                 "statistics": statistics.get(person["name"], {}),
             })
         rows.sort(key=lambda item: (not item["favorite"], item["name"].casefold()))
