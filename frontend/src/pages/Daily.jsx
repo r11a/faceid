@@ -5,7 +5,7 @@ import {
   Sparkles, Star, Trash2, Upload, UserCheck, UserPlus, UserRound, Users, X,
 } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
-import { useResource } from "../hooks.js";
+import { useImageRetry, useResource } from "../hooks.js";
 import { ActionsMenu, Badge, Empty, ErrorState, Loading, Metric, Modal, PageHeader, Panel, dateTime, decision, percent, relativeTime, useToast } from "../ui.jsx";
 
 import { FaceExplorer, HistoryReferenceChooser } from "./Faces.jsx";
@@ -13,13 +13,13 @@ import { isBlacklistedEvent } from "../alerts.js";
 import { EventVideo } from "../EventVideo.jsx";
 
 function PersonAvatar({ person, className = "" }) {
-  return <div className={`person-avatar ${className}`}>{person?.photo ? <img src={assetUrl(person.photo)} alt={person.name} /> : <UserRound />}</div>;
+  return <div className={`person-avatar ${className}`}>{person?.photo ? <img src={assetUrl(person.photo)} alt={person.name} decoding="async" loading="lazy" /> : <UserRound />}</div>;
 }
 
 function EventThumb({ event, onClick }) {
-  const [failed, setFailed] = useState(false);
+  const image = useImageRetry(`api/activity/${encodeURIComponent(event.event_id)}/image`);
   const Element = onClick ? "button" : "span";
-  return <Element className="event-thumb" onClick={onClick}>{failed ? <ImageOff /> : <img src={assetUrl(`api/activity/${encodeURIComponent(event.event_id)}/image`)} onError={() => setFailed(true)} alt="תמונת אירוע" loading="lazy" />}</Element>;
+  return <Element className="event-thumb" onClick={onClick}>{image.failed ? <ImageOff /> : <img src={assetUrl(image.url)} onError={image.onError} alt="תמונת אירוע" decoding="async" loading="lazy" />}</Element>;
 }
 
 export function EventModal({ eventId, people, onClose, onChanged }) {

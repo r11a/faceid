@@ -1,5 +1,16 @@
 # Changelog
 
+## 6.5.1 — 2026-10-26
+
+- Publish confirmed identity immediately on non-retained `PREFIX/v1/recognitions`; HA recognition events and camera triggers use it without waiting for event end. Preserve the final enriched `v1/events` topic.
+- Submit webhooks at confirmation, independently deduplicate accepted MQTT and webhook destinations, and briefly retry definite local rejection using the same payload. Never replay uncertain, expired or ended notifications.
+- Move face-sample indexing and image persistence behind confirmed notification. Keep advisory body analysis and Frigate labels in final enrichment.
+- Allow opted-in fast cameras to sample independently of Access1, prefer current event images at the configured resolution, and use bounded 250ms retries.
+- Remove the ordinary 150ms visual debounce for alert subscribers and filter HA device triggers by their own camera.
+- Speed up UI reads with three bulk person-statistics queries, bulk visit summaries, cached reference-image analysis invalidated on file changes, and lightweight cached-image existence checks.
+- Prioritize visible home photos, decode images asynchronously, retry briefly unavailable evidence without a page reload, privately cache gallery JPEGs, and avoid refetching camera previews on unrelated renders.
+- Add bounded MQTT-to-recognition and confirmation-to-publish metrics. Matching thresholds, distinct-frame confirmations, quality/liveness and Access1 admission requirements are unchanged.
+
 ## 6.5.0 — 2026-10-26
 
 - Adopt a HOMEii/Linear-inspired workspace with graphite surfaces, restrained orange accents, thin borders and bundled Hebrew Heebo fonts; retain light/dark preferences.

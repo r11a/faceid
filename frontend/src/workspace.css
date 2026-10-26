@@ -189,3 +189,6 @@
  .workspace-app .actions-menu-popover :is(button,a) { min-height: 44px; }
  .workspace-app .home-video-stage video { max-height: 60dvh; }
 }
+
+/* Portaled alerts and event dialogs use the same controls and typography. */
+.workspace-app.workspace-portals { display: contents; min-height: 0; }

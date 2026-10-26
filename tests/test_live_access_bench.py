@@ -37,14 +37,13 @@ class LiveSamplingTests(unittest.TestCase):
                 p,st=self.processor();st.update(change);p._schedule_live_jobs()
                 self.assertTrue(p.queue.empty())
 
-    def test_no_new_sampling_for_disabled_or_nonopted_camera_or_disconnected(self):
+    def test_fast_sampling_requires_opt_in_but_does_not_require_access1(self):
         for profile in ({'enabled':False,'fast_recognition':True,'high_resolution':True},
-                        {'fast_recognition':False,'high_resolution':True},
-                        {'fast_recognition':True,'high_resolution':False}):
+                        {'fast_recognition':False,'high_resolution':True}):
             p,st=self.processor();p.camera_profiles=SimpleNamespace(get=lambda _:profile,all=lambda:{'front':profile})
             p._schedule_live_jobs();self.assertTrue(p.queue.empty())
         p,st=self.processor();p.access1.transport=None;p._schedule_live_jobs()
-        self.assertTrue(p.queue.empty())
+        self.assertEqual(p.queue.qsize(),1)
 
     def test_clip_job_prevents_same_event_live_requeue(self):
         p,st=self.processor();p._enqueue_job('e','clip');p._schedule_live_jobs()

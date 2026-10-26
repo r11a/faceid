@@ -93,7 +93,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             raise HTTPException(404, "Unknown media")
         if not target.is_file():
             raise HTTPException(404, "Unknown media")
-        return FileResponse(target)
+        return FileResponse(target, headers={"Cache-Control": "private, max-age=300"})
 
     def _index_response():
         """Return HTML bytes directly so neither Starlette nor ingress can reuse an ETag."""
@@ -868,7 +868,9 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         """Proxy and cache a review image without exposing Frigate credentials."""
         if processor.audit is None:
             raise HTTPException(404, "Audit is not available")
-        if processor.audit.event_detail(event_id) is None:
+        exists = getattr(processor.audit, "event_exists", None)
+        known = exists(event_id) if callable(exists) else processor.audit.event_detail(event_id) is not None
+        if not known:
             raise HTTPException(404, "Unknown event")
         cached = processor.audit.evidence_path(event_id)
         if not cached.is_file():
@@ -1328,13 +1330,16 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     def dashboard():
         people = gallery.persons()
         stats = processor.audit.person_statistics() if processor.audit else {}
+        visits = getattr(processor, "visits", None)
+        bulk_visits = getattr(visits, "person_statistics_many", None)
+        visit_statistics = bulk_visits([person["name"] for person in people.values()]) if bulk_visits else {}
         cards = []
         for slug, person in people.items():
             person_stats = stats.get(person["name"], {})
             files = person.get("files") or []
             visit_stats = (
-                processor.visits.person_statistics(person["name"])
-                if getattr(processor, "visits", None) else {}
+                visit_statistics.get(person["name"], {}) if bulk_visits
+                else visits.person_statistics(person["name"]) if visits else {}
             )
             cards.append({
                 "slug": slug,

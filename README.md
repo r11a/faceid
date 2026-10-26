@@ -50,6 +50,8 @@ background at startup, or with **Scan available historical images**. Deleted ima
 cannot be reconstructed. Face crops share the configured evidence retention policy;
 vectors stay with the audit history and are removed when that history is purged.
 
+**New in 6.5.1:** confirmed identity notifications and HA automation events publish before event completion and media/index work. [Latency and MQTT guide](docs/recognition-latency.md).
+
 **New in 6.5.0:** HOMEii workspace with activity, people, cameras and management; local Hebrew typography, light/dark themes and Ctrl/Cmd+K screen search. [Interface guide](docs/interface.md).
 
 **Access1 connection is available; 6.4.11 adds live capture and status updates.** Pair through HA ingress using a
@@ -214,7 +216,7 @@ then measures TAR, FAR and FRR by camera and person and recommends a threshold/m
 for the configured false-accept target. It intentionally keeps all frames from one event
 together; random frame splitting would produce misleadingly optimistic accuracy.
 
-Automation consumers should use `faceid/v1/events`; the legacy `faceid/event` topic
+Immediate automation consumers should use `faceid/v1/recognitions`; enriched completed events remain on `faceid/v1/events`. The legacy `faceid/event` topic
 remains for compatibility. The v1 payload contains a schema version, final decision,
 evidence, scenario and any appearance hint. Home Assistant device triggers are
 discovered automatically, and standalone installs can configure asynchronous webhooks.

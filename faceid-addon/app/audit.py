@@ -449,6 +449,13 @@ class AuditStore:
             out.append(row)
         return out
 
+    def event_exists(self, event_id: str) -> bool:
+        """Check image access without loading the event's observation history."""
+        with self._connection() as con:
+            return con.execute(
+                "SELECT 1 FROM events WHERE event_id=?", (event_id,)
+            ).fetchone() is not None
+
     def event_detail(self, event_id: str):
         with self._lock, self._connection() as con:
             con.row_factory = sqlite3.Row
@@ -796,12 +803,15 @@ class AuditStore:
         now = time.time()
         # Operator review takes precedence over the original recognition.
         identities = """
-            SELECT *, COALESCE(ground_truth, person) AS identity FROM events
+            SELECT rowid AS event_rowid, camera, score, event_id, start_ts,
+                   occurrence, COALESCE(ground_truth, person) AS identity FROM events
             WHERE (ground_truth IS NOT NULL AND ground_truth != '__unknown__')
                OR (ground_truth IS NULL AND status='recognized' AND person IS NOT NULL)
         """
-        with self._lock, self._connection() as con:
+        with self._connection() as con:
             con.row_factory = sqlite3.Row
+            # Keep all three reads consistent while WAL permits recognition writes.
+            con.execute("BEGIN")
             totals = con.execute(
                 f"""
                 WITH identified AS ({identities})
@@ -818,39 +828,47 @@ class AuditStore:
                 """,
                 (now - 7 * 86400, now - 30 * 86400),
             ).fetchall()
-            result = {}
-            for raw in totals:
-                row = dict(raw)
-                last = con.execute(
+            latest = {
+                row["identity"]: row for row in con.execute(
                     f"""
-                    WITH identified AS ({identities})
-                    SELECT camera, score, event_id, start_ts FROM identified
-                    WHERE identity=?
-                    ORDER BY start_ts DESC LIMIT 1
-                    """,
-                    (row["person"],),
-                ).fetchone()
-                cameras = con.execute(
-                    f"""
-                    WITH identified AS ({identities})
-                    SELECT camera, COUNT(*) AS count FROM identified
-                    WHERE identity=?
-                      AND COALESCE(occurrence,'')!='presence_update'
-                    GROUP BY camera ORDER BY count DESC, camera
-                    """,
-                    (row["person"],),
+                    WITH identified AS ({identities}), ranked AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                            PARTITION BY identity ORDER BY start_ts DESC, event_rowid
+                        ) AS position FROM identified
+                    )
+                    SELECT identity, camera, score, event_id, start_ts FROM ranked
+                    WHERE position=1
+                    """
                 ).fetchall()
-                result[row["person"]] = {
-                    **row,
-                    "avg_score": round(float(row["avg_score"] or 0), 4),
-                    "last_seen": last["start_ts"] if last else row["last_seen"],
-                    "last_camera": last["camera"] if last else None,
-                    "last_score": float(last["score"] or 0) if last else 0.0,
-                    "last_event_id": last["event_id"] if last else None,
-                    "top_camera": cameras[0]["camera"] if cameras else None,
-                    "cameras": [dict(item) for item in cameras],
-                }
-            return result
+            }
+            cameras_by_person = {}
+            for camera in con.execute(
+                f"""
+                WITH identified AS ({identities})
+                SELECT identity, camera, COUNT(*) AS count FROM identified
+                WHERE COALESCE(occurrence,'')!='presence_update'
+                GROUP BY identity, camera ORDER BY identity, count DESC, camera
+                """
+            ).fetchall():
+                cameras_by_person.setdefault(camera["identity"], []).append({
+                    "camera": camera["camera"], "count": camera["count"],
+                })
+        result = {}
+        for raw in totals:
+            row = dict(raw)
+            last = latest.get(row["person"])
+            cameras = cameras_by_person.get(row["person"], [])
+            result[row["person"]] = {
+                **row,
+                "avg_score": round(float(row["avg_score"] or 0), 4),
+                "last_seen": last["start_ts"] if last else row["last_seen"],
+                "last_camera": last["camera"] if last else None,
+                "last_score": float(last["score"] or 0) if last else 0.0,
+                "last_event_id": last["event_id"] if last else None,
+                "top_camera": cameras[0]["camera"] if cameras else None,
+                "cameras": cameras,
+            }
+        return result
 
     def dashboard_summary(self):
         with self._lock, self._connection() as con:

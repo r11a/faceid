@@ -310,6 +310,7 @@ class EventProcessor:
             alerts.publish_discovery(client)
 
     def _on_message(self, client, userdata, msg):
+        received_monotonic = time.perf_counter()
         try:
             payload = json.loads(msg.payload)
         except json.JSONDecodeError:
@@ -351,7 +352,8 @@ class EventProcessor:
         st = self.events.get(eid)
         if st is None:
             st = self._new_event_state(
-                eid, cam, start_time=after.get("start_time") or time.time()
+                eid, cam, start_time=after.get("start_time") or time.time(),
+                mqtt_received_monotonic=received_monotonic,
             )
             self.events[eid] = st
         if cam != st["camera"]:
@@ -383,7 +385,7 @@ class EventProcessor:
 
     def recognition_interval(self, camera):
         profile = self.camera_profiles.get(camera) if self.camera_profiles else {}
-        return min(self.retry_secs, .35) if profile.get("fast_recognition") else self.retry_secs
+        return min(self.retry_secs, .25) if profile.get("fast_recognition") else self.retry_secs
 
     def _live_sampler(self):
         while True:
@@ -402,6 +404,11 @@ class EventProcessor:
     def _schedule_live_jobs(self, now=None):
         now = time.time() if now is None else now
         for eid, st in list(self.events.items()):
+            pending = st.get("notification_payload")
+            if (pending and not st.get("notification_complete")
+                    and time.perf_counter() >= st.get("notification_next_retry", 0)):
+                self._publish_notification(eid, st, pending["decision"], pending["person"], pending["score"],
+                    margin=pending["margin"], confirmations=pending["confirmations"])
             # Only a recent MQTT event may request a bounded live burst. Recovered,
             # ended, disabled and completed events retain the existing archival path.
             updated = st.get("live_updated_at")
@@ -412,7 +419,8 @@ class EventProcessor:
                     or st["attempts"] >= self.max_attempts
                     or st.get("live_fetches", 0) >= 12
                     or not self.camera_enabled(st["camera"])
-                    or not self._live_access_camera(st)
+                    or not (self._live_access_camera(st) or (
+                        self.camera_profiles and self.camera_profiles.get(st["camera"]).get("fast_recognition")))
                     or now - st["last_try"] < self.recognition_interval(st["camera"])):
                 continue
             with self._jobs_lock:
@@ -617,7 +625,13 @@ class EventProcessor:
             source = "secure_live_snapshot"
             st["access1_evidence_ts"] = timestamp
             st["candidate_snapshot_ts"] = timestamp
-        elif camera_profile and camera_profile.get("high_resolution"):
+        elif (camera_profile and camera_profile.get("fast_recognition")
+              and not st["ended"] and not st.get("recovered") and not st.get("polled")):
+            # Notification-only fast mode does not depend on Access1. Preserve
+            # full-frame resolution and quality gates; this is not access proof.
+            st["live_fetches"] = st.get("live_fetches", 0) + 1
+            img = self.frigate.snapshot(eid, crop=not camera_profile.get("high_resolution"))
+        if not live_access and img is None and camera_profile and camera_profile.get("high_resolution"):
             # Preserve the non-access/enrollment-compatible capture path.
             timestamps = [time.time(), float(st.get("start_time") or time.time())]
             for timestamp in timestamps:
@@ -643,12 +657,6 @@ class EventProcessor:
         st["candidate_live"] = live_access
         st["attempts"] += 1
         st["context_frame"] = img
-        if self.body_recognition is not None:
-            try:
-                st["body"] = self.body_recognition.predict(img, eid)
-            except Exception as exc:
-                st["body"] = {"advisory": True, "error": str(exc)[:160]}
-                log.warning("event %s: advisory body path failed: %s", eid, exc)
         # Live access selects by ROI/quality before computing any embeddings.
         found = (self.engine.detect_faces(img)
                  if live_access and hasattr(self.engine, "detect_faces")
@@ -756,12 +764,6 @@ class EventProcessor:
         if source == "secure_live_snapshot" and hasattr(self.engine, "embed_face"):
             self.engine.embed_face(img, face)
         emb = face.normed_embedding
-        face_search = getattr(self, "face_search", None)
-        if face_search is not None and not pending_live_identity:
-            try:
-                face_search.record(eid, emb, crop_face(img, face.bbox))
-            except Exception:
-                log.exception("Could not index face for event %s", eid)
         candidates = self.gallery.match_candidates(emb, limit=3)
         guest_access = getattr(self, "guest_access", None)
         if guest_access is not None:
@@ -793,18 +795,23 @@ class EventProcessor:
         )
         if pending_live_identity:
             return
+        if decision.status == "recognized":
+            st["confirmed_monotonic"] = time.perf_counter()
+            if st.get("mqtt_received_monotonic") is not None:
+                self.record_timing("mqtt_to_recognition", st["confirmed_monotonic"] - st["mqtt_received_monotonic"])
+        if getattr(self, "face_search", None) is not None:
+            # Bound transient samples; keep JPEG/SQL work out of consensus warmup.
+            st.setdefault("pending_face_samples", deque(maxlen=8)).append((emb.copy(), crop_face(img, face.bbox).copy()))
         face_px = int(min(face.bbox[2] - face.bbox[0], face.bbox[3] - face.bbox[1]))
-        if self.audit:
-            self.audit.observation(
-                eid, st["attempts"], decision.status, person=name, score=float(score),
-                runner_up=runner_up, runner_up_score=float(runner_up_score),
-                margin=float(decision.margin), ignore_score=float(ig),
-                det_score=float(face.det_score), face_px=face_px,
-                quality=float(quality.score) if quality else 0.0,
-                source=source,
-            )
+        observation = dict(person=name, score=float(score), runner_up=runner_up,
+            runner_up_score=float(runner_up_score), margin=float(decision.margin),
+            ignore_score=float(ig), det_score=float(face.det_score), face_px=face_px,
+            quality=float(quality.score) if quality else 0.0, source=source)
+        if self.audit and decision.status != "recognized":
+            self.audit.observation(eid, st["attempts"], decision.status, **observation)
 
         if decision.status == "ignored":
+            self._flush_face_samples(eid, st)
             if self.audit:
                 self.audit.save_evidence(eid, crop_face(img, face.bbox))
             st["best_unknown"] = None
@@ -840,6 +847,11 @@ class EventProcessor:
             )
             st["recognition_occurrence"] = occurrence
             actionable = occurrence != "presence_update"
+            st["best_score"], st["best_person"] = decision.score, decision.person
+            st["done"] = True
+            st["final_decision"] = decision
+            self._publish_notification(eid, st, decision.status, decision.person, decision.score,
+                margin=decision.margin, confirmations=decision.confirmations)
             access1 = getattr(self, "access1", None)
             if access1 is not None:
                 access1.enqueue({
@@ -853,11 +865,12 @@ class EventProcessor:
                     "liveness_score": (st.get("liveness") or {}).get("score"),
                     "liveness_frames": (st.get("liveness") or {}).get("live_frames", 0),
                 })
-            if self.audit and actionable:
-                self.audit.save_evidence(eid, crop)
-            st["best_score"], st["best_person"] = decision.score, decision.person
-            st["done"] = True
-            st["final_decision"] = decision
+            self._publish_recognition(eid, st, decision.person, decision.score, decision=decision)
+            self._flush_face_samples(eid, st)
+            if self.audit:
+                self.audit.observation(eid, st["attempts"], decision.status, **observation)
+                if actionable:
+                    self.audit.save_evidence(eid, crop)
             if actionable and decision.slug and str(decision.slug).startswith("guest:"):
                 guest_id = str(decision.slug).split(":", 1)[1]
                 st["guest"] = {"id": guest_id, "name": decision.person}
@@ -873,11 +886,6 @@ class EventProcessor:
                         f"{self.prefix}/v1/guest_access",
                         json.dumps(access_result, ensure_ascii=False), retain=False,
                     )
-            self._publish_recognition(
-                eid, st, decision.person, decision.score, decision=decision
-            )
-            if self.set_sub_label:
-                self.frigate.set_sub_label(eid, decision.person, decision.score)
             if actionable and self.reid is not None:
                 self.reid.seed(
                     decision.person, st["camera"], st.get("context_frame"),
@@ -1116,6 +1124,19 @@ class EventProcessor:
         if st.get("post_processed"):
             return
         st["post_processed"] = True
+        self._publish_notification(eid, st, status, person, score, margin=margin, confirmations=confirmations)
+        self._flush_face_samples(eid, st)
+        if self.set_sub_label and status == "recognized" and person:
+            try:
+                self.frigate.set_sub_label(eid, person, score)
+            except Exception:
+                log.exception("Could not update Frigate label for event %s", eid)
+        if self.body_recognition is not None and st.get("context_frame") is not None:
+            try:
+                st["body"] = self.body_recognition.predict(st["context_frame"], eid)
+            except Exception as exc:
+                st["body"] = {"advisory": True, "error": str(exc)[:160]}
+                log.warning("event %s: advisory body path failed: %s", eid, exc)
         occurrence = st.get("recognition_occurrence")
         actionable = occurrence != "presence_update"
         probable_person, probable_score = None, 0.0
@@ -1191,7 +1212,8 @@ class EventProcessor:
         if actionable and self.dispatcher is not None:
             try:
                 self.dispatcher.dispatch(
-                    payload, client=self.client, prefix=self.prefix
+                    payload, client=self.client, prefix=self.prefix,
+                    webhooks=not bool(st.get("notification_payload")),
                 )
             except Exception:
                 log.exception("event %s: automation dispatch failed", eid)
@@ -1205,6 +1227,65 @@ class EventProcessor:
                 log.exception("event %s: AI context enqueue failed", eid)
         if status == "recognized" and person:
             self._publish_person_state(person)
+
+    def _flush_face_samples(self, eid, st):
+        service = getattr(self, "face_search", None)
+        for emb, crop in st.pop("pending_face_samples", ()):
+            if service is not None:
+                try:
+                    service.record(eid, emb, crop)
+                except Exception:
+                    log.exception("Could not index face for event %s", eid)
+
+    def _publish_notification(self, eid, st, status, person, score, *, margin=0.0, confirmations=0):
+        if st.get("notification_complete") or st.get("recognition_occurrence") == "presence_update":
+            return
+        now = time.perf_counter()
+        payload = st.get("notification_payload")
+        if payload is not None:
+            # Retry only definite local nonacceptance, briefly while still live.
+            # Never convert a reconnect or finalization into a stale automation.
+            if (now - st["notification_started"] >= 2 or st["ended"]
+                    or st.get("recovered") or st.get("polled")):
+                st["notification_complete"] = True
+                log.warning("Immediate notification expired for event %s", eid)
+                return
+        else:
+            payload = dict(event_id=eid, camera=st["camera"], start_ts=st.get("start_time"),
+                end_ts=st.get("end_time"), decision=status,
+                person=person if status == "recognized" else None,
+                score=round(float(score or 0), 4), margin=round(float(margin or 0), 4),
+                confirmations=int(confirmations), liveness=st.get("liveness"),
+                occurrence=st.get("recognition_occurrence"), decided_at=time.time(),
+                phase="confirmed" if status == "recognized" else "final",
+                live=not bool(st.get("ended") or st.get("recovered") or st.get("polled")),
+                probable_person=None, probable_score=0.0, scenario_id=None, scenario=None,
+                body=st.get("body"), guest=st.get("guest"), guest_access=st.get("guest_access"))
+            st["notification_payload"] = payload
+            st["notification_started"] = now
+        st["notification_next_retry"] = now + .25
+        delivery = {}
+        client = None if st.get("notification_mqtt_complete") else self.client
+        webhooks = not st.get("notification_webhooks")
+        try:
+            if self.dispatcher is not None:
+                self.dispatcher.dispatch(payload, client=client, prefix=self.prefix,
+                    topic="v1/recognitions", webhooks=webhooks, delivery=delivery)
+            elif client:
+                info = client.publish(f"{self.prefix}/v1/recognitions",
+                    json.dumps({"schema_version": 1, **payload}, ensure_ascii=False), retain=False)
+                rc = getattr(info, "rc", 0)
+                delivery.update(mqtt=not isinstance(rc, int) or rc == 0, webhooks=True)
+            else:
+                delivery.update(mqtt=True, webhooks=True)
+            st["notification_mqtt_complete"] = delivery.get("mqtt") is not False
+            st["notification_webhooks"] = delivery.get("webhooks", True)
+            st["notification_complete"] = st["notification_mqtt_complete"] and st["notification_webhooks"]
+            if client and delivery.get("mqtt") is True and st.get("confirmed_monotonic") is not None:
+                self.record_timing("confirmed_to_notification", time.perf_counter() - st["confirmed_monotonic"])
+        except Exception:
+            st["notification_complete"] = True  # uncertain acceptance is not replayable
+            log.exception("Could not publish immediate recognition %s", eid)
 
     def _publish_recognition(
         self, eid: str, st: dict, name: str, score: float,
@@ -1224,6 +1305,16 @@ class EventProcessor:
                 "runner_up": decision.runner_up,
                 "runner_up_score": round(float(decision.runner_up_score), 3),
             })
+        self._publish_notification(eid, st, payload["decision"], name, score,
+            margin=decision.margin if decision else 0,
+            confirmations=decision.confirmations if decision else 0)
+        actionable = st.get("recognition_occurrence") != "presence_update"
+        if actionable and self.client and st.get("announced") != name:
+            st["announced"] = name
+            try:
+                self.client.publish(f"{self.prefix}/event", json.dumps(payload, ensure_ascii=False), retain=False)
+            except Exception:
+                log.exception("Could not publish legacy recognition %s", eid)
         alerts = getattr(self, "alerts", None)
         if alerts is not None:
             try:
@@ -1236,9 +1327,6 @@ class EventProcessor:
             self.recent.appendleft(payload)
         # faceid/event genau einmal pro (Event, Person) — Score-Verbesserungen lösen keine
         # erneute Meldung aus (sonst mehrere Notifications für dieselbe Sichtung)
-        if actionable and self.client and st.get("announced") != name:
-            st["announced"] = name
-            self.client.publish(f"{self.prefix}/event", json.dumps(payload, ensure_ascii=False))
         self.present.setdefault(st["camera"], {})[name] = time.time()
         self._publish_presence(st["camera"], last=payload)
 
@@ -1489,10 +1577,10 @@ class EventProcessor:
             "name": "Recognition event",
             "unique_id": f"{self.prefix}_recognition_event",
             "object_id": f"{self.prefix}_recognition_event",
-            "state_topic": f"{self.prefix}/v1/events",
+            "state_topic": f"{self.prefix}/v1/recognitions",
             "event_types": ["recognized", "unknown", "ambiguous", "no_face", "ignored", "spoof_suspected", "liveness_unconfirmed"],
             "value_template": "{{ value_json.decision }}",
-            "json_attributes_topic": f"{self.prefix}/v1/events",
+            "json_attributes_topic": f"{self.prefix}/v1/recognitions",
             "availability_topic": f"{self.prefix}/status",
             "icon": "mdi:face-recognition",
             "device": device,
@@ -1533,11 +1621,11 @@ class EventProcessor:
             for decision in ("recognized", "unknown", "ambiguous", "no_face"):
                 trigger = {
                     "automation_type": "trigger",
-                    "topic": f"{self.prefix}/v1/events",
+                    "topic": f"{self.prefix}/v1/recognitions",
                     "type": decision,
                     "subtype": cam,
                     "payload": decision,
-                    "value_template": "{{ value_json.decision }}",
+                    "value_template": "{{ value_json.decision if value_json.camera == " + json.dumps(cam, ensure_ascii=False) + " else '' }}",
                     "device": device,
                 }
                 self.client.publish(

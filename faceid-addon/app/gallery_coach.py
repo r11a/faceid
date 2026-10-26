@@ -1,10 +1,40 @@
 """Explainable reference-gallery audit used by the learning wizard."""
 from __future__ import annotations
 
+from copy import deepcopy
+import json
 from pathlib import Path
+import threading
 
 import cv2
 import numpy as np
+
+
+_cache_init_lock = threading.Lock()
+
+
+def _file_signature(path: Path) -> tuple | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
+
+
+def _report_signature(gallery, people: dict) -> tuple:
+    # Stat references on every request so replacements/removals are visible
+    # immediately without decoding images or loading embedding arrays again.
+    return (str(gallery.persons_dir), tuple(
+        (
+            slug, person["name"], tuple(person.get("files") or []),
+            json.dumps(person.get("sources") or {}, sort_keys=True),
+            tuple(_file_signature(gallery.persons_dir / slug / file)
+                  for file in (person.get("files") or [])),
+            _file_signature(gallery.persons_dir / slug / "embeddings.npy"),
+            _file_signature(gallery.persons_dir / slug / "meta.json"),
+        )
+        for slug, person in people.items()
+    ))
 
 
 def _image_metrics(path: Path) -> tuple[float, float]:
@@ -18,7 +48,27 @@ def _image_metrics(path: Path) -> tuple[float, float]:
 
 def gallery_coach_report(gallery) -> dict:
     """Rank references by measurable clarity, exposure and added diversity."""
-    people = gallery.persons()
+    # Keep one report on its owning gallery, not a process-wide identity cache.
+    # The separate lock also coalesces concurrent UI polls without holding the
+    # gallery's recognition/mutation lock during image processing.
+    with _cache_init_lock:
+        if not hasattr(gallery, "_coach_report_lock"):
+            gallery._coach_report_lock = threading.Lock()
+    with gallery._coach_report_lock:
+        people = gallery.persons()
+        signature = _report_signature(gallery, people)
+        cached = getattr(gallery, "_coach_report_cache", None)
+        if cached is not None and cached[0] == signature:
+            return deepcopy(cached[1])
+        gallery._coach_report_cache = None
+        report = _build_report(gallery, people)
+        # Do not retain a mixed snapshot if the gallery changed during the audit.
+        if _report_signature(gallery, gallery.persons()) == signature:
+            gallery._coach_report_cache = (signature, deepcopy(report))
+        return report
+
+
+def _build_report(gallery, people: dict) -> dict:
     reports = []
     for slug, person in people.items():
         files = list(person.get("files") or [])
