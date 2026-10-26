@@ -74,7 +74,7 @@ class GuestAndSiteTests(unittest.TestCase):
         html = (root / "static" / "index.html").read_text(encoding="utf-8")
         source = (root / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
         advanced = (root / "frontend" / "src" / "pages" / "Advanced.jsx").read_text(encoding="utf-8")
-        self.assertIn("faceid-6.4.11.js", html)
+        self.assertIn("faceid-6.5.0.js", html)
         self.assertIn('guests: { title: "אורחים"', source)
         self.assertIn('"routes", "מסלולים ומפה"', advanced)
         self.assertIn("visits?days=30", advanced)
@@ -90,9 +90,11 @@ class GuestAndSiteTests(unittest.TestCase):
             "home", "review", "events", "people", "live", "health", "advanced"
         ):
             self.assertIn(f"{section}:", source)
-        self.assertIn('"למומחים"', source)
+        self.assertIn('"כלים מתקדמים"', source)
         self.assertIn('"learning", "calibration", "advanced"', source)
-        self.assertIn("drawer", source)
+        self.assertIn('aria-label="אזורים ראשיים"', source)
+        for workspace in ("activity", "people", "cameras", "management"):
+            self.assertIn(f'id: "{workspace}"', source)
         self.assertRegex(daily, r"import[\s\S]*?UserPlus[\s\S]*?from \"lucide-react\"")
         for role in ("observation", "entry", "exit", "entry_exit", "restricted", "intercom"):
             self.assertIn(f'{role}:', security)

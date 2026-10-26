@@ -3,8 +3,8 @@ import { act, create } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HealthPage } from "./pages/Management.jsx";
-import { EventModal } from "./pages/Daily.jsx";
-import { ToastProvider, useToast } from "./ui.jsx";
+import { EventModal, EventsPage } from "./pages/Daily.jsx";
+import { ActionGroup, ActionsMenu, ToastProvider, useToast } from "./ui.jsx";
 import { useResource } from "./hooks.js";
 import { api } from "./api.js";
 
@@ -38,6 +38,17 @@ describe("actual health contract", () => {
 });
 
 describe("HTTP ingress reviews", () => {
+  it("keeps event rows as a single button with a noninteractive thumbnail", () => {
+    resources({ users: { users: [{ name: "Test", slug: "test", watchlist: "black" }] },
+      "activity?": { events: [{ event_id: "row-1", status: "recognized", person: "Test", camera: "Door", start_ts: 1, score: .8 }] } });
+    const html = renderToStaticMarkup(<EventsPage />);
+    expect(html).toContain('class="event-row blacklist-outline"');
+    expect(html).toContain('<span class="event-thumb"');
+    expect(html).not.toContain('<button class="event-thumb"');
+    expect(html).toContain('aria-label="מתאריך"');
+    expect(html).toContain('aria-label="עד תאריך"');
+  });
+
   it("adds an explicitly chosen event face through enrollment, not the audit-label API", async () => {
     resources({ "audit/e1": { event: { status: "unknown", event_id: "e1" } },
       "faces/event/e1/references?": { candidates: [{ token: "selected-face", usable: true }] } });
@@ -73,5 +84,32 @@ describe("HTTP ingress reviews", () => {
     button = renderer.root.findAllByType("button").find(x => x.children.includes("זה אדם לא מוכר"));
     expect(button.props.disabled).toBe(false);
     expect(JSON.stringify(renderer.toJSON())).toContain("אינו מוסיף תמונת פנים");
+  });
+});
+
+
+describe("shared secondary actions", () => {
+  it("keeps the primary action visible and opens the others only on demand", async () => {
+    const primary = vi.fn(), secondary = vi.fn();
+    await act(() => { renderer = create(<ActionGroup><><button onClick={secondary}>Search</button><button className="button primary" onClick={primary}>Add person</button></></ActionGroup>); });
+    expect(renderer.root.findAllByProps({ role: "menu" })).toHaveLength(0);
+    expect(renderer.root.findAllByType("button").map(node => node.children.filter(x => typeof x === "string").join(""))).toContain("Add person");
+    const trigger = renderer.root.findByProps({ "aria-haspopup": "menu" });
+    await act(() => trigger.props.onClick());
+    expect(trigger.props["aria-expanded"]).toBe(true);
+    const action = renderer.root.findByProps({ role: "menuitem" });
+    await act(() => action.props.onClick());
+    expect(secondary).toHaveBeenCalledOnce(); expect(primary).not.toHaveBeenCalled();
+    await act(() => renderer.root.findByProps({ role: "menu" }).props.onClick({ target: { closest: () => ({}) } }));
+    expect(renderer.root.findAllByProps({ role: "menu" })).toHaveLength(0);
+  });
+  it("closes with Escape without closing the surrounding dialog", async () => {
+    await act(() => { renderer = create(<ActionsMenu><button disabled>Unavailable</button><button>Settings</button></ActionsMenu>); });
+    await act(() => renderer.root.findByProps({ "aria-haspopup": "menu" }).props.onClick());
+    const event = { key: "Escape", currentTarget: { querySelectorAll: () => [] }, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    vi.stubGlobal("document", { activeElement: null });
+    await act(() => renderer.root.findByProps({ role: "menu" }).props.onKeyDown(event));
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
+    expect(renderer.root.findAllByProps({ role: "menu" })).toHaveLength(0);
   });
 });

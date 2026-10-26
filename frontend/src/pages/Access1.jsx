@@ -122,8 +122,7 @@ export function Access1Page() {
   if(status.loading)return <Loading />;
   if(status.error)return <ErrorState error={status.error} retry={status.reload} />;
   return <div dir={lang==='he'?'rtl':'ltr'}>
-    <button type="button" className="button secondary" onClick={()=>setLang(lang==='he'?'en':'he')}>{lang==='he'?'English':'עברית'}</button>
-    <PageHeader eyebrow="Access1" title={tr("Connect Access1","חיבור Access1")} description={tr("FaceID identifies. Access1 decides.","FaceID מזהה. Access1 מחליט.")} />
+    <PageHeader eyebrow="Access1" title={tr("Connect Access1","חיבור Access1")} description={tr("FaceID identifies. Access1 decides.","FaceID מזהה. Access1 מחליט.")} actions={<button type="button" className="button secondary" onClick={()=>setLang(lang==='he'?'en':'he')}>{lang==='he'?'English':'עברית'}</button>} />
     <Panel>
       <Badge tone={connected?'success':'warning'}>
         {connected?tr('Connected','מחובר'):step==='review'?tr('Waiting for Access1 approval','ממתין לאישור Access1'):connection.loading?tr('Checking connection…','בודק חיבור…'):status.data.enabled?tr('Connection unavailable','החיבור אינו זמין'):tr('Setup','הגדרה')}

@@ -1,5 +1,17 @@
 # Changelog
 
+## 6.5.0 — 2026-10-26
+
+- Adopt a HOMEii/Linear-inspired workspace with graphite surfaces, restrained orange accents, thin borders and bundled Hebrew Heebo fonts; retain light/dark preferences.
+- Replace the long sidebar with four task areas: activity, people, cameras and management. Preserve every existing route, direct link and advanced tool.
+- Match the Analytics menu reference with outlined top navigation, colored circular topic icons and a two-column management directory.
+- Group secondary header/person actions under a shared ellipsis menu with keyboard navigation and viewport-aware positioning. Keep one concise page information line and give photos/video more space.
+- Add keyboard-accessible screen search (Ctrl/Cmd+K), focus containment/restoration and safe theme fallback when browser storage is unavailable.
+- Simplify recent detections, person selection and last-location rails while retaining immediate video, chronological history and confirmed blacklist outlines.
+- Clarify reference images versus assigned detections, make review actions easier to distinguish and label similarity as match level.
+- Improve mobile controls, dense people/event layouts, modal presentation and reduced-motion support.
+- Preserve recognition models, camera settings, access policies, API contracts and live-site configuration.
+
 ## 6.4.11 — 2026-10-26
 
 - Integrate the consolidated 6.4.0-to-6.4.11 developer handoff while retaining the existing gallery, alerts, pairing and authorization boundaries.
