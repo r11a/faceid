@@ -50,10 +50,11 @@ background at startup, or with **Scan available historical images**. Deleted ima
 cannot be reconstructed. Face crops share the configured evidence retention policy;
 vectors stay with the audit history and are removed when that history is purged.
 
-**Access1 connection is available in 6.4.0.** Pair through HA ingress using a
+**Access1 connection is available; 6.4.11 adds live capture and status updates.** Pair through HA ingress using a
 one-time code from compatible Access1, then manage all people/reader mappings and
 permissions in Access1. Requests require fresh authenticated camera evidence and
-confirmed liveness. See [setup and recovery](docs/access1.md).
+confirmed liveness. Secure defaults ON; only an HA administrator may explicitly
+approve its certificate-admission exception. See [setup and recovery](docs/access1.md).
 
 ## FaceID 6.0: a focused product interface for homes and offices
 

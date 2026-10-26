@@ -51,6 +51,7 @@ class SecureHighResolutionTests(unittest.TestCase):
         processor.events["event-1"] = processor._new_event_state(
             "event-1", "door", start_time=10,
         )
+        processor.events["event-1"]["access1_evidence_ts"] = 1234.0
         processor._process_face = Mock()
         quality = SimpleNamespace(usable=True, score=.9)
         with patch("app.mqtt_listener.measure_face_quality", return_value=quality):
@@ -60,8 +61,9 @@ class SecureHighResolutionTests(unittest.TestCase):
         self.assertEqual(frigate.snapshot_calls, [])
         self.assertEqual(
             processor._process_face.call_args.kwargs["source"],
-            "secure_live_hires",
+            "recording",
         )
+        self.assertIsNone(processor.events["event-1"]["access1_evidence_ts"])
 
 
 if __name__ == "__main__":

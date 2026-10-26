@@ -1,5 +1,8 @@
 """Minimaler Frigate-HTTP-Client: Snapshot-Crops holen, sub_label setzen."""
 import logging
+import warnings
+from urllib3.exceptions import InsecureRequestWarning
+import time
 from urllib.parse import quote
 
 import cv2
@@ -7,6 +10,11 @@ import numpy as np
 import requests
 
 log = logging.getLogger("faceid.frigate")
+
+# Keep the warning visible once per message/location rather than on every
+# snapshot request. This does not modify Session.verify or authentication.
+warnings.filterwarnings("default", category=InsecureRequestWarning,
+                        module=r"urllib3\.connectionpool")
 
 
 class FrigateAPI:
@@ -35,6 +43,7 @@ class FrigateAPI:
                 f"{self.base}/api/login",
                 json={"user": self.username, "password": self.password},
                 timeout=self.timeout,
+                verify=self.session.verify,
             )
             self._authenticated = response.status_code in (200, 202)
             if not self._authenticated:
@@ -49,6 +58,8 @@ class FrigateAPI:
         if self.username and not self._authenticated:
             self._login()
         kwargs.setdefault("timeout", self.timeout)
+        # Preserve the configured setting when Requests merges environment CA defaults.
+        kwargs["verify"] = self.session.verify
         response = self.session.request(method, f"{self.base}{path}", **kwargs)
         if response.status_code == 401 and self.username and self._login():
             response.close()
@@ -60,18 +71,24 @@ class FrigateAPI:
     def connection_status(self) -> dict:
         result = {
             "url": self.base,
-            "authenticated": bool(self.username),
-            "tls_verified": bool(self.verify_tls),
+            "credentials_configured": bool(self.username and self.password),
+            "authenticated": False,
+            "tls_verified": False,
+            "tls_verification_enabled": bool(self.session.verify),
             "secure_mode": self.secure_mode,
             "reachable": False,
         }
         try:
             response = self.request("GET", "/api/profile", timeout=self.timeout)
             result["reachable"] = response.status_code == 200
+            result["authenticated"] = bool(result["reachable"] and self._authenticated)
+            result["tls_verified"] = bool(result["reachable"] and self.secure_mode and self.session.verify)
             result["http_status"] = response.status_code
             response.close()
         except requests.RequestException as exc:
-            result["error"] = str(exc)[:160]
+            result["error"] = ("TLS certificate verification failed" if isinstance(exc, requests.exceptions.SSLError)
+                               else "Frigate connection timed out" if isinstance(exc, requests.exceptions.Timeout)
+                               else "Frigate connection failed")
         return result
 
     def snapshot(self, event_id: str, crop: bool = True) -> np.ndarray | None:
@@ -89,6 +106,44 @@ class FrigateAPI:
         except requests.RequestException as e:
             log.warning("snapshot %s failed: %s", event_id, e)
             return None
+
+    def live_event_frame(self, event_id: str) -> np.ndarray | None:
+        """Read an active event's full detect frame, never an archived snapshot.
+
+        The caller must supply and retain the MQTT snapshot.frame_time as a
+        conservative capture-time bound. HTTP receipt time is NOT capture time.
+        Frigate marks active responses no-store, completed snapshots cacheable.
+        """
+        started = time.monotonic()
+        r = None
+        reason = "unknown"
+        try:
+            r = self.request(
+                "GET", f"/api/events/{quote(event_id, safe='')}/snapshot.jpg",
+                params={"crop": 0, "timestamp": 0, "bbox": 0, "quality": 100},
+                headers={"Cache-Control": "no-cache, no-store"}, timeout=2.0,
+            )
+            cache = {part.strip().lower() for part in r.headers.get("Cache-Control", "").split(",")}
+            if r.status_code != 200:
+                reason = f"http_{r.status_code}"
+            elif "no-store" not in cache or r.headers.get("Age", "0") != "0":
+                reason = "not_confirmed_active"
+            elif not r.content or len(r.content) > 20_000_000:
+                reason = "empty_or_oversized_image"
+            else:
+                img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+                if img is not None:
+                    return img
+                reason = "invalid_image"
+        except requests.RequestException as exc:
+            reason = type(exc).__name__
+        finally:
+            if r is not None:
+                r.close()
+        # Never log URLs, cookies, credentials or the response body.
+        log.info("live event frame %s unavailable: %s elapsed=%.3fs",
+                 event_id, reason, time.monotonic() - started)
+        return None
 
     def latest_frame_bytes(self, camera: str) -> bytes | None:
         """Fetch Frigate's current camera frame without exposing its credentials."""
@@ -123,14 +178,14 @@ class FrigateAPI:
             log.debug("event metadata %s failed: %s", event_id, exc)
             return None
 
-    def recording_frame(self, camera: str, ts: float) -> np.ndarray | None:
+    def recording_frame(self, camera: str, ts: float, *, timeout: float | None = None) -> np.ndarray | None:
         """Frame aus der AUFNAHME holen (volle Kamera-Auflösung statt Detect-Stream).
         Deutlich schärfere Gesichter, dafür langsamer — nur fürs Enrollment gedacht."""
         url = f"{self.base}/api/{camera}/recordings/{ts}/snapshot.jpg"
         try:
             r = self.request(
                 "GET", f"/api/{camera}/recordings/{ts}/snapshot.jpg",
-                timeout=self.timeout * 4,
+                timeout=self.timeout * 4 if timeout is None else timeout,
             )
             if r.status_code != 200 or not r.content:
                 return None

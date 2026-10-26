@@ -3,15 +3,64 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, create } from "react-test-renderer";
 import { EventVideo } from "./EventVideo.jsx";
+import { api } from "./api.js";
 import { ClipSequence } from "./pages/Home.jsx";
 
 vi.mock("./api.js", () => ({ assetUrl: path => `/ingress/${path}`, query: () => "", api: vi.fn() }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let renderer;
-afterEach(async () => { if (renderer) await act(() => renderer.unmount()); renderer = null; });
+afterEach(async () => { if (renderer) await act(() => renderer.unmount()); renderer = null; vi.useRealTimers(); api.mockReset(); });
 
 describe("event playback", () => {
+  it("retries only fresh recording readiness and stops after three automatic attempts", async () => {
+    vi.useFakeTimers();
+    api.mockResolvedValue({ retryable: true, message: "Recording segments not ready (HTTP 400)" });
+    await act(() => { renderer = create(<EventVideo eventId="fresh" />); });
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await act(async () => { renderer.root.findByType("video").props.onError(); });
+      expect(JSON.stringify(renderer.toJSON())).toContain("HTTP 400");
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    }
+    expect(api).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(1);
+  });
+
+  it("shows a permission failure without retrying it", async () => {
+    vi.useFakeTimers();
+    api.mockResolvedValue({ retryable: false, message: "Camera permission denied (HTTP 403)" });
+    await act(() => { renderer = create(<EventVideo eventId="restricted" />); });
+    await act(async () => { renderer.root.findByType("video").props.onError(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(20000); });
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(renderer.toJSON())).toContain("HTTP 403");
+  });
+
+  it("cancels a scheduled recording retry when playback is closed", async () => {
+    vi.useFakeTimers();
+    api.mockResolvedValue({ retryable: true, message: "Recording not ready" });
+    await act(() => { renderer = create(<EventVideo eventId="closing" />); });
+    await act(async () => renderer.root.findByType("video").props.onError());
+    expect(vi.getTimerCount()).toBe(1);
+    await act(() => renderer.unmount()); renderer = null;
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20000); });
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a diagnostic response that arrives after playback closes", async () => {
+    vi.useFakeTimers();
+    let resolveStatus;
+    api.mockImplementation(() => new Promise(resolve => { resolveStatus = resolve; }));
+    await act(() => { renderer = create(<EventVideo eventId="pending" />); });
+    await act(() => renderer.root.findByType("video").props.onError());
+    await act(() => renderer.unmount()); renderer = null;
+    await act(async () => resolveStatus({ retryable: true, message: "Recording not ready" }));
+    expect(vi.getTimerCount()).toBe(0);
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+
   it("reports an unavailable clip once per attempt and retries without skipping direct playback", async () => {
     const unavailable = vi.fn();
     await act(() => { renderer = create(<EventVideo eventId="missing" nextEventId="next" onUnavailable={unavailable} />); });

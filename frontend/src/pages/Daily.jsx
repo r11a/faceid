@@ -8,7 +8,7 @@ import { api, assetUrl, query } from "../api.js";
 import { useResource } from "../hooks.js";
 import { Badge, Empty, ErrorState, Loading, Metric, Modal, PageHeader, Panel, dateTime, decision, percent, relativeTime, useToast } from "../ui.jsx";
 
-import { FaceExplorer } from "./Faces.jsx";
+import { FaceExplorer, HistoryReferenceChooser } from "./Faces.jsx";
 import { isBlacklistedEvent } from "../alerts.js";
 import { EventVideo } from "../EventVideo.jsx";
 
@@ -22,16 +22,17 @@ function EventThumb({ event, onClick }) {
 }
 
 export function EventModal({ eventId, people, onClose, onChanged }) {
-  const detail = useResource(`audit/${encodeURIComponent(eventId)}`);
+  const detail = useResource(`audit/${encodeURIComponent(eventId)}`, { poll: 3000 });
   const references = useResource(`activity/${encodeURIComponent(eventId)}/references`);
   const [clip, setClip] = useState(true);
   const [label, setLabel] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [showFaces, setShowFaces] = useState(false);
+  const [enroll, setEnroll] = useState(false);
   const toast = useToast();
   const saveLabel = async (value) => {
-    if (!value) return;
+    if (!value || detail.data?.event?.status === "processing") return;
     try {
       await api(`audit/${eventId}/ground-truth`, { method: "POST", body: JSON.stringify({ label: value }) });
       toast("האימות נשמר וישמש למדידת הדיוק"); onChanged?.(); onClose();
@@ -55,6 +56,7 @@ export function EventModal({ eventId, people, onClose, onChanged }) {
   };
   const event = detail.data?.event || {};
   const predicted = event.person || event.probable_person;
+  const processing = event.status === "processing";
   const info = decision[event.status] || [event.status || "לא ידוע", "neutral"];
   return <Modal title="בדיקת אירוע" subtitle={`${dateTime(event.start_ts || event.updated_ts)} · ${event.camera || "מצלמה לא ידועה"}`} onClose={onClose} wide>
     <div className="event-review-layout">
@@ -71,8 +73,10 @@ export function EventModal({ eventId, people, onClose, onChanged }) {
           <div><Sparkles /><span><b>הקשר AI</b><small>{event.ai_description || "לא הופעל או שאין תיאור"}</small></span></div>
         </div>
         {references.data?.references?.length > 0 && <div><h4>תמונות ייחוס</h4><div className="reference-strip">{references.data.references.map((item) => <img src={assetUrl(item.url)} alt={item.caption} key={item.url} />)}</div></div>}
-        <div className="verify-box"><h4>מי באמת הופיע?</h4>{predicted && <button className="button success" onClick={() => saveLabel(predicted)}><Check />אשר: זה {predicted}</button>}<button className="button secondary" onClick={() => saveLabel("__unknown__")}><X />זה אדם לא מוכר</button><div className="inline-form"><select value={label} onChange={(e) => setLabel(e.target.value)}><option value="">בחר אדם אחר…</option>{people.map((person) => <option value={person.name} key={person.slug}>{person.name}</option>)}</select><button className="button secondary" disabled={!label} onClick={() => saveLabel(label)}>שמור בחירה</button></div><button className="text-button" onClick={undo}>בטל אימות אחרון</button></div>
+        <div className="verify-box"><h4>מי באמת הופיע?</h4><p>האימות מתעד את תוצאת האירוע; הוא אינו מוסיף תמונת פנים לגלריה. להוספת פנים לאדם, השתמש בגלריה או בחיפוש פנים.</p>{processing && <p role="status">האירוע עדיין בעיבוד. אפשר לאמת לאחר סיום העיבוד; המצב מתעדכן אוטומטית.</p>}{predicted && <button className="button success" disabled={processing} onClick={() => saveLabel(predicted)}><Check />אשר: זה {predicted}</button>}<button className="button secondary" disabled={processing} onClick={() => saveLabel("__unknown__")}><X />זה אדם לא מוכר</button><div className="inline-form"><select value={label} onChange={(e) => setLabel(e.target.value)}><option value="">בחר אדם אחר…</option>{people.map((person) => <option value={person.name} key={person.slug}>{person.name}</option>)}</select><button className="button secondary" disabled={!label || processing} onClick={() => saveLabel(label)}>שמור בחירה</button></div><button className="text-button" onClick={undo}>בטל אימות אחרון</button></div>
         <button className="button primary full" onClick={() => setShowFaces(!showFaces)}><Search />כל ההופעות של הפנים</button>
+        <button className="button secondary full" disabled={!label || processing} onClick={() => setEnroll(true)}><UserPlus />בחר תמונות פנים להוספה לאדם שנבחר</button>
+        {enroll && <HistoryReferenceChooser event={{ ...event, event_id: eventId }} person={people.find(person => person.name === label)?.slug} onClose={() => setEnroll(false)} onAdded={() => onChanged?.()} />}
         {showFaces && <FaceExplorer source={{ event_id: eventId }} />}
         <details><summary>כלי זיהוי מתקדמים</summary>
         <button className="button secondary full" disabled={testing} onClick={runTest}><Sparkles />{testing ? "בודק שלוש שכבות…" : "בדיקה מתקדמת: פנים, גוף ו־AI"}</button>

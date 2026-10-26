@@ -1,5 +1,18 @@
 # Changelog
 
+## 6.4.11 — 2026-10-26
+
+- Integrate the consolidated 6.4.0-to-6.4.11 developer handoff while retaining the existing gallery, alerts, pairing and authorization boundaries.
+- Honor explicit Frigate TLS verification settings and report actual Frigate/MQTT connection status.
+- Add an HA-admin-only persistent Secure control (ON by default). OFF requires explicit risk acknowledgement and relaxes only Frigate certificate admission; HTTPS, authentication, identity, liveness, freshness and Access1 policy remain required.
+- Synchronize Secure status with compatible Access1 and refresh connection status through read-only checks; no identity or door request is replayed.
+- Acquire active event frames with original MQTT capture timestamps, reject stale/ended/duplicate evidence, and accumulate eligible identity observations during required liveness warmup.
+- Prioritize live model work across detection, liveness and embedding; defer embedding until candidate eligibility. Add optional CPU-only thread/spinning tuning with existing defaults preserved.
+- Improve review refresh, explicit reference selection, HTTP-ingress notification compatibility and bounded video readiness retries.
+- Exclude temporary bench identity traces and per-frame profiling; retain operational failures, bounded health metrics and audit records.
+- Block legacy recording-derived access evidence without changing ordinary recording recognition or enrollment.
+- No camera settings, security choices or live installation data are changed by this release. Model weights, recognition thresholds and liveness confirmation requirements are unchanged.
+
 ## 6.4.0 — 2026-10-22
 
 - Merge the Access1 identity connector and HA administrator pairing wizard without replacing FaceID 6.3.0 recognition, enrollment, alerts or video behavior.

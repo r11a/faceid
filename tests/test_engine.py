@@ -114,10 +114,11 @@ class EnginePackageContractTests(unittest.TestCase):
 
         # Explicit opt-in: never download models during the normal test suite.
         root = Path(os.environ["FACEID_ENGINE_MODEL_ROOT"]).resolve()
-        self.assertTrue((root / "models/buffalo_l/det_10g.onnx").is_file())
-        self.assertTrue((root / "models/buffalo_l/w600k_r50.onnx").is_file())
+        if not all((root / "models/buffalo_l" / filename).is_file()
+                   for filename in ("det_10g.onnx", "w600k_r50.onnx")):
+            self.skipTest("cached buffalo_l detector/recognition models unavailable")
         with patch("insightface.app.FaceAnalysis", partial(FaceAnalysis, root=str(root))):
-            engine = FaceEngine(backend="cpu")
+            engine = FaceEngine(backend="cpu", cpu_threads=2, cpu_allow_spinning=False)
         image = cv2.imread(str(Path(insightface.__file__).parent / "data/images/t1.jpg"))
         faces = engine.faces(image)
         self.assertEqual(len(faces), 6)
@@ -135,10 +136,27 @@ class EnginePackageContractTests(unittest.TestCase):
             self.assertEqual(face.normed_embedding.shape, (512,))
             self.assertTrue(np.isfinite(face.normed_embedding).all())
             self.assertAlmostEqual(float(np.linalg.norm(face.normed_embedding)), 1., places=5)
+        deferred = engine.detect_faces(image)
+        self.assertEqual(len(deferred), 6)
+        self.assertTrue(all(face.embedding is None for face in deferred))
+        for ordinary, selected in zip(faces, deferred):
+            np.testing.assert_allclose(selected.bbox, ordinary.bbox, atol=1e-5, rtol=1e-6)
+            np.testing.assert_allclose(selected.kps, ordinary.kps, atol=1e-5, rtol=1e-6)
+            self.assertAlmostEqual(float(selected.det_score), float(ordinary.det_score), places=6)
+            engine.embed_face(image, selected)
+            np.testing.assert_allclose(
+                selected.normed_embedding, ordinary.normed_embedding, atol=1e-6, rtol=1e-5,
+            )
         self.assertEqual(set(engine.app.models), {"detection", "recognition"})
         self.assertEqual(engine.app.addons, {})
         self.assertEqual(engine.health()["models"]["recognition"]["providers"], ["CPUExecutionProvider"])
-        self.assertEqual(engine.health()["inference"]["calls"], 1)
+        for model in engine.app.models.values():
+            self.assertEqual(model.session.get_providers(), ["CPUExecutionProvider"])
+            options = model.session.get_session_options()
+            self.assertEqual(options.intra_op_num_threads, 2)
+            for setting in ("session.intra_op.allow_spinning", "session.inter_op.allow_spinning"):
+                self.assertEqual(options.get_session_config_entry(setting), "0")
+        self.assertEqual(engine.health()["inference"]["calls"], 2)
 
 
 if __name__ == "__main__":
