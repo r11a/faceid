@@ -3,6 +3,8 @@ import { AlertCircle, CheckCircle2, Info, LoaderCircle, MoreHorizontal, X } from
 
 const ToastContext = createContext(() => {});
 let toastSequence = 0;
+let modalScrollLocks = 0;
+let previousBodyOverflow = "";
 
 export function ToastProvider({ children }) {
   const [items, setItems] = useState([]);
@@ -113,6 +115,16 @@ export function Metric({ icon: Icon, label, value, note, tone = "green" }) {
 }
 
 export function Modal({ title, subtitle, children, onClose, wide = false }) {
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    if (modalScrollLocks++ === 0) {
+      previousBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
+    return () => {
+      if (--modalScrollLocks === 0) document.body.style.overflow = previousBodyOverflow;
+    };
+  }, []);
   useEffect(() => {
     const close = (event) => event.key === "Escape" && onClose();
     window.addEventListener("keydown", close);

@@ -1,5 +1,13 @@
 # Changelog
 
+## 6.5.2 — 2026-10-26
+
+- Make person profiles event-first with a photo grid/list switch, newest-first timeline, compact identity summary and separate reference management tab. Preserve explicit reference enrollment.
+- Show three person cards per row on wide screens with an optional list, compact status and secondary actions.
+- Fall back to existing event snapshots when historical face crops are unavailable; retain bounded image retries.
+- Collapse timeline filters and reference actions, normalize checkbox/radio sizing across forms, fix switch dimensions and semantics, and group camera controls without changing security policies.
+- Improve responsive wrapping of settings, camera names and Home Assistant entity identifiers.
+
 ## 6.5.1 — 2026-10-26
 
 - Publish confirmed identity immediately on non-retained `PREFIX/v1/recognitions`; HA recognition events and camera triggers use it without waiting for event end. Preserve the final enriched `v1/events` topic.
