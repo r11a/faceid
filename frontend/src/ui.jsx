@@ -2,11 +2,12 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2, Info, LoaderCircle, X } from "lucide-react";
 
 const ToastContext = createContext(() => {});
+let toastSequence = 0;
 
 export function ToastProvider({ children }) {
   const [items, setItems] = useState([]);
   const notify = (message, kind = "success") => {
-    const id = crypto.randomUUID();
+    const id = ++toastSequence; // UI-only key; works on HTTP Home Assistant ingress too.
     setItems((current) => [...current, { id, message, kind }]);
     window.setTimeout(() => setItems((current) => current.filter((item) => item.id !== id)), 4200);
   };

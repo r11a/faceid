@@ -35,19 +35,12 @@ afterEach(async () => {
 });
 
 describe("Access1 pairing wizard", () => {
-  it.each([
-    ["idle", "Paste the setup code from Access1."],
-    ["review", "Return to Access1 and press Approve connection."],
-  ])("does not claim a configured connection is connected when verification returns %s", async (state, expected) => {
-    resource.data.enabled = true;
-    api.mockImplementation(async path => path === "access1/pairing/admin" ? { administrator: true } : { state });
-    await mount();
-    await click("Check connection");
-    expect(api.mock.calls.map(([path]) => path)).toEqual(["access1/pairing/admin", "access1/pairing/finish"]);
-    const rendered = JSON.stringify(renderer.toJSON());
-    expect(rendered).not.toContain("Next in Access1: cameras in Doors; faces in user cards.");
-    expect(rendered).toContain(expected);
-    expect(resource.reload).not.toHaveBeenCalled();
+  it("checks an existing connection without restarting the pairing wizard",async()=>{
+    resource.data.enabled=true;
+    resource.setData=vi.fn();api.mockResolvedValue({state:'connected',requests_enabled:false});
+    await mount();await click('Check connection');
+    expect(api.mock.calls.map(([path])=>path)).toEqual(['access1/connection']);
+    expect(resource.setData).toHaveBeenCalledWith({state:'connected',requests_enabled:false});
   });
 
   it("keeps setup gated while the administrator check is pending and after denial", async () => {
@@ -121,5 +114,52 @@ describe("Access1 pairing wizard", () => {
     await click("Submit");
     expect(text(renderer.root.findByProps({ role: "alert" }))).toContain(expected);
     expect(JSON.stringify(renderer.toJSON())).not.toContain("PRIVATE_UPSTREAM_TOKEN");
+  });
+});
+
+describe("Secure connector setting",()=>{
+  afterEach(()=>vi.unstubAllGlobals());
+  it("defaults on, shows risk and cancels without saving",async()=>{
+    const confirm=vi.fn(()=>false);vi.stubGlobal('window',{confirm});
+    await mount();
+    const toggle=renderer.root.findByProps({role:'switch'});
+    expect(toggle.props['aria-checked']).toBe(true);
+    await act(async()=>{await toggle.props.onClick();});
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm.mock.calls[0][0]).toContain('unauthorized access request');
+    expect(api).not.toHaveBeenCalled();
+  });
+  it("saves explicit risk approval and leaves off after success",async()=>{
+    vi.stubGlobal('window',{confirm:vi.fn(()=>true)});
+    api.mockResolvedValue({secure:false});await mount();
+    await act(async()=>{await renderer.root.findByProps({role:'switch'}).props.onClick();});
+    expect(api.mock.calls[0][0]).toBe('access1/security');
+    expect(JSON.parse(api.mock.calls[0][1].body)).toEqual({secure:false,risk_acknowledged:true});
+    expect(renderer.root.findByProps({role:'switch'}).props['aria-checked']).toBe(false);
+    expect(text(renderer.root.findByProps({role:'note'}))).toContain('Secure is OFF');
+  });
+  it("keeps on after denial and enables secure without a risk dialog",async()=>{
+    vi.stubGlobal('window',{confirm:vi.fn(()=>true)});
+    api.mockRejectedValue({status:403});await mount();
+    await act(async()=>{await renderer.root.findByProps({role:'switch'}).props.onClick();});
+    expect(renderer.root.findByProps({role:'switch'}).props['aria-checked']).toBe(true);
+    expect(text(renderer.root.findByProps({role:'alert'}))).toContain('administrator');
+    await act(()=>renderer.unmount());renderer=null;
+    resource.data.secure=false;api.mockResolvedValue({secure:true});window.confirm.mockClear();
+    await mount();
+    await act(async()=>{await renderer.root.findByProps({role:'switch'}).props.onClick();});
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(renderer.root.findByProps({role:'switch'}).props['aria-checked']).toBe(true);
+  });
+
+  it("keeps secure on after a failed save without exposing private backend details",async()=>{
+    vi.stubGlobal('window',{confirm:vi.fn(()=>true)});
+    api.mockRejectedValue(Object.assign(new Error('PRIVATE_UPSTREAM_TOKEN'),{status:500}));
+    await mount();
+    await act(async()=>{await renderer.root.findByProps({role:'switch'}).props.onClick();});
+    expect(renderer.root.findByProps({role:'switch'}).props['aria-checked']).toBe(true);
+    expect(text(renderer.root.findByProps({role:'alert'}))).toContain('not saved');
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('PRIVATE_UPSTREAM_TOKEN');
+    expect(resource.reload).not.toHaveBeenCalled();
   });
 });

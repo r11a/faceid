@@ -72,6 +72,8 @@ faceid:
   port: 8600
   mqtt_prefix: $(cfg_json '.mqtt_prefix')
   backend: $(cfg_json '.backend')
+  cpu_threads: $(cfg_json '.cpu_threads // 0')
+  cpu_allow_spinning: $(cfg_json 'if .cpu_allow_spinning == null then true else .cpu_allow_spinning end')
   match_threshold: $(cfg_json '.match_threshold')
   unknown_threshold: $(cfg_json '.unknown_threshold')
   match_margin: $(cfg_json '.match_margin')

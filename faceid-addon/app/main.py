@@ -85,6 +85,8 @@ def main():
     engine = FaceEngine(
         det_size=int(cfg["faceid"].get("det_size", 640)),
         backend=str(cfg["faceid"].get("backend", "auto")),
+        cpu_threads=cfg["faceid"].get("cpu_threads", 0),
+        cpu_allow_spinning=cfg["faceid"].get("cpu_allow_spinning", True),
     )
     gallery = Gallery(data_dir,
                       top_k=int(cfg["faceid"].get("match_top_k", 3)),

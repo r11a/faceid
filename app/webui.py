@@ -11,6 +11,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import requests
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -882,10 +883,64 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             headers={"Cache-Control": "private, max-age=86400"},
         )
 
+    def frigate_clip_response(event_id, headers):
+        from urllib.parse import quote
+        try:
+            upstream = processor.frigate.request(
+                "GET", f"/api/events/{quote(event_id, safe='')}/clip.mp4",
+                headers=headers, stream=True,
+                timeout=(processor.frigate.timeout, processor.frigate.timeout * 8),
+            )
+            if upstream.status_code == 404 and hasattr(processor.frigate, "event"):
+                upstream.close()
+                metadata = processor.frigate.event(event_id)
+                # Preserve the recording fallback for this exact finished event.
+                # An ongoing event has no bounded recording clip yet.
+                if metadata and metadata.get("camera") and metadata.get("start_time") and metadata.get("end_time"):
+                    start = max(0.0, float(metadata["start_time"]) - 2.0)
+                    end = float(metadata["end_time"]) + 2.0
+                    if end > start:
+                        camera = quote(str(metadata["camera"]), safe="")
+                        upstream = processor.frigate.request(
+                            "GET", f"/api/{camera}/start/{start:.3f}/end/{end:.3f}/clip.mp4",
+                            headers=headers, stream=True,
+                            timeout=(processor.frigate.timeout, processor.frigate.timeout * 8),
+                        )
+        except requests.exceptions.SSLError as exc:
+            raise HTTPException(502, "Frigate TLS certificate verification failed") from exc
+        except requests.exceptions.Timeout as exc:
+            raise HTTPException(504, "Frigate clip preparation timed out; retry after the event has finished") from exc
+        except requests.RequestException as exc:
+            raise HTTPException(502, "Frigate clip connection failed") from exc
+        return upstream
+
     @app.get("/api/activity/{event_id}/clip/status")
-    def activity_clip_status(event_id: str, prepare: bool = False):
+    def activity_clip_status(event_id: str, prepare: bool = False, probe: bool = False):
         if processor.audit is None or processor.audit.event_detail(event_id) is None:
             raise HTTPException(404, "Unknown event")
+        if probe:
+            if processor.media_store is not None and processor.media_store.cached_clip_path(event_id) is not None:
+                return {"cached": True, "ready": True, "retryable": False,
+                        "message": "FaceID has a cached clip. Check browser codec support and the HA ingress connection if playback fails."}
+            # Inspect the exact playback endpoint, reading no video body and exposing no credentials.
+            upstream = frigate_clip_response(event_id, {"Accept-Encoding": "identity", "Range": "bytes=0-0"})
+            code = upstream.status_code
+            upstream.close()
+            messages = {
+                400: "Frigate has no ready recording segments for this event time window (HTTP 400).",
+                401: "Frigate rejected the FaceID login for clip access (HTTP 401).",
+                403: "The FaceID Frigate account is not allowed to read this camera clip (HTTP 403).",
+                404: "Frigate has no playable clip for this event yet, or its recordings have expired (HTTP 404).",
+                416: "Frigate rejected the requested video byte range (HTTP 416).",
+            }
+            ready = code in (200, 206)
+            message = ("Frigate supplies the clip. Retry playback; if it still fails, check browser codec support and the HA ingress connection."
+                       if ready else messages.get(code, f"Frigate clip request failed (HTTP {code})."))
+            detail = processor.audit.event_detail(event_id)["event"]
+            end = detail.get("end_ts")
+            recent = detail.get("status") == "processing" or (isinstance(end, (int, float)) and 0 <= time.time() - end < 90)
+            return {"upstream_http": code, "ready": ready, "message": message,
+                    "retryable": code in (400, 404) and recent}
         if processor.media_store is None:
             return {"cached": False, "has_clip": None, "legacy_stream": True}
         status = processor.media_store.status(event_id)
@@ -922,38 +977,23 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         for name in ("Range", "If-Range"):
             if request.headers.get(name):
                 headers[name] = request.headers[name]
-        try:
-            upstream = processor.frigate.request(
-                "GET", f"/api/events/{quote(event_id, safe='')}/clip.mp4",
-                headers=headers, stream=True,
-                timeout=(processor.frigate.timeout, processor.frigate.timeout * 8),
-            )
-            if upstream.status_code == 404 and hasattr(processor.frigate, "event"):
-                upstream.close()
-                metadata = processor.frigate.event(event_id)
-                # Preserve the recording fallback for this exact finished event.
-                # An ongoing event has no bounded recording clip yet.
-                if metadata and metadata.get("camera") and metadata.get("start_time") and metadata.get("end_time"):
-                    start = max(0.0, float(metadata["start_time"]) - 2.0)
-                    end = float(metadata["end_time"]) + 2.0
-                    if end > start:
-                        camera = quote(str(metadata["camera"]), safe="")
-                        upstream = processor.frigate.request(
-                            "GET", f"/api/{camera}/start/{start:.3f}/end/{end:.3f}/clip.mp4",
-                            headers=headers, stream=True,
-                            timeout=(processor.frigate.timeout, processor.frigate.timeout * 8),
-                        )
-        except Exception as exc:
-            raise HTTPException(502, f"Frigate clip request failed: {exc}") from exc
+        upstream = frigate_clip_response(event_id, headers)
         if upstream.status_code == 416:
             content_range = upstream.headers.get("content-range")
             upstream.close()
             return Response(status_code=416, headers={"Content-Range": content_range} if content_range else {})
         if upstream.status_code not in (200, 206):
+            status = upstream.status_code
             upstream.close()
-            raise HTTPException(
-                404, "The clip is not available yet, or the recording has expired in Frigate."
-            )
+            if status in (401, 403):
+                raise HTTPException(502, f"Frigate denied clip access (HTTP {status}); check the FaceID Frigate account and camera permissions")
+            if status >= 500:
+                raise HTTPException(502, f"Frigate could not prepare the clip (HTTP {status}); check Frigate logs")
+            if status == 400:
+                raise HTTPException(409, "Frigate has no ready recording segments for this event time window (HTTP 400); retry after recording finishes")
+            if status == 404:
+                raise HTTPException(404, "The clip is not available yet, or the recording has expired in Frigate (HTTP 404).")
+            raise HTTPException(502, f"Unexpected Frigate clip response (HTTP {status})")
 
         def chunks():
             try:
@@ -1026,8 +1066,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         }
         report["frigate"] = processor.frigate.connection_status()
         report["mqtt"] = (
-            processor.dispatcher.health()
-            if getattr(processor, "dispatcher", None) else {}
+            processor.mqtt_health() if hasattr(processor, "mqtt_health")
+            else {"connected": None}
         )
         report["advanced"] = {
             "runtime": (processor.runtime_health.report()
@@ -1863,6 +1903,8 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 "engine": engine.health() if hasattr(engine, "health") else {},
                 "ai": (processor.ai_context.health()
                        if getattr(processor, "ai_context", None) else {"enabled": False}),
+                "mqtt": (processor.mqtt_health() if hasattr(processor, "mqtt_health")
+                         else {"connected": None}),
                 "integrations": (processor.dispatcher.health()
                                  if getattr(processor, "dispatcher", None) else {}),
                 "media": (processor.media_store.report()

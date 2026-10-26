@@ -1,4 +1,4 @@
-# Access1 connection (FaceID 6.4.0)
+# Access1 connection (FaceID 6.4.11)
 
 FaceID recognizes people and submits bounded identity evidence. Access1 maps
 people to existing users and cameras to readers, owns authorization and execution,
@@ -26,11 +26,30 @@ but the administrator pairing wizard requires real HA ingress and Supervisor.
 
 ## Recognition and safety
 
-Only fresh high-resolution evidence from an ongoing event can be submitted.
-Frigate must use authenticated HTTPS, active certificate verification and a
-successful authenticated session. The connector checks actual client state;
-a source label alone is insufficient. Ordinary recognition remains available
-when Access1 evidence is blocked.
+Only fresh active-event snapshot evidence can be submitted. Enable both **fast
+recognition** and **high resolution** on an intended access camera; existing
+camera settings are never changed by an upgrade. The active frame must have a
+no-store response and a valid original MQTT snapshot capture timestamp. Neither
+download time nor a requested recording timestamp proves capture freshness.
+Ordinary high-resolution recordings remain available for recognition/enrollment,
+but recordings (including legacy secure_live_hires evidence) cannot request access.
+
+Frigate must use authenticated HTTPS and a successful authenticated session.
+**Secure is ON by default**, also when its saved decision is absent or invalid.
+ON requires active Frigate certificate verification. An active HA administrator
+may explicitly acknowledge the impersonation risk and set Secure OFF in the
+connector settings. This relaxes only the connector's Frigate-certificate
+admission rule; it does not change the configured Frigate TLS setting itself,
+HTTPS/account authentication, FaceID–Access1 TLS, liveness, freshness, mapping or
+Access1 permissions. A certificate error still needs correct trust configuration
+or a separate explicit Frigate setting change; this release changes neither.
+
+Compatible Access1 receivers accept authenticated Secure status reports every
+10 seconds and after a change using /faceid/v1/secure-status (receiver contract
+originated in Access1 1.0.118). An unsupported/offline receiver leaves reporting
+unavailable; FaceID does not invent a different endpoint or weaken access gates.
+The Access1 page makes read-only connection checks every five seconds while
+mounted. Status checks never complete pairing, enable requests or replay events.
 
 Configure access cameras with liveness **required**, and verify the installed
 liveness model. The connector requires confirmed liveness, finite evidence age
@@ -53,7 +72,7 @@ new identity. Legacy FaceID-local user/reader mappings are not automatically
 imported: review the prior backup and configure them in Access1. Existing
 request history is retained as non-executable historical records.
 
-Protect /data/access1.json, /data/access1-connector.json, /data/access1-wizard-tls/
+Protect /data/access1.json, /data/access1-connector.json, /data/access1-security.json, /data/access1-wizard-tls/
 and each person's access1-identity.json (paths relative to FaceID's data folder).
 Use a full HA add-on backup: the FaceID UI export does not include wizard secrets
 and TLS keys. Never clone a paired site's identity/credentials to another site.
@@ -70,3 +89,19 @@ FaceID 6.3.0 while preserving its recognition engine, enrollment, alerts, video,
 queues, realtime updates and dependencies. Added live camera-trust checks and
 stable UUID retention across temporary camera disable/re-enable. No production
 pairing or door operation is performed by the source release process.
+
+
+## 6.4.11 handoff and verification
+
+Integrated the consolidated FaceID-6.4.0-to-6.4.11-Developer-Handoff.zip after
+checking all 47 scoped baseline and clean-target hashes. The original 6.4.0 tree
+matched; only newline normalization was required before applying the clean patch.
+Temporary identity traces, frame timing dumps and profiling wrappers are excluded.
+A further safety correction rejects all recording-derived access evidence instead
+of labeling a requested recording time as a capture timestamp.
+
+Optional CPU tuning uses cpu_threads (0..16, default 0) and cpu_allow_spinning
+(default true). It applies only to CPU-only FaceEngine model sessions, leaving
+CUDA/OpenVINO, model weights and recognition thresholds unchanged. Coral in
+Frigate does not accelerate FaceID's ONNX model inference. No universal latency
+or real-camera accuracy improvement is implied by software tests.

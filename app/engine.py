@@ -19,6 +19,7 @@ class InferenceLock:
         self._condition = threading.Condition()
         self._busy = False
         self._live_waiters = 0
+        self._live_reservations = 0
         self._local = threading.local()
 
     def __enter__(self):
@@ -28,7 +29,7 @@ class InferenceLock:
                 self._live_waiters += 1
                 self._condition.notify_all()
             try:
-                self._condition.wait_for(lambda: not self._busy and (not background or self._live_waiters == 0))
+                self._condition.wait_for(lambda: not self._busy and (not background or (self._live_waiters == 0 and self._live_reservations == 0)))
                 self._busy = True
             finally:
                 if not background:
@@ -41,6 +42,19 @@ class InferenceLock:
             self._condition.notify_all()
 
     @contextmanager
+    def live_work(self):
+        # Reserve priority across the gaps between a live frame's model calls.
+        # This does not hold the inference mutex during HTTP or audit I/O.
+        with self._condition:
+            self._live_reservations += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._live_reservations -= 1
+                self._condition.notify_all()
+
+    @contextmanager
     def background_work(self):
         previous = getattr(self._local, "background", False)
         self._local.background = True
@@ -51,7 +65,8 @@ class InferenceLock:
 
 
 class FaceEngine:
-    def __init__(self, det_size: int = 640, providers=None, backend: str = "auto"):
+    def __init__(self, det_size: int = 640, providers=None, backend: str = "auto",
+                 cpu_threads: int = 0, cpu_allow_spinning: bool = True):
         from insightface.app import FaceAnalysis
         import onnxruntime as ort
 
@@ -61,12 +76,29 @@ class FaceEngine:
         self.providers = providers
         self.available_providers = available
 
+        if type(cpu_threads) is not int or not 0 <= cpu_threads <= 16:
+            raise ValueError("cpu_threads must be an integer from 0 to 16")
+        if type(cpu_allow_spinning) is not bool:
+            raise ValueError("cpu_allow_spinning must be boolean")
+        self.cpu_threads = cpu_threads
+        self.cpu_allow_spinning = cpu_allow_spinning
+        session_kwargs = {}
+        self.cpu_tuning_applied = providers == ["CPUExecutionProvider"] and (cpu_threads != 0 or not cpu_allow_spinning)
+        if self.cpu_tuning_applied:
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = cpu_threads
+            options.add_session_config_entry("session.intra_op.allow_spinning", "1" if cpu_allow_spinning else "0")
+            options.add_session_config_entry("session.inter_op.allow_spinning", "1" if cpu_allow_spinning else "0")
+            session_kwargs["sess_options"] = options
+        log.info("InsightFace CPU tuning threads=%s allow_spinning=%s applied=%s",
+                 cpu_threads, cpu_allow_spinning, self.cpu_tuning_applied)
         started = time.perf_counter()
         self.app = FaceAnalysis(
             name="buffalo_l",
             providers=providers,
             allowed_modules=["detection", "recognition"],
             addons=[],
+            **session_kwargs,
         )
         self.app.prepare(ctx_id=0, det_size=(det_size, det_size))
         self.startup_seconds = time.perf_counter() - started
@@ -94,7 +126,6 @@ class FaceEngine:
         self._inference_ms = deque(maxlen=256)
         self._inference_calls = 0
         self._inference_failures = 0
-
     @staticmethod
     def providers_for_backend(backend: str, available: list[str]):
         backend = str(backend or "auto").lower()
@@ -131,6 +162,8 @@ class FaceEngine:
         })
         return {
             "backend": self.backend,
+            "cpu_tuning": {"threads": self.cpu_threads, "allow_spinning": self.cpu_allow_spinning,
+                           "applied": self.cpu_tuning_applied},
             "providers": self.providers,
             "available_providers": self.available_providers,
             "startup_seconds": round(self.startup_seconds, 3),
@@ -142,13 +175,39 @@ class FaceEngine:
             "inference": inference,
         }
 
-    def faces(self, bgr: np.ndarray):
+    def live_work(self):
+        return self._lock.live_work()
+
+    def model_work(self):
+        # Liveness shares the same scheduler as detection/embedding.
+        return self._lock
+
+    def detect_faces(self, bgr: np.ndarray):
+        return self.faces(bgr, recognize=False)
+
+    def _detect_faces(self, bgr: np.ndarray):
+        # Same detector invocation and Face construction as installed
+        # FaceAnalysis.get; only recognition is deferred for live access.
+        from insightface.app.common import Face
+        bboxes, kpss = self.app.det_model.detect(bgr, max_num=0, metric="default")
+        return [Face(bbox=bboxes[i, 0:4], det_score=bboxes[i, 4],
+                     kps=None if kpss is None else kpss[i])
+                for i in range(bboxes.shape[0])]
+
+    def embed_face(self, bgr: np.ndarray, face):
+        if getattr(face, "embedding", None) is not None:
+            return face
+        with self._lock:
+            self.app.models["recognition"].get(bgr, face)
+        return face
+
+    def faces(self, bgr: np.ndarray, *, recognize: bool = True):
         with self._lock:
             # Measure inference only; waiting for another caller is excluded.
             started = time.perf_counter()
             failed = False
             try:
-                return self.app.get(bgr)
+                return self.app.get(bgr) if recognize else self._detect_faces(bgr)
             except Exception:
                 failed = True
                 raise

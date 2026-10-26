@@ -8,6 +8,7 @@ Pipeline: frigate/events (person) -> Snapshot-Crop -> ArcFace -> Galerie-Match
 import json
 import hashlib
 import logging
+import math
 import queue
 import threading
 import time
@@ -165,6 +166,7 @@ class EventProcessor:
         threading.Thread(target=self._worker, daemon=True, name="faceid-worker").start()
         threading.Thread(target=self._worker, args=("clip",), daemon=True, name="faceid-clip-worker").start()
         threading.Thread(target=self._finalizer, daemon=True, name="faceid-finalizer").start()
+        threading.Thread(target=self._live_sampler, daemon=True, name="faceid-live-sampler").start()
         if self.audit:
             self.audit.recover_running_jobs()
             self._dispatch_pending_jobs()
@@ -290,7 +292,14 @@ class EventProcessor:
         except (requests.RequestException, ValueError) as e:
             log.error("Frigate at %s unreachable: %s — snapshots, and therefore recognition, will fail", url, e)
 
+    def mqtt_health(self):
+        """Broker connection state; this does not claim HA has registered entities."""
+        return {"connected": bool(self.client and self.client.is_connected())}
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
+        if getattr(reason_code, "is_failure", reason_code != 0):
+            log.warning("MQTT connection rejected (%s)", reason_code)
+            return
         log.info("MQTT connected (%s), subscribing to %s/events", reason_code, self.frigate_topic)
         client.subscribe(f"{self.frigate_topic}/events")
         client.subscribe(f"{self.prefix}/v1/review/set")
@@ -345,6 +354,19 @@ class EventProcessor:
                 eid, cam, start_time=after.get("start_time") or time.time()
             )
             self.events[eid] = st
+        if cam != st["camera"]:
+            return
+        if etype in ("new", "update"):
+            st["live_updated_at"] = time.time()
+            snapshot = after.get("snapshot")
+            timestamp = snapshot.get("frame_time") if isinstance(snapshot, dict) else None
+            # Do not substitute after.frame_time, arrival time or event start:
+            # the best event image may be older than all three.
+            st["live_snapshot_ts"] = (
+                timestamp if type(timestamp) in (int, float) and math.isfinite(timestamp)
+                and timestamp >= st["start_time"] and 0 <= time.time() - timestamp < 10
+                and not getattr(msg, "retain", False) and not after.get("end_time") else None
+            )
         if etype == "end":
             st["ended"] = True
             st["end_time"] = after.get("end_time") or time.time()
@@ -362,6 +384,42 @@ class EventProcessor:
     def recognition_interval(self, camera):
         profile = self.camera_profiles.get(camera) if self.camera_profiles else {}
         return min(self.retry_secs, .35) if profile.get("fast_recognition") else self.retry_secs
+
+    def _live_sampler(self):
+        while True:
+            time.sleep(.25)
+            try:
+                self._schedule_live_jobs()
+            except Exception:
+                log.exception("Live frame scheduling failed; access checks remain required")
+
+    def _live_access_camera(self, st):
+        profile = self.camera_profiles.get(st["camera"]) if self.camera_profiles else {}
+        connector = getattr(self, "access1", None)
+        return bool(profile.get("fast_recognition") and profile.get("high_resolution")
+                    and connector is not None and connector.transport is not None)
+
+    def _schedule_live_jobs(self, now=None):
+        now = time.time() if now is None else now
+        for eid, st in list(self.events.items()):
+            # Only a recent MQTT event may request a bounded live burst. Recovered,
+            # ended, disabled and completed events retain the existing archival path.
+            updated = st.get("live_updated_at")
+            if (updated is None or not 0 <= now - updated < 10
+                    or not 0 <= now - st["created"] < 30
+                    or st["done"] or st["ended"] or st.get("end_time")
+                    or st.get("recovered") or st.get("polled")
+                    or st["attempts"] >= self.max_attempts
+                    or st.get("live_fetches", 0) >= 12
+                    or not self.camera_enabled(st["camera"])
+                    or not self._live_access_camera(st)
+                    or now - st["last_try"] < self.recognition_interval(st["camera"])):
+                continue
+            with self._jobs_lock:
+                if (eid, "snapshot") in self._queued_jobs or (eid, "clip") in self._queued_jobs:
+                    continue
+                if self._enqueue_job_locked(eid, "snapshot"):
+                    st["last_try"] = now
 
     def record_timing(self, stage, seconds):
         with self._timing_lock:
@@ -416,7 +474,11 @@ class EventProcessor:
                 with background:
                     self._process_clip(eid)
             else:
-                self._process(eid)
+                live = (state is not None and not state.get("ended") and not state.get("end_time")
+                        and self._live_access_camera(state))
+                priority = self.engine.live_work() if live and hasattr(self.engine, "live_work") else nullcontext()
+                with priority:
+                    self._process(eid)
             if self.audit:
                 self.audit.complete_job(eid, kind)
         except ClipNotReady as e:
@@ -499,11 +561,18 @@ class EventProcessor:
             self._process_snapshot(eid)
         except Exception:
             st.pop("candidate_fingerprint", None)
+            st.pop("candidate_live", None)
+            st.pop("candidate_snapshot_ts", None)
             raise
         else:
+            timestamp = st.pop("candidate_snapshot_ts", None)
+            if timestamp is not None:
+                st["live_snapshot_consumed_ts"] = timestamp
             fingerprint = st.pop("candidate_fingerprint", None)
             if fingerprint is not None:
                 st["snapshot_fingerprint"] = fingerprint
+                if st.pop("candidate_live", False):
+                    st.setdefault("live_fingerprints", deque(maxlen=12)).append(fingerprint)
 
     def _process_snapshot(self, eid: str):
         st = self.events.get(eid)
@@ -517,15 +586,46 @@ class EventProcessor:
         fetch_started = time.perf_counter()
         source = "snapshot"
         st["access1_evidence_ts"] = None
-        if camera_profile and camera_profile.get("high_resolution"):
-            # Stay on Frigate's configured API (normally authenticated 8971).  No
-            # browser-visible go2rtc/1984 connection or extra credential path.
+        live_access = (self._live_access_camera(st) and not st["ended"]
+                       and not st.get("end_time") and not st.get("recovered") and not st.get("polled"))
+        if live_access:
+            if (st.get("live_fetches", 0) >= 12 or time.time() - st["created"] >= 30
+                    or not 0 <= time.time() - st.get("live_updated_at", 0) < 10):
+                return
+            timestamp = st.get("live_snapshot_ts")
+            if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                    or timestamp < st["start_time"] or not 0 <= time.time() - timestamp < 10):
+                if not st.get("live_timestamp_warned"):
+                    log.info("event %s (%s): live_snapshot_timestamp_missing_or_stale", eid, st["camera"])
+                    st["live_timestamp_warned"] = True
+                return
+            st["live_timestamp_warned"] = False
+            if timestamp <= st.get("live_snapshot_consumed_ts", 0):
+                return
+            st["live_fetches"] = st.get("live_fetches", 0) + 1
+            img = self.frigate.live_event_frame(eid)
+            if img is None:
+                self.record_timing("snapshot_fetch", time.perf_counter() - fetch_started)
+                return
+            # Preserve the timestamp taken BEFORE the request. A newer MQTT image
+            # may arrive during I/O; it must not refresh this image's age.
+            if (st["ended"] or st.get("end_time") or st["done"]
+                    or not self.camera_enabled(st["camera"])
+                    or not 0 <= time.time() - timestamp < 10):
+                log.info("event %s (%s): live_frame_expired_or_ended during fetch", eid, st["camera"])
+                return
+            source = "secure_live_snapshot"
+            st["access1_evidence_ts"] = timestamp
+            st["candidate_snapshot_ts"] = timestamp
+        elif camera_profile and camera_profile.get("high_resolution"):
+            # Preserve the non-access/enrollment-compatible capture path.
             timestamps = [time.time(), float(st.get("start_time") or time.time())]
             for timestamp in timestamps:
                 img = self.frigate.recording_frame(st["camera"], timestamp)
                 if img is not None:
-                    source = "secure_live_hires"
-                    st["access1_evidence_ts"] = timestamp
+                    # A requested recording timestamp is not verified capture
+                    # metadata. Keep it usable for recognition, never admission.
+                    source = "recording"
                     break
         if img is None:
             img = self.frigate.snapshot(eid, crop=True)
@@ -537,9 +637,10 @@ class EventProcessor:
             log.info("event %s (%s): no snapshot from Frigate", eid, st["camera"])
             return
         fingerprint = hashlib.sha256(img.tobytes()).hexdigest()
-        if fingerprint == st.get("snapshot_fingerprint"):
+        if fingerprint == st.get("snapshot_fingerprint") or (live_access and fingerprint in st.get("live_fingerprints", ())):
             return
         st["candidate_fingerprint"] = fingerprint
+        st["candidate_live"] = live_access
         st["attempts"] += 1
         st["context_frame"] = img
         if self.body_recognition is not None:
@@ -548,7 +649,10 @@ class EventProcessor:
             except Exception as exc:
                 st["body"] = {"advisory": True, "error": str(exc)[:160]}
                 log.warning("event %s: advisory body path failed: %s", eid, exc)
-        found = self.engine.faces(img)
+        # Live access selects by ROI/quality before computing any embeddings.
+        found = (self.engine.detect_faces(img)
+                 if live_access and hasattr(self.engine, "detect_faces")
+                 else self.engine.faces(img))
         if camera_profile and camera_profile.get("mode") == "intercom":
             height, width = img.shape[:2]
             left, top, right, bottom = camera_profile.get("roi", [0, 0, 1, 1])
@@ -602,11 +706,14 @@ class EventProcessor:
     def _process_face(self, eid: str, st: dict, img, face, quality=None, source="snapshot"):
         if st["done"]:
             return
+        pending_live_identity = False
         liveness_service = getattr(self, "liveness", None)
         profile = self.camera_profiles.get(st["camera"]) if self.camera_profiles else {}
         liveness_mode = profile.get("liveness_mode", "advisory")
         if liveness_service is not None and liveness_mode != "off":
-            liveness_frame = liveness_service.analyze(img, face)
+            scheduled = self.engine.model_work() if hasattr(self.engine, "model_work") else nullcontext()
+            with scheduled:
+                liveness_frame = liveness_service.analyze(img, face)
             st["liveness_history"].append(liveness_frame)
             st["liveness"] = liveness_service.consensus(st["liveness_history"])
             st["liveness"]["mode"] = liveness_mode
@@ -629,12 +736,28 @@ class EventProcessor:
                     eid, st["camera"], state, st["liveness"]["live_frames"],
                     st["liveness"]["required_frames"],
                 )
-                return
+                # Collect identity evidence on individually live, fresh frames
+                # while consensus warms up. Never publish or enqueue until BOTH
+                # existing liveness and identity policies have passed.
+                timestamp = st.get("access1_evidence_ts")
+                pending_live_identity = (
+                    source == "secure_live_snapshot"
+                    and liveness_frame.get("live") is True
+                    and state == "pending"
+                    and not st.get("ended") and not st.get("end_time")
+                    and type(timestamp) in (int, float)
+                    and math.isfinite(timestamp)
+                    and 0 <= time.time() - timestamp < 10
+                )
+                if not pending_live_identity:
+                    return
             if st["liveness"].get("confirmed"):
                 st["liveness_blocked"] = False
+        if source == "secure_live_snapshot" and hasattr(self.engine, "embed_face"):
+            self.engine.embed_face(img, face)
         emb = face.normed_embedding
         face_search = getattr(self, "face_search", None)
-        if face_search is not None:
+        if face_search is not None and not pending_live_identity:
             try:
                 face_search.record(eid, emb, crop_face(img, face.bbox))
             except Exception:
@@ -668,6 +791,8 @@ class EventProcessor:
             ignore_score=float(ig),
             ignore_group=ignore_group,
         )
+        if pending_live_identity:
+            return
         face_px = int(min(face.bbox[2] - face.bbox[0], face.bbox[3] - face.bbox[1]))
         if self.audit:
             self.audit.observation(
@@ -873,7 +998,7 @@ class EventProcessor:
                         st["clip_queued"] = True
                         continue
                     except queue.Full:
-                        log.warning("queue full — clip analysis delayed for %s", eid)
+                        log.info("clip analysis waiting for retry or queue capacity for %s", eid)
                         continue
                 final_status = None
                 final_person = None

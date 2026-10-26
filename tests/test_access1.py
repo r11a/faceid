@@ -46,11 +46,106 @@ class Access1Tests(unittest.TestCase):
         self.integration=Access1Integration(self.root,self.audit,gallery=self.gallery,processor=self.processor)
     def event(self,**changes):
         return dict(event_id='frigate-event',slug='alice',camera='front',score=.8,evidence_ts=time.time(),
-            evidence_source='secure_live_hires',liveness_confirmed=True,liveness_score=.9,liveness_frames=3,
+            evidence_source='secure_live_snapshot',liveness_confirmed=True,liveness_score=.9,liveness_frames=3,
             person_id=self.integration.person_id('alice'),camera_id=self.integration.config['cameras'].get('front'),**changes)
     def ready(self):
         self.integration.directory();self.integration.transport=Mock()
         self.integration.transport.call.return_value={'status':'accepted'}
+
+    def test_recent_recordings_never_submit_even_with_legacy_live_label_or_secure_off(self):
+        self.ready()
+        for secure in (True, False):
+            if not secure:
+                self.integration.set_security(False, True, 'admin')
+            for source in ('recording', 'secure_live_hires'):
+                with self.subTest(secure=secure, source=source):
+                    event = self.event()
+                    event['evidence_source'] = source
+                    self.assertEqual(self.integration.present(event), {
+                        'state': 'blocked', 'reason': 'evidence_not_live',
+                    })
+        self.integration.transport.call.assert_not_called()
+
+    def test_secure_defaults_on_and_off_requires_approval(self):
+        self.ready();self.processor.frigate.verify_tls=False;self.processor.frigate.session.verify=False
+        self.assertTrue(self.integration.secure)
+        self.assertEqual(self.integration.present(self.event())['reason'],'camera_transport_untrusted')
+        with self.assertRaises(ValueError):self.integration.set_security(False,False,'admin')
+        self.assertTrue(self.integration.secure)
+        self.integration.set_security(False,True,'admin')
+        self.assertFalse(self.integration.camera_evidence_ready())
+        self.assertTrue(self.integration.camera_evidence_ready(strict=False))
+        self.assertEqual(self.integration.present(self.event())['state'],'accepted')
+        self.assertFalse(self.processor.frigate.verify_tls)
+        self.assertFalse(self.processor.frigate.session.verify)
+        self.assertEqual(self.integration.status()['last_submission']['state'],'accepted')
+
+    def test_secure_off_preserves_remaining_gates(self):
+        self.ready();self.integration.set_security(False,True,'admin')
+        self.processor.frigate.verify_tls=False;self.processor.frigate.session.verify=False
+        for changes in ({'evidence_ts':time.time()-11},{'event_ended':True},
+                        {'liveness_confirmed':False},{'evidence_source':'snapshot'},
+                        {'camera_id':'wrong'},{'person_id':'wrong'}):
+            event=self.event();event.update(changes)
+            self.assertEqual(self.integration.present(event)['state'],'blocked')
+        self.processor.frigate._authenticated=False
+        self.assertEqual(self.integration.present(self.event())['state'],'blocked')
+        self.processor.frigate._authenticated=True
+        self.processor.frigate.base='http://frigate:8971'
+        self.assertEqual(self.integration.present(self.event())['state'],'blocked')
+        self.integration.transport.call.assert_not_called()
+
+    def test_security_persistence_reenable_and_corrupt_defaults(self):
+        self.integration.set_security(False,True,'admin')
+        restarted=Access1Integration(self.root,self.audit,gallery=self.gallery,processor=self.processor)
+        self.assertFalse(restarted.secure)
+        restarted.set_security(True,False,'admin')
+        self.assertTrue(Access1Integration(self.root,self.audit,gallery=self.gallery,processor=self.processor).secure)
+        for content in ('{broken','[]','{"secure":false}','{"secure":false,"risk_acknowledged":true}'):
+            self.integration.security_path.write_text(content)
+            self.assertTrue(Access1Integration(self.root,self.audit,gallery=self.gallery,processor=self.processor).secure)
+
+    def test_security_api_admin_guard_ack_and_strict_boolean(self):
+        from fastapi import FastAPI, HTTPException
+        from fastapi.testclient import TestClient
+        from app.access1 import register_access1_routes
+        from app.access1_admin import require_pairing_admin
+        self.processor.access1=self.integration
+        app=FastAPI();register_access1_routes(app,self.processor,self.gallery,self.root)
+        client=TestClient(app)
+        self.assertEqual(client.post('/api/access1/security',json={'secure':False,'risk_acknowledged':True}).status_code,403)
+        app.dependency_overrides[require_pairing_admin]=lambda:'verified-admin'
+        self.assertEqual(client.post('/api/access1/security',json={'secure':False}).status_code,400)
+        self.assertEqual(client.post('/api/access1/security',json={'secure':'false','risk_acknowledged':True}).status_code,422)
+        response=client.post('/api/access1/security',json={'secure':False,'risk_acknowledged':True})
+        self.assertEqual(response.status_code,200);self.assertEqual(response.json(),{'secure':False})
+        self.assertEqual(response.headers['cache-control'],'no-store')
+        self.assertEqual(client.post('/api/access1/security',json={'secure':True}).json(),{'secure':True})
+
+    def test_status_report_has_no_access_side_effects_and_old_server_is_tolerated(self):
+        self.ready();self.integration.secure=False
+        self.integration._report_security_once()
+        self.integration.transport.report_security.assert_called_once_with(self.integration.config['instance_id'],False)
+        self.integration.transport.call.assert_not_called()
+        self.assertEqual(self.integration.recent(),[])
+        self.integration.transport.report_security.side_effect=ValueError('old server')
+        self.assertFalse(self.integration._report_security_once())
+        self.integration.set_security(True,False,'admin')
+        self.assertTrue(self.integration._security_changed.is_set())
+
+    def test_auto_connection_check_caches_and_never_finishes_pairing_or_enables_access(self):
+        self.assertEqual(self.integration.connection_status()['state'],'not_connected')
+        self.ready();self.integration.transport.check_connection.return_value={'requests_enabled':False}
+        self.assertEqual(self.integration.connection_status(),{'state':'connected','requests_enabled':False})
+        self.integration.connection_status()
+        self.integration.transport.check_connection.assert_called_once()
+        self.integration.transport.call.assert_not_called()
+        self.integration._connection_check_cache=None
+        self.integration.transport.check_connection.side_effect=ValueError('PRIVATE')
+        self.assertEqual(self.integration.connection_status(),{'state':'unavailable','requests_enabled':None})
+        self.integration.transport=None
+        self.assertEqual(self.integration.connection_status()['state'],'not_connected')
+
     def test_disabled_default(self):
         self.integration.start();self.assertIsNone(self.integration.server)
         self.assertEqual(self.integration.present(self.event())['state'],'blocked')

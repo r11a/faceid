@@ -15,15 +15,17 @@ export function HealthPage() {
   if (health.error || report.error) return <ErrorState error={health.error || report.error} retry={() => { health.reload(); report.reload(); }} />;
   const h = health.data || {};
   const r = report.data || {};
-  const frigateOk = [true, "ok", "connected"].includes(r.frigate?.connected ?? r.frigate?.status);
-  const mqttOk = [true, "ok", "connected"].includes(r.mqtt?.connected ?? r.mqtt?.status);
+  const frigateOk = r.frigate?.reachable === true;
+  const mqttOk = r.mqtt?.connected === true;
   const runtime = r.advanced?.runtime || h.runtime || {};
   const engine = h.engine || {};
   const provider = engine.models?.recognition?.providers?.join(", ") || engine.providers?.join(", ") || runtime.provider || h.provider;
   const checks = [
     ["FaceID", true, `גרסה ${h.version || "—"}`],
-    ["Frigate", frigateOk, r.frigate?.message || r.frigate?.url || "חיבור מאובטח"],
-    ["Home Assistant / MQTT", mqttOk, r.mqtt?.message || `${r.mqtt?.entities || 0} ישויות`],
+    ["Frigate", frigateOk, frigateOk
+      ? (r.frigate?.tls_verified ? "החיבור פעיל ואימות TLS מופעל" : "החיבור פעיל; אימות TLS כבוי — בדקו את הגדרת Secure במחבר Access1")
+      : r.frigate?.error || (r.frigate?.http_status ? `Frigate HTTP ${r.frigate.http_status}` : "החיבור לא אומת")],
+    ["Home Assistant / MQTT", mqttOk, mqttOk ? "מחובר לברוקר; רישום הישויות נבדק ב־Home Assistant" : r.mqtt?.connected === false ? "אין חיבור פעיל לברוקר" : "מצב החיבור לא דווח"],
     ["מנוע זיהוי", Boolean(provider || h.backend), provider || h.backend || "לא דווח"],
   ];
   return <>
@@ -53,7 +55,7 @@ export function AutomationsPage() {
   if (health.error || users.error) return <ErrorState error={health.error || users.error} retry={() => { health.reload(); users.reload(); }} />;
   return <>
     <PageHeader eyebrow="Home Assistant" title="אוטומציות שימושיות, לא רק חיישנים" description="FaceID מפרסם ישויות לכל אדם ומידע עשיר על המיקום, הזמן והביטחון. כאן רואים מה אפשר לעשות איתן." />
-    <Panel className="integration-status"><span className={`integration-icon ${mqtt.connected === false ? "bad" : "good"}`}><Radio /></span><div><h2>{mqtt.connected === false ? "MQTT אינו מחובר" : "Home Assistant מחובר"}</h2><p>{mqtt.connected === false ? "בדוק את פרטי MQTT בהגדרות התוסף." : `${mqtt.entities || "חיישנים"} התגלו אוטומטית. אין צורך להגדיר YAML ידנית.`}</p></div><Badge tone={mqtt.connected === false ? "danger" : "success"}>{mqtt.connected === false ? "דורש טיפול" : "פעיל"}</Badge></Panel>
+    <Panel className="integration-status"><span className={`integration-icon ${mqtt.connected !== true ? "bad" : "good"}`}><Radio /></span><div><h2>{mqtt.connected !== true ? "MQTT אינו מחובר" : "Home Assistant מחובר"}</h2><p>{mqtt.connected !== true ? "בדוק את פרטי MQTT בהגדרות התוסף." : "החיבור לברוקר פעיל. בדוק את הישויות באינטגרציית MQTT ב־Home Assistant."}</p></div><Badge tone={mqtt.connected !== true ? "danger" : "success"}>{mqtt.connected !== true ? "דורש טיפול" : "פעיל"}</Badge></Panel>
     <div className="automation-grid">{automationIdeas.map((item, index) => <Panel key={item.title}><span className={`automation-icon tone-${index}`}><item.icon /></span><h2>{item.title}</h2><div className="automation-flow"><span><small>כאשר</small>{item.trigger}</span><i>←</i><span><small>אז</small>{item.action}</span></div><button className="entity-copy" onClick={() => copy(item.sensor, String(index))}><code>{item.sensor}</code>{copied === String(index) ? <Check /> : <Copy />}</button></Panel>)}</div>
     <Panel><div className="panel-heading"><div><span className="eyebrow">ישויות לפי אדם</span><h2>{users.data?.users?.length || 0} אנשים זמינים לאוטומציות</h2></div></div><div className="entity-table">{(users.data?.users || []).map((person) => <div key={person.slug}><span className="entity-avatar">{person.photo ? <img src={assetUrl(person.photo)} alt="" /> : person.name.slice(0, 2)}</span><span><b>{person.name}</b><small>מיקום אחרון, זמן, נוכחות, הופעות וציון ממוצע</small></span><code>sensor.faceid_{person.slug}_last_seen</code><button className="icon-button" onClick={() => copy(`sensor.faceid_${person.slug}_last_seen`, person.slug)}>{copied === person.slug ? <Check /> : <Copy />}</button></div>)}</div></Panel>
   </>;

@@ -26,6 +26,13 @@ class Transport:
             raise ValueError('Unexpected Access1 result')
         return {key:result.get(key) for key in ('event_id','request_id','status','reason','execution_confirmed','door_open_confirmed')}
 
+    def report_security(self,instance_id,secure):
+        result=self._request('POST','/faceid/v1/secure-status',
+            {'instance_id':str(UUID(instance_id)),'secure':secure,'schema_version':1})
+        if (result.get('instance_id')!=str(UUID(instance_id)) or result.get('status')!='status_received'):
+            raise ValueError('Unexpected Access1 status acknowledgement')
+        return True
+
     def check_connection(self,instance_id):
         result=self._request('GET','/faceid/v1/connection')
         if (result.get('instance_id')!=str(UUID(instance_id))

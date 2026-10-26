@@ -11,9 +11,9 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        entryFileNames: "assets/faceid-6.4.0.js",
+        entryFileNames: "assets/faceid-6.4.11.js",
         chunkFileNames: "assets/[name]-[hash].js",
-        assetFileNames: "assets/faceid-6.4.0[extname]"
+        assetFileNames: "assets/faceid-6.4.11[extname]"
       }
     }
   }

@@ -21,7 +21,7 @@ function Evidence({ event, people, onClose, onSimilar }) {
   </Modal>;
 }
 
-function HistoryReferenceChooser({ event, person, onClose, onAdded }) {
+export function HistoryReferenceChooser({ event, person, onClose, onAdded }) {
   const choices = useResource(`faces/event/${encodeURIComponent(event.event_id)}/references?${query({ person })}`);
   const [saving, setSaving] = useState(null);
   const [saved, setSaved] = useState({});

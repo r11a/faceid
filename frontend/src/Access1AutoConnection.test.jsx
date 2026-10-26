@@ -1,0 +1,26 @@
+import React from 'react';
+import {act,create} from 'react-test-renderer';
+import {beforeEach,afterEach,it,expect,vi} from 'vitest';
+import {Access1Page} from './pages/Access1.jsx';
+const {api}=vi.hoisted(()=>({api:vi.fn()}));
+vi.mock('./api.js',()=>({api}));
+vi.mock('./realtime.js',()=>({subscribeRealtime:()=>()=>{}}));
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+let renderer,available=true;
+const text=n=>typeof n==='string'?n:(n.children||[]).map(text).join('');
+beforeEach(()=>{vi.useFakeTimers();vi.stubGlobal('window',{setInterval:globalThis.setInterval,clearInterval:globalThis.clearInterval});available=true;
+ api.mockReset();api.mockImplementation(async path=>path==='access1/connection'?{state:available?'connected':'unavailable',requests_enabled:false}:{enabled:true,state:'ready',secure:true,attempts:[]});});
+afterEach(async()=>{if(renderer)await act(()=>renderer.unmount());renderer=null;vi.useRealTimers();vi.unstubAllGlobals();});
+it('checks on open, polls, recovers, keeps manual check and performs no mutations',async()=>{
+ await act(async()=>{renderer=create(<Access1Page/>);});
+ await act(async()=>{await renderer.root.findAllByType('button').find(n=>text(n)==='English').props.onClick();});
+ expect(api.mock.calls.some(([path])=>path==='access1/connection')).toBe(true);
+ expect(JSON.stringify(renderer.toJSON())).toContain('Connected');
+ available=false;await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+ expect(JSON.stringify(renderer.toJSON())).toContain('Connection unavailable');
+ available=true;await act(async()=>{await renderer.root.findAllByType('button').find(n=>text(n)==='Check connection').props.onClick();});
+ expect(JSON.stringify(renderer.toJSON())).toContain('Connected');
+ expect(api.mock.calls.every(([path,options])=>!options?.method||options.method==='GET')).toBe(true);
+ await act(()=>renderer.unmount());renderer=null;const count=api.mock.calls.length;
+ await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(api.mock.calls.length).toBe(count);
+});

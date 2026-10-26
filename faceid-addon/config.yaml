@@ -1,5 +1,5 @@
 name: FaceID
-version: "6.4.0"
+version: "6.4.11"
 slug: faceid
 description: Face recognition for Frigate — trainable gallery, clustered unknown review, HA sensors
 url: https://github.com/r11a/faceid
@@ -12,7 +12,7 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8600
-ingress_entry: ui-6.4.0
+ingress_entry: ui-6.4.11
 panel_icon: mdi:face-recognition
 panel_title: FaceID
 ports:
@@ -38,6 +38,8 @@ options:
   access1_ca: "/ssl/access1-mobile/backend-ca.pem"
   mqtt_prefix: faceid
   backend: auto
+  cpu_threads: 0
+  cpu_allow_spinning: true
   frigate_url: https://192.168.1.10:8971
   frigate_username: ""
   frigate_password: ""
@@ -122,6 +124,8 @@ schema:
   access1_ca: "str"
   mqtt_prefix: str
   backend: list(auto|cpu|cuda|openvino)
+  cpu_threads: int(0,16)
+  cpu_allow_spinning: bool
   frigate_url: url
   frigate_username: str?
   frigate_password: password?
