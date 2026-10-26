@@ -174,6 +174,46 @@ class FaceSearchTests(unittest.TestCase):
         self.assertEqual(self.search.timeline([vector()])['total'], 0)
         self.assertEqual(list(self.search.image_dir.glob('*.jpg')), [])
 
+    def test_event_selection_recovers_only_selected_retained_evidence(self):
+        for eid in ('selected', 'unrelated'):
+            self.event(eid, 'yard', time.time())
+            self.audit.save_evidence(eid, np.zeros((100,100,3), dtype=np.uint8))
+        response = self.client.get('/api/faces/event/selected')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()['samples']), 1)
+        self.assertEqual(self.search.sample_vectors(event_id='unrelated'), [])
+        result = self.client.get('/api/faces/timeline', params={'event_id':'selected'})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()['total'], 1)
+        self.assertEqual(self.audit.event_detail('selected')['event']['status'], 'unknown')
+
+    def test_event_timeline_recovers_unknown_embedding_without_redetection(self):
+        self.event('selected', 'yard', time.time())
+        self.gallery.save_unknown(np.zeros((80,80,3), dtype=np.uint8), vector(),
+                                  {'event_id':'selected', 'camera':'yard'})
+        self.engine.faces = lambda image: (_ for _ in ()).throw(AssertionError('must reuse vector'))
+        result = self.client.get('/api/faces/timeline', params={'event_id':'selected'})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()['total'], 1)
+
+    def test_unknown_search_includes_its_unindexed_source_event(self):
+        self.event('selected', 'yard', time.time())
+        uid = self.gallery.save_unknown(np.zeros((80,80,3), dtype=np.uint8), vector(),
+                                        {'event_id':'selected', 'camera':'yard'})
+        result = self.client.get('/api/faces/timeline', params={'unknown_id':uid})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()['total'], 1)
+        self.assertEqual(result.json()['mode'], 'similarity')
+
+    def test_history_retry_recovers_fingerprinted_event_without_samples(self):
+        self.event('old', 'yard', time.time())
+        path = self.audit.save_evidence('old', np.zeros((100,100,3), dtype=np.uint8))
+        fingerprint = f'{path.stat().st_mtime_ns}:{path.stat().st_size}'
+        with self.audit._connection() as con:
+            con.execute('INSERT INTO face_indexed VALUES(?,?)', ('old', fingerprint))
+        self.search.index_existing()
+        self.assertEqual(self.search.timeline([vector()])['total'], 1)
+
     def test_unknown_selection_and_background_index_recover_retained_history(self):
         self.event('old','yard',100)
         self.audit.save_evidence('old', np.zeros((100,100,3),dtype=np.uint8))

@@ -179,15 +179,58 @@ class FaceSearch:
         threading.Thread(target=run, daemon=True, name='face-search-index').start()
         return dict(self.index_status)
 
-    def index_existing(self):
-        # Existing unknowns carry original embeddings; no inference or relabeling needed.
+    def _recover_unknowns(self, event_id=None):
+        # Reuse original vectors; redetecting a tight stored crop may find no face.
         for path in self.gallery.unknown_dir.glob('*.json'):
             try:
                 meta = json.loads(path.read_text(encoding='utf-8'))
-                if meta.get('event_id') and meta.get('embedding'):
-                    self.record(meta['event_id'], meta['embedding'], cv2.imread(str(path.with_suffix('.jpg'))))
-            except (ValueError,OSError,KeyError):
+                if not isinstance(meta, dict):
+                    continue
+                eid = meta.get('event_id')
+                if isinstance(eid, str) and eid and (event_id is None or eid == event_id) and meta.get('embedding'):
+                    self.record(eid, meta['embedding'], cv2.imread(str(path.with_suffix('.jpg'))))
+            except (ValueError, TypeError, OSError, KeyError):
                 continue
+
+    def _index_evidence(self, eid, path):
+        if self.engine is None:
+            return 0
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return 0  # Evidence may expire while a scan is running.
+        fingerprint = f'{stat.st_mtime_ns}:{stat.st_size}'
+        with self.audit._connection() as con:
+            old = con.execute('SELECT fingerprint FROM face_indexed WHERE event_id=?', (eid,)).fetchone()
+            has_samples = con.execute('SELECT 1 FROM face_samples WHERE event_id=? LIMIT 1', (eid,)).fetchone()
+        if old and old[0] == fingerprint and has_samples:
+            return 0
+        image = cv2.imread(str(path))
+        if image is None:
+            return 0
+        indexed = 0
+        for face in self.engine.faces(image)[:8]:
+            if self.record(eid, face.normed_embedding, crop_face(image, face.bbox)):
+                indexed += 1
+        # A failed/empty detection must remain retryable, including old markers.
+        if indexed:
+            with self.audit._connection() as con:
+                con.execute('INSERT OR REPLACE INTO face_indexed VALUES(?,?)', (eid, fingerprint))
+        return indexed
+
+    def recover_event(self, event_id):
+        """Recover only the selected event from locally retained evidence."""
+        if self.sample_vectors(event_id=event_id):
+            return
+        with self.audit._connection() as con:
+            if not con.execute('SELECT 1 FROM events WHERE event_id=?', (event_id,)).fetchone():
+                return
+        self._recover_unknowns(event_id)
+        if not self.sample_vectors(event_id=event_id):
+            self._index_evidence(event_id, self.audit.evidence_path(event_id))
+
+    def index_existing(self):
+        self._recover_unknowns()
         with self.audit._connection() as con:
             events = con.execute('SELECT event_id FROM events ORDER BY start_ts DESC').fetchall()
         # Only retained evidence is recoverable. Never download all Frigate history implicitly.
@@ -195,17 +238,7 @@ class FaceSearch:
         files = [(eid,path) for eid,path in files if path.is_file()]
         self.index_status['total'] = len(files)
         for eid,path in files:
-            fingerprint = f'{path.stat().st_mtime_ns}:{path.stat().st_size}'
-            with self.audit._connection() as con:
-                old = con.execute('SELECT fingerprint FROM face_indexed WHERE event_id=?',(eid,)).fetchone()
-            if not old or old[0] != fingerprint:
-                image = cv2.imread(str(path))
-                if image is not None:
-                    for face in self.engine.faces(image)[:8]:
-                        self.record(eid, face.normed_embedding, crop_face(image,face.bbox))
-                        self.index_status['indexed'] += 1
-                with self.audit._connection() as con:
-                    con.execute('INSERT OR REPLACE INTO face_indexed VALUES(?,?)',(eid,fingerprint))
+            self.index_status['indexed'] += self._index_evidence(eid, path)
             self.index_status['processed'] += 1
 
 
@@ -298,6 +331,7 @@ def register_face_routes(app, processor, gallery, engine):
 
     @app.get('/api/faces/event/{event_id}')
     def event_faces(event_id: str):
+        service.recover_event(event_id)
         with audit._connection() as con:
             rows = con.execute('SELECT sample_id FROM face_samples WHERE event_id=? ORDER BY created_ts', (event_id,)).fetchall()
         return {'samples':[{'sample_id':sid,'image':f'api/faces/images/{sid}' if (service.image_dir/f'{sid}.jpg').is_file() else None} for (sid,) in rows]}
@@ -408,7 +442,10 @@ def register_face_routes(app, processor, gallery, engine):
                     raise ValueError('Invalid face id')
                 path=gallery.unknown_dir/f'{unknown_id}.json'
                 if not path.is_file(): raise HTTPException(404,'הפנים כבר טופלו או הוסרו מהתור')
-                vectors=[json.loads(path.read_text(encoding='utf-8'))['embedding']]
+                meta=json.loads(path.read_text(encoding='utf-8'))
+                vectors=[meta['embedding']]
+                if isinstance(meta.get('event_id'), str) and meta['event_id']:
+                    service.record(meta['event_id'], vectors[0], cv2.imread(str(path.with_suffix('.jpg'))))
             elif token:
                 with token_lock:
                     saved=tokens.get(token)
@@ -416,6 +453,8 @@ def register_face_routes(app, processor, gallery, engine):
                     raise HTTPException(410,'החיפוש פג; העלה את התמונה שוב')
                 vectors=[saved[1]]
             else:
+                if event_id:
+                    service.recover_event(event_id)
                 vectors=service.sample_vectors(event_id=event_id,sample_id=sample_id)
                 if not vectors: raise HTTPException(404,'אין עדיין נתוני פנים לחיפוש באירוע; סרוק את ההיסטוריה הזמינה')
                 if event_id and len(vectors)>1:

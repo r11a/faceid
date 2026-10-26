@@ -1,5 +1,13 @@
 # Changelog
 
+## 6.5.4 — 2026-10-26
+
+- Home event filters stay behind a small icon: name/person, recognition status, watchlist and camera. Filters apply before pagination.
+- Confirmed presence-only history now supplies the latest person location without inflating appearance counts.
+- Similar-face search recovers the selected event from retained local evidence or original unknown-face vectors; empty historical indexes can be retried.
+- Find similar faces in a vertical photo timeline, with additional events loaded without replacing earlier results.
+- Recognition thresholds, identity decisions and access-control rules remain unchanged.
+
 ## 6.5.3 — 2026-10-26
 
 - Put last-known locations at the top of the home screen, followed by a responsive newest-first recent-event grid; remove redundant explanatory copy.

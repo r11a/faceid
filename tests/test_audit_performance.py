@@ -53,7 +53,10 @@ class AuditPerformanceTests(unittest.TestCase):
         self.event("latest", "Alice", "yard", occurrence="presence_update")
         self.event("quiet-only", "Quiet", occurrence="presence_update")
         stats = self.audit.person_statistics()
-        self.assertEqual(set(stats), {"Alice"})
+        self.assertEqual(set(stats), {"Alice", "Quiet"})
+        self.assertEqual(stats["Quiet"]["appearances"], 0)
+        self.assertEqual(stats["Quiet"]["last_seen"], self.now)
+        self.assertEqual(stats["Quiet"]["last_camera"], "door")
         alice = stats["Alice"]
         self.assertEqual(alice["appearances"], 2)
         self.assertEqual(alice["last_7_days"], 2)

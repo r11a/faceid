@@ -51,3 +51,28 @@ it("keeps compact identity history focused on events with filters collapsed", as
   expect(JSON.stringify(renderer.toJSON())).not.toContain("התאמות לפי דמיון בפנים");
   expect(renderer.root.findByProps({ "aria-label": "אפשרויות היסטוריית פנים" }).props["aria-expanded"]).toBe(false);
 });
+
+it("appends older events in vertical timeline without losing visible thumbnails", async () => {
+  const rows = Array.from({ length: 50 }, (_, i) => ({ event_id: `e${i}`, camera: "Door", start_ts: 1700000000-i, image: `api/faces/sample/s${i}/image` }));
+  api.mockResolvedValueOnce({ total: 51, cameras: ["Door"], events: rows }).mockResolvedValueOnce({ total: 51, cameras: ["Door"], events: [{ event_id: "e50", camera: "Yard", start_ts: 1699999950, image: "api/faces/sample/s50/image" }] });
+  await act(async () => { renderer = create(<FaceExplorer source={{ sample_id: "s0" }} initialView="timeline" />); });
+  expect(renderer.root.findByProps({ "aria-label": "תצוגת ציר זמן" }).props["aria-pressed"]).toBe(true);
+  await act(async () => renderer.root.findByProps({ "aria-label": "טען עוד אירועים" }).props.onClick());
+  expect(renderer.root.findAllByType("img")).toHaveLength(51);
+  expect(JSON.stringify(renderer.toJSON())).toContain("Yard");
+  expect(new URLSearchParams(api.mock.calls[1][0].split("?")[1]).get("offset")).toBe("50");
+  api.mockResolvedValueOnce({ total: 1, cameras: ["NewDoor"], events: [{ event_id: "new", camera: "NewDoor", start_ts: 1700000100 }] });
+  await act(async () => renderer.root.findAllByType("button").find(button => button.children.includes("רענן תוצאות")).props.onClick());
+  expect(new URLSearchParams(api.mock.calls[2][0].split("?")[1]).get("offset")).toBe("0");
+  expect(renderer.root.findAllByType("img")).toHaveLength(1);
+  expect(JSON.stringify(renderer.toJSON())).toContain("NewDoor");
+});
+
+it("can search similar faces from evidence without a sample and asks which face to use", async () => {
+  await open();
+  await act(() => renderer.root.findAllByType("button").find(button => button.props.className?.includes("face-appearance")).props.onClick());
+  api.mockResolvedValueOnce({ samples: [{ sample_id: "s1", image: "api/faces/sample/s1/image" }, { sample_id: "s2", image: "api/faces/sample/s2/image" }] });
+  await act(async () => renderer.root.findByProps({ "aria-label": "מצא דומה בציר זמן" }).props.onClick());
+  expect(JSON.stringify(renderer.toJSON())).toContain("בחר את הפנים לחיפוש מתוך האירוע");
+  expect(renderer.root.findAllByType("img")).toHaveLength(2);
+});

@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Camera, ChevronLeft, ChevronRight, MapPin, Play, Search, UserPlus, UserRound, Users, X } from "lucide-react";
+import { ArrowLeft, Camera, ChevronLeft, ChevronRight, MapPin, Play, Search, SlidersHorizontal, UserPlus, UserRound, Users, X } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
 import { useImageRetry, useResource } from "../hooks.js";
 import { ActionGroup, Empty, ErrorState, Loading, Modal, dateTime, relativeTime } from "../ui.jsx";
 import { chronological, clipAfter, eventTime, identityForEvent, latestPeople } from "../home.js";
 import { PersonEditor } from "./Daily.jsx";
+import { FaceExplorer } from "./Faces.jsx";
 import { EventVideo } from "../EventVideo.jsx";
 
 function Photo({ src, name = "פנים", className = "", eager = false }) {
@@ -72,7 +73,17 @@ function HistoryPages({ page, count, total, onChange }) {
 }
 
 export function DashboardPage({ navigate }) {
-  const dashboard = useResource("dashboard", { poll: 15000, realtime: true });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState({ q: "", person: "", status: "", watchlist: "", camera: "" });
+  const [search, setSearch] = useState("");
+  const [eventPage, setEventPage] = useState(0);
+  const [timelineSource, setTimelineSource] = useState(null);
+  useEffect(() => { const timer = setTimeout(() => { setSearch(filters.q); setEventPage(0); }, 250); return () => clearTimeout(timer); }, [filters.q]);
+  const dashboardQuery = query({ ...filters, q: search, offset: eventPage ? eventPage * 60 : undefined });
+  const dashboard = useResource(`dashboard${dashboardQuery ? `?${dashboardQuery}` : ""}`, { poll: 15000, realtime: true });
+  const lastDashboard = useRef(null);
+  if (dashboard.data) lastDashboard.current = dashboard.data;
+  const dashboardData = dashboard.data || lastDashboard.current;
   const [selection, setSelection] = useState(null);
   const [page, setPage] = useState(0);
   const [retry, setRetry] = useState(0);
@@ -90,7 +101,9 @@ export function DashboardPage({ navigate }) {
     request.current?.abort(); setResolving(false); setSelectionError(null); setCandidates(null);
     setSelection(value); setPage(0); setDetails(false);
   };
-  const people = latestPeople(dashboard.data?.people || []);
+  const changeFilter = (key, value) => { setFilters(current => ({ ...current, [key]: value })); setEventPage(0); select(null); };
+  const filtersActive = Object.values(filters).some(Boolean);
+  const people = latestPeople(dashboardData?.people || []);
   const selectPerson = person => { select({ name: person.name, photo: person.photo, person, source: { person: person.slug } }); setDetails(true); };
   const selectEvent = async event => {
     const person = identityForEvent(event, people);
@@ -113,7 +126,7 @@ export function DashboardPage({ navigate }) {
   const error = selection ? appearances.error : null;
   const showDetails = () => setDetails(true);
   const openEvent = event => { setPlaybackEvent(event); if (!selection) selectEvent(event); };
-  if (dashboard.loading) return <Loading />;
+  if (dashboard.loading && !dashboardData) return <Loading />;
   if (dashboard.error) return <ErrorState error={dashboard.error} retry={dashboard.reload} />;
   return <div className="home-workspace">
     <header className="home-heading"><div className="home-title-group"><h1>מבט כללי</h1></div><div className="home-heading-actions"><ActionGroup><button className="button secondary" onClick={() => setPicker(true)}><Search />פנים לא מזוהות</button><button className="button primary" onClick={() => setEditor(true)}><UserPlus />הוסף אדם</button></ActionGroup></div></header>
@@ -124,23 +137,34 @@ export function DashboardPage({ navigate }) {
     </section>
     <section className="home-section" aria-labelledby="home-events-title">
       <div className="home-section-heading"><div className="home-section-label"><h2 id="home-events-title">{selection ? `ההופעות של ${selection.name}` : "אירועים אחרונים"}</h2>{selection && !selection.person && <span className="home-muted">התאמות דומות · זהות לא מאומתת</span>}</div>
-        <div className="home-section-actions">{selection ? <><button className="text-button" onClick={showDetails}><Play />פרטים ורצף</button><button className="button secondary home-selection-chip" onClick={() => select(null)}><Photo src={selection.photo} name={selection.name} /><span>{selection.name}</span><X /><span className="home-clear-label">כולם</span></button></> : <button className="text-button" onClick={() => navigate("events")}>כל האירועים <ArrowLeft /></button>}</div>
+        <div className="home-section-actions"><button className={`icon-button ${filtersActive ? "active" : ""}`} aria-label="סינון אירועים" aria-expanded={filtersOpen} aria-controls="home-event-filters" onClick={() => setFiltersOpen(value => !value)}><SlidersHorizontal /></button>{selection ? <><button className="text-button" onClick={showDetails}><Play />פרטים ורצף</button><button className="button secondary home-selection-chip" onClick={() => select(null)}><Photo src={selection.photo} name={selection.name} /><span>{selection.name}</span><X /><span className="home-clear-label">כולם</span></button></> : <button className="text-button" onClick={() => navigate("events")}>כל האירועים <ArrowLeft /></button>}</div>
       </div>
+      {filtersOpen && <div id="home-event-filters" className="home-event-filters">
+        <label>שם<input type="search" value={filters.q} placeholder="חיפוש שם" onChange={e => changeFilter("q", e.target.value)} /></label>
+        <label>אנשים<select value={filters.person} onChange={e => changeFilter("person", e.target.value)}><option value="">כולם</option>{people.map(person => <option key={person.slug} value={person.name}>{person.name}</option>)}</select></label>
+        <label>זיהוי<select value={filters.status} onChange={e => changeFilter("status", e.target.value)}><option value="">הכול</option><option value="recognized">מזוהה</option><option value="unknown">לא מזוהה</option></select></label>
+        <label>רשימה<select value={filters.watchlist} onChange={e => changeFilter("watchlist", e.target.value)}><option value="">הכול</option><option value="black">רשימה שחורה</option><option value="white">רשימה לבנה</option></select></label>
+        <label>מצלמה<select value={filters.camera} onChange={e => changeFilter("camera", e.target.value)}><option value="">כל המצלמות</option>{(dashboardData?.cameras || []).map(camera => <option key={camera} value={camera}>{camera}</option>)}</select></label>
+        {filtersActive && <button className="icon-button" aria-label="נקה סינון" onClick={() => { setFilters({ q: "", person: "", status: "", watchlist: "", camera: "" }); setSearch(""); setEventPage(0); }}><X /></button>}
+      </div>}
       {resolving && <Loading text="מאתר פנים…" />}
       {selectionError && <ErrorState error={selectionError} />}
-      {loading ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : rows.length ? <div className="home-event-grid" role="region" aria-label="אירועים">
+      {(loading || dashboard.loading) ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : rows.length ? <div className="home-event-grid" role="region" aria-label="אירועים">
         {[...rows].reverse().map((event, index) => { const person = identityForEvent(event, people); return <button className={`home-event-card ${person?.watchlist === "black" ? "blacklist-outline" : ""}`} key={event.event_id} onClick={() => openEvent(event)}>
           <Photo src={event.image || `api/activity/${encodeURIComponent(event.event_id)}/image`} name={selection?.name || person?.name || "לא מזוהה"} eager={index < 3} />
           <span className="home-event-play" aria-hidden="true"><Play /></span>
           <div className="home-event-copy"><b>{selection?.name || person?.name || "לא מזוהה"}</b><span><Camera />{event.camera || "—"}</span><time>{dateTime(eventTime(event))}</time></div>
         </button>; })}
       </div> : <Empty icon={Camera} title={selection ? "לא נמצאו הופעות" : "אין אירועים עדיין"} />}
+      {!selection && (dashboard.data?.recent_total || 0) > 60 && <HistoryPages page={eventPage} count={rows.length} total={dashboard.data.recent_total} onChange={setEventPage} />}
       {selection && !loading && !error && <HistoryPages page={page} count={rows.length} total={appearances.data?.total || 0} onChange={setPage} />}
     </section>
+    {timelineSource && <Modal title="פנים דומות בציר זמן" onClose={() => setTimelineSource(null)} wide><FaceExplorer source={timelineSource} initialView="timeline" compact /></Modal>}
     {editor && <PersonEditor person={{ name: "", files: [] }} onClose={() => setEditor(false)} onSaved={() => { setEditor(false); dashboard.reload(); }} />}
     {picker && <UnknownPicker onClose={() => setPicker(false)} onSelect={value => { select(value); setPicker(false); setDetails(true); }} />}
     {playbackEvent && <Modal title="וידאו האירוע" subtitle={`${playbackEvent.camera || "מצלמה לא ידועה"} · ${dateTime(eventTime(playbackEvent))}`} onClose={() => { request.current?.abort(); setResolving(false); setPlaybackEvent(null); }} wide>
       <EventVideo eventId={playbackEvent.event_id} className={identityForEvent(playbackEvent, people)?.watchlist === "black" ? "blacklist-outline" : ""} />
+      <button className="button secondary" onClick={() => { setTimelineSource(playbackEvent.sample_id ? { sample_id: playbackEvent.sample_id } : { event_id: playbackEvent.event_id }); setPlaybackEvent(null); }}><Search />מצא דומה בציר זמן</button>
       {resolving && <p role="status">מאתר פנים…</p>}
       {selection && !resolving && !candidates && <button className="button secondary" onClick={() => { setPlaybackEvent(null); setDetails(true); }}>פרטים ורצף הופעות</button>}
     </Modal>}

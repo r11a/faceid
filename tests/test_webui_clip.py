@@ -41,6 +41,32 @@ class FakeGallery:
 
 
 class WebUIClipTests(unittest.TestCase):
+    def test_dashboard_filters_confirmed_identity_before_pagination(self):
+        from app.audit import AuditStore
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            for index in range(65):
+                audit.start_event(f"other-{index}", "yard", 100 + index)
+                audit.finalize(f"other-{index}", "unknown", person="Alice")
+            for eid, status, name, ts in [("old", "recognized", "Alice", 1), ("review", "unknown", "Bob", 2), ("rejected", "recognized", "Alice", 200)]:
+                audit.start_event(eid, "door", ts)
+                audit.finalize(eid, status, person=name)
+            audit.set_ground_truth("review", "Alice")
+            audit.set_ground_truth("rejected", "__unknown__")
+            gallery = SimpleNamespace(persons=lambda: {"alice": {"name": "Alice", "watchlist": "black"}})
+            app = build_app({"faceid": {"auth": {}}}, SimpleNamespace(), gallery, SimpleNamespace(audit=audit), Path(tmp), Path(__file__).parents[1] / "static")
+            client = TestClient(app)
+            result = client.get("/api/dashboard?person=Alice&status=recognized&watchlist=black&camera=door&limit=1").json()
+            self.assertEqual([e["event_id"] for e in result["recent"]], ["review"])
+            self.assertEqual(result["recent_total"], 2)
+            self.assertEqual(result["cameras"], ["door", "yard"])
+            self.assertEqual(client.get("/api/dashboard?watchlist=white").json()["recent"], [])
+            page = client.get("/api/dashboard?q=Alice&status=recognized&offset=1&limit=1").json()
+            self.assertEqual([e["event_id"] for e in page["recent"]], ["old"])
+            unknown = client.get("/api/dashboard?status=unknown").json()
+            self.assertEqual(unknown["recent_total"], 66)
+            self.assertEqual(unknown["recent"][0]["event_id"], "rejected")
+
     def test_uncached_clip_streams_range_without_downloading_full_clip(self):
         with tempfile.TemporaryDirectory() as tmp:
             calls, closed = [], []
@@ -240,11 +266,11 @@ class WebUIClipTests(unittest.TestCase):
             self.assertIn("no-store", index.headers["cache-control"])
             self.assertNotIn("etag", index.headers)
             self.assertNotIn("last-modified", index.headers)
-            self.assertEqual(index.headers["x-faceid-ui-version"], "6.5.3")
+            self.assertEqual(index.headers["x-faceid-ui-version"], "6.5.4")
             versioned = TestClient(app).get("/ui-previous-release")
             self.assertEqual(versioned.status_code, 200)
             self.assertEqual(versioned.content, index.content)
-            ui_asset = TestClient(app).get("/assets/faceid-6.5.3.js")
+            ui_asset = TestClient(app).get("/assets/faceid-6.5.4.js")
             self.assertEqual(ui_asset.status_code, 200)
             self.assertIn("immutable", ui_asset.headers["cache-control"])
             self.assertEqual(ui_asset.headers["x-content-type-options"], "nosniff")
