@@ -1,5 +1,10 @@
 # Changelog
 
+## 6.5.3 — 2026-10-26
+
+- Show selected-face event details and video side by side on wide screens, with the larger column reserved for the clip.
+- Group the photo, person name, camera, timestamp and optional similarity score beside the video; keep a compact stacked layout on mobile. Preserve playback and similar-face search.
+
 ## 6.5.2 — 2026-10-26
 
 - Make person profiles event-first with a photo grid/list switch, newest-first timeline, compact identity summary and separate reference management tab. Preserve explicit reference enrollment.

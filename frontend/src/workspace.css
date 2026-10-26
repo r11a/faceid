@@ -193,6 +193,22 @@
 /* Portaled alerts and event dialogs use the same controls and typography. */
 .workspace-app.workspace-portals { display: contents; min-height: 0; }
 
+/* Selected face context beside the clip; the video owns the wider column. */
+.workspace-app .face-evidence-split { display: grid; grid-template-columns: minmax(200px, .7fr) minmax(0, 2.5fr); justify-items: stretch; align-items: start; gap: 22px; }
+.workspace-app .face-evidence-summary { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
+.workspace-app .face-evidence-summary>img, .workspace-app .face-evidence-summary>.face-placeholder { width: 100%; max-width: 240px; height: 200px; object-fit: contain; background: var(--surface-2); border-radius: 8px; }
+.workspace-app .face-evidence-summary h3 { margin: 2px 0 0; font-size: 17px; overflow-wrap: anywhere; }
+.workspace-app .face-evidence-summary p { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.workspace-app .face-evidence-summary p svg { width: 15px; height: 15px; flex: none; }
+.workspace-app .face-evidence-split>.event-video { width: 100%; min-width: 0; }
+.workspace-app .face-evidence-split>.event-video video { width: 100%; max-height: 70dvh; aspect-ratio: 16/9; object-fit: contain; background: #080909; }
+@media(max-width:760px) {
+ .workspace-app .face-evidence-split { grid-template-columns: minmax(0,1fr); gap: 16px; }
+ .workspace-app .face-evidence-summary { display: grid; grid-template-columns: 86px minmax(0,1fr); gap: 6px 12px; align-items: center; }
+ .workspace-app .face-evidence-summary>img, .workspace-app .face-evidence-summary>.face-placeholder { width: 86px; height: 100px; grid-row: span 4; }
+ .workspace-app .face-evidence-summary>.button { grid-column: 1/-1; }
+}
+
 /* Selection controls are not text fields. Keep their size stable in every form. */
 .workspace-app .people-management-grid.people-view-grid { grid-template-columns: repeat(3,minmax(0,1fr)); gap: 14px; }
 .workspace-app .people-view-grid .managed-person { grid-template-columns: minmax(0,1fr); align-content: start; gap: 14px; padding: 16px; }

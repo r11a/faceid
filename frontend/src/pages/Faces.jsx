@@ -15,9 +15,19 @@ function FaceImage({ src, alt }) {
 }
 
 function Evidence({ event, people, onClose, onSimilar }) {
-  return <Modal title={`${event.ground_truth || event.person || "פנים לא מזוהות"} · ${event.camera}`} subtitle={dateTime(event.start_ts || event.updated_ts)} onClose={onClose} wide>
-    <div className={`face-evidence ${isBlacklistedEvent(event, people) ? "blacklist-outline" : ""}`}><FaceImage src={eventImage(event)} alt="תמונת האירוע" /><EventVideo eventId={event.event_id} />
-    {event.sample_id && <button className="button secondary" onClick={() => { onSimilar({ sample_id: event.sample_id }); onClose(); }}><Search />חפש פנים דומות לאלה</button>}</div>
+  const name = event.ground_truth || event.person || "פנים לא מזוהות";
+  return <Modal title="פרטי אירוע" onClose={onClose} wide>
+    <div className={`face-evidence face-evidence-split ${isBlacklistedEvent(event, people) ? "blacklist-outline" : ""}`}>
+      <aside className="face-evidence-summary">
+        <FaceImage src={eventImage(event)} alt="תמונת האירוע" />
+        <h3>{name}</h3>
+        <p><Camera />{event.camera || "מצלמה לא ידועה"}</p>
+        <p><Clock3 />{dateTime(event.start_ts || event.updated_ts)}</p>
+        {event.similarity != null && <Badge tone="info">{percent(event.similarity)} דמיון</Badge>}
+        {event.sample_id && <button className="button secondary" onClick={() => { onSimilar({ sample_id: event.sample_id }); onClose(); }}><Search />חפש פנים דומות</button>}
+      </aside>
+      <EventVideo eventId={event.event_id} />
+    </div>
   </Modal>;
 }
 
