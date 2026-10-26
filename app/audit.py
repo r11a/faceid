@@ -365,18 +365,31 @@ class AuditStore:
         camera: str | None = None, date_from: float | None = None,
         date_to: float | None = None, query: str | None = None,
         include_presence_updates: bool = False,
+        confirmed_identity: bool = False, identity_names: list[str] | None = None,
     ):
+        # Dashboard filters describe confirmed people, not recognition candidates.
+        identity = "CASE WHEN ground_truth IS NOT NULL THEN NULLIF(ground_truth, '__unknown__') WHEN status='recognized' THEN person END"
         clauses, params = [], []
         if not include_presence_updates:
             clauses.append("COALESCE(occurrence,'')!='presence_update'")
-        if status:
+        if confirmed_identity and status == "recognized":
+            clauses.append(f"({identity}) IS NOT NULL")
+        elif confirmed_identity and status == "unknown":
+            clauses.append(f"({identity}) IS NULL AND (ground_truth='__unknown__' OR status IN ('unknown','ambiguous'))")
+        elif status:
             clauses.append("status=?")
             params.append(status)
         if person:
-            clauses.append(
-                "(person=? OR probable_person=? OR ground_truth=?)"
-            )
-            params.extend((person, person, person))
+            if confirmed_identity:
+                clauses.append(f"({identity})=?")
+                params.append(person)
+            else:
+                clauses.append("(person=? OR probable_person=? OR ground_truth=?)")
+                params.extend((person, person, person))
+        if identity_names is not None:
+            placeholders = ','.join('?' for _ in identity_names)
+            clauses.append(f"({identity}) IN ({placeholders})" if identity_names else "0")
+            params.extend(identity_names)
         if camera:
             clauses.append("camera=?")
             params.append(camera)
@@ -388,11 +401,15 @@ class AuditStore:
             params.append(float(date_to))
         if query:
             like = f"%{query.strip()}%"
-            clauses.append(
-                "(camera LIKE ? OR person LIKE ? OR probable_person LIKE ? "
-                "OR ai_description LIKE ? OR ai_tags LIKE ?)"
-            )
-            params.extend((like, like, like, like, like))
+            if confirmed_identity:
+                clauses.append(f"({identity}) LIKE ?")
+                params.append(like)
+            else:
+                clauses.append(
+                    "(camera LIKE ? OR person LIKE ? OR probable_person LIKE ? "
+                    "OR ai_description LIKE ? OR ai_tags LIKE ?)"
+                )
+                params.extend((like, like, like, like, like))
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         columns = """
             event_id, camera, start_ts, end_ts, status, person, score, margin,
@@ -854,9 +871,14 @@ class AuditStore:
                     "camera": camera["camera"], "count": camera["count"],
                 })
         result = {}
-        for raw in totals:
-            row = dict(raw)
-            last = latest.get(row["person"])
+        totals_by_person = {row["person"]: dict(row) for row in totals}
+        # Retained quiet sightings still establish a location even if the arrival
+        # was pruned or corrected. They never inflate visit/appearance totals.
+        for person, last in latest.items():
+            row = totals_by_person.get(person, {
+                "person": person, "appearances": 0, "avg_score": 0,
+                "last_seen": None, "today": 0, "last_7_days": 0, "last_30_days": 0,
+            })
             cameras = cameras_by_person.get(row["person"], [])
             result[row["person"]] = {
                 **row,

@@ -1327,7 +1327,12 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         return {"ok": True, "removed_images": removed}
 
     @app.get("/api/dashboard")
-    def dashboard():
+    def dashboard(
+        q: str | None = None, person: str | None = None,
+        status: str | None = None, watchlist: str | None = None,
+        camera: str | None = None, offset: int = 0, limit: int = 60,
+    ):
+        selected_person = person
         people = gallery.persons()
         stats = processor.audit.person_statistics() if processor.audit else {}
         visits = getattr(processor, "visits", None)
@@ -1364,15 +1369,25 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         cards.sort(key=lambda item: (
             not item["favorite"], -(item["last_seen"] or 0), item["name"].casefold()
         ))
+        identity_names = None
+        if watchlist:
+            if watchlist not in {"black", "white", "normal"}:
+                raise HTTPException(400, "Invalid watchlist")
+            identity_names = [p["name"] for p in people.values()
+                              if p.get("watchlist", "normal") == watchlist]
+        recent = processor.audit.search_events(
+            limit=limit, offset=offset, status=status, person=selected_person,
+            camera=camera, query=q, confirmed_identity=True,
+            identity_names=identity_names,
+        ) if processor.audit else {"events": [], "total": 0, "cameras": []}
         return {
             "summary": (
                 processor.audit.dashboard_summary() if processor.audit else {}
             ),
             "people": cards,
-            "recent": (
-                processor.audit.search_events(limit=60)["events"]
-                if processor.audit else []
-            ),
+            "recent": recent["events"],
+            "recent_total": recent["total"],
+            "cameras": recent["cameras"],
         }
 
     class CameraProfileBody(BaseModel):

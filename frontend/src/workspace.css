@@ -315,3 +315,25 @@
  .workspace-app label:has(>input:is([type=checkbox],[type=radio])):not(.unknown-grid label):not(.sync-grid label) { min-height: 44px; }
  .workspace-app .camera-stage>.live-frame, .workspace-app .camera-stage>.live-frame>img { max-height: 32vh; }
 }
+
+/* Quiet home filters and a media-first, vertically scrollable face timeline. */
+.workspace-app .home-event-filters { display:flex; flex-wrap:wrap; gap:12px; align-items:end; padding:0 0 18px; }
+.workspace-app .home-event-filters label { display:grid; gap:5px; flex:1 1 150px; min-width:0; color:var(--muted); font-size:12px; }
+.workspace-app .home-event-filters input, .workspace-app .home-event-filters select { width:100%; min-width:0; }
+.workspace-app .home-section-actions .icon-button.active { color:var(--accent); background:var(--surface-2); }
+.workspace-app .home-rail { scrollbar-width:none; }
+.workspace-app .home-rail::-webkit-scrollbar { display:none; }
+.workspace-app .home-rail-controls { display:none; }
+.workspace-app .face-timeline-scroll { max-height:68dvh; overflow-y:auto; overscroll-behavior:contain; padding:4px 12px; scrollbar-width:thin; }
+.workspace-app .face-timeline-vertical { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; border-inline-start:1px solid var(--border); padding-inline-start:18px; }
+.workspace-app .face-timeline-vertical .face-appearance { display:grid; grid-template-columns:112px minmax(0,1fr) 20px; gap:18px; padding:10px; align-items:center; width:100%; text-align:start; }
+.workspace-app .face-timeline-vertical .face-appearance-photo { width:112px; height:112px; aspect-ratio:1; }
+.workspace-app .face-timeline-vertical .face-appearance-photo img { width:100%; height:100%; object-fit:contain; }
+.workspace-app .face-timeline-vertical .face-appearance-details { display:grid; gap:6px; min-width:0; justify-items:start; }
+.workspace-app .face-timeline-load-more { display:flex; align-items:center; gap:12px; justify-content:center; padding:16px; }
+@media (max-width:760px) {
+ .workspace-app .home-event-filters label { flex-basis:calc(50% - 12px); }
+ .workspace-app .face-timeline-vertical { padding-inline-start:10px; }
+ .workspace-app .face-timeline-vertical .face-appearance { grid-template-columns:80px minmax(0,1fr) 16px; gap:10px; }
+ .workspace-app .face-timeline-vertical .face-appearance-photo { width:80px; height:80px; }
+}
