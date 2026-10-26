@@ -50,7 +50,7 @@ background at startup, or with **Scan available historical images**. Deleted ima
 cannot be reconstructed. Face crops share the configured evidence retention policy;
 vectors stay with the audit history and are removed when that history is purged.
 
-**New in 6.5.4:** confirmed identity notifications and HA automation events publish before event completion and media/index work. [Latency and MQTT guide](docs/recognition-latency.md).
+**New in 6.5.5:** confirmed identity notifications and HA automation events publish before event completion and media/index work. [Latency and MQTT guide](docs/recognition-latency.md).
 
 **New in 6.5.0:** HOMEii workspace with activity, people, cameras and management; local Hebrew typography, light/dark themes and Ctrl/Cmd+K screen search. [Interface guide](docs/interface.md).
 

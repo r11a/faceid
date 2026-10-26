@@ -41,14 +41,20 @@ function useAppearances(selection, page, retry) {
   return state;
 }
 
-export function ClipSequence({ events, people = [] }) {
+export function ClipSequence({ events, people = [], selection, total = events.length, onFindSimilar }) {
   const [sequence, setSequence] = useState(null);
   const rows = sequence || chronological(events);
-  const [index, setIndex] = useState(0);
+  const [selectedIndex, setIndex] = useState(null);
+  const index = selectedIndex ?? rows.length - 1;
   const [playing, setPlaying] = useState(false);
   const [finished, setFinished] = useState(false);
   const [unavailable, setUnavailable] = useState(0);
   const current = rows[index];
+  const route = useRef(null);
+  useEffect(() => { route.current?.querySelector('[aria-current="step"]')?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [current?.event_id]);
+  const start = nextIndex => {
+    setSequence(rows); setIndex(nextIndex); setUnavailable(0); setFinished(false); setPlaying(true);
+  };
   const advance = (failed = false) => {
     if (failed) setUnavailable(value => value + 1);
     const next = clipAfter(index, rows.length);
@@ -57,14 +63,21 @@ export function ClipSequence({ events, people = [] }) {
   };
   if (!rows.length) return null;
   return <div className="home-sequence">
-    <div className="home-video-stage">{playing ? <EventVideo eventId={current.event_id} nextEventId={rows[index + 1]?.event_id} onEnded={() => advance(false)} onUnavailable={() => advance(true)} className={identityForEvent(current, people)?.watchlist === "black" ? "blacklist-outline" : ""} /> : <>
-      <Photo src={current.image || `api/activity/${encodeURIComponent(current.event_id)}/image`} name="תמונת האירוע" />
-      <button className="button primary" onClick={() => { setSequence(chronological(events)); setIndex(0); setUnavailable(0); setFinished(false); setPlaying(true); }}><Play />{finished ? "נגן שוב" : "נגן רצף"}</button>
-    </>}</div>
-    <div className="home-video-caption"><b><Camera />{current.camera || "מצלמה לא ידועה"}</b><span>{dateTime(eventTime(current))}</span><span>{index + 1} / {rows.length}</span></div>
-    {unavailable > 0 && <p className="home-muted" role="status">{unavailable} קליפים לא זמינים — דולגו</p>}
-    {finished && <p role="status">הרצף הסתיים</p>}
-    <ol className="home-route">{rows.map((row, i) => <li key={row.event_id}><button className={i === index ? "active" : ""} aria-current={i === index ? "step" : undefined} onClick={() => { setSequence(rows); setIndex(i); setPlaying(true); setFinished(false); }}><span>{i + 1}</span><b>{row.camera || "—"}</b><time>{dateTime(eventTime(row))}</time><Play /></button></li>)}</ol>
+    <div className="home-sequence-main">
+      <div className="home-video-stage">{playing ? <EventVideo eventId={current.event_id} nextEventId={rows[index + 1]?.event_id} onEnded={() => advance(false)} onUnavailable={() => advance(true)} className={identityForEvent(current, people)?.watchlist === "black" ? "blacklist-outline" : ""} /> : <>
+        <Photo src={current.image || `api/activity/${encodeURIComponent(current.event_id)}/image`} name="תמונת האירוע" eager />
+        <button className="button primary" onClick={() => start(finished ? 0 : index)}><Play />{finished ? "נגן שוב" : "נגן אירוע"}</button>
+      </>}</div>
+      <div className="home-video-caption"><b><Camera />{current.camera || "מצלמה לא ידועה"}</b><time>{dateTime(eventTime(current))}</time><span>{index + 1} / {rows.length}</span></div>
+      {onFindSimilar && <button className="text-button home-sequence-search" onClick={() => onFindSimilar(current)}><Search />מצא דומה בציר זמן</button>}
+      {unavailable > 0 && <p className="home-muted" role="status">{unavailable} קליפים לא זמינים — דולגו</p>}
+      {finished && <p role="status">הרצף הסתיים</p>}
+    </div>
+    <aside className="home-sequence-sidebar" aria-label="רצף הופעות">
+      {selection && <div className="home-person-summary"><Photo src={selection.photo} name={selection.name} /><div><b>{selection.name}</b>{!selection.person && <span className="home-muted">התאמות דומות · זהות לא מאומתת</span>}</div></div>}
+      <div className="home-sequence-heading"><div><h3>רצף הופעות</h3><span className="home-muted">{rows.length} מתוך {total} · מהישן לחדש</span></div><button className="text-button" onClick={() => start(0)}><Play />נגן רצף</button></div>
+      <ol ref={route} className="home-route">{rows.map((row, i) => <li key={row.event_id}><button className={i === index ? "active" : ""} aria-current={i === index ? "step" : undefined} onClick={() => start(i)}><Photo className="home-route-photo" src={row.image || `api/activity/${encodeURIComponent(row.event_id)}/image`} name={`אירוע ${i + 1}`} /><span className="home-route-copy"><b>{row.camera || "מצלמה לא ידועה"}</b><time>{dateTime(eventTime(row))}</time></span><span className="home-route-number">{i + 1}</span><Play /></button></li>)}</ol>
+    </aside>
   </div>;
 }
 
@@ -170,8 +183,7 @@ export function DashboardPage({ navigate }) {
     </Modal>}
     {candidates && <Modal title="בחר פנים" onClose={() => { request.current?.abort(); setCandidates(null); setResolving(false); }}><div className="face-candidates">{candidates.map((sample, index) => <button key={sample.sample_id} onClick={() => { select({ name: "לא מזוהה", photo: sample.image, source: { sample_id: sample.sample_id } }); setPlaybackEvent(null); setDetails(true); }}><Photo src={sample.image} /><span>פנים {index + 1}</span></button>)}</div></Modal>}
     {details && selection && <Modal title={selection.name} onClose={() => setDetails(false)} wide>
-      <div className="home-person-summary"><Photo src={selection.photo} name={selection.name} /><div><b><MapPin />{selection.person?.last_camera || rows.at(-1)?.camera || "—"}</b><time>{dateTime(selection.person?.last_seen || eventTime(rows.at(-1) || {}))}</time>{!selection.person && <span className="home-muted">התאמות דומות · זהות לא מאומתת</span>}</div></div>
-      {loading ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : <><div className="home-sequence-heading"><h3>רצף הופעות</h3><span className="home-muted">{rows.length} מתוך {appearances.data?.total || 0} · מהישן לחדש</span></div>{rows.length ? <ClipSequence key={`${currentSource}-${page}`} events={rows} people={people} /> : <Empty icon={Camera} title="אין אירועים להצגה" />}{(appearances.data?.total || 0) > 60 && <HistoryPages page={page} count={rows.length} total={appearances.data.total} onChange={setPage} />}</>}
+      {loading ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : <>{rows.length ? <ClipSequence key={`${currentSource}-${page}`} events={rows} people={people} selection={selection} total={appearances.data?.total || 0} onFindSimilar={event => { setDetails(false); setTimelineSource(event.sample_id ? { sample_id: event.sample_id } : { event_id: event.event_id }); }} /> : <Empty icon={Camera} title="אין אירועים להצגה" />}{(appearances.data?.total || 0) > 60 && <HistoryPages page={page} count={rows.length} total={appearances.data.total} onChange={setPage} />}</>}
       <div className="home-detail-actions"><button className="button secondary" onClick={() => setDetails(false)}>חזרה לאירועים</button><button className="text-button" onClick={() => { location.hash = `/faces?${query(selection.source)}`; }}>חיפוש מורחב <ArrowLeft /></button></div>
     </Modal>}
   </div>;

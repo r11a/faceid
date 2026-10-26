@@ -34,3 +34,29 @@ it("opens similarity timeline from an event without searching by recognized name
  await act(() => renderer.root.findAllByType("button").find(b=>b.children.includes("מצא דומה בציר זמן")).props.onClick());
  expect(renderer.root.findByProps({"data-view":"timeline"}).props["data-source"]).toBe(JSON.stringify({sample_id:"s1"}));
 });
+
+it("opens person details on the latest appearance and searches from its selected event", async () => {
+ const person = {slug:"alice",name:"Alice",photo:"alice.jpg",last_seen:1700000000,last_camera:"Door"};
+ const events = [{event_id:"latest",sample_id:"latest-face",camera:"Door",start_ts:1700000000},{event_id:"older",sample_id:"older-face",camera:"Gate",start_ts:1699990000}];
+ useResource.mockImplementation(path => ({data:path.startsWith("faces/timeline") ? {events,total:61} : {people:[person],recent:[],cameras:["Door"]},reload:vi.fn()}));
+ await act(() => {renderer=create(<DashboardPage navigate={vi.fn()} />);});
+ await act(() => renderer.root.findAllByType("button").find(button=>button.props.className?.includes("home-person-card")).props.onClick());
+ expect(renderer.root.findByProps({className:"home-sequence-sidebar"}).findByProps({className:"home-person-summary"}).findByType("b").children).toEqual(["Alice"]);
+ expect(renderer.root.findByProps({className:"home-video-stage"}).findByType("img").props.src).toContain("latest/image");
+ await act(() => renderer.root.findByProps({className:"home-route"}).findAllByType("button")[0].props.onClick());
+ await act(() => renderer.root.findByProps({className:"text-button home-sequence-search"}).props.onClick());
+ expect(renderer.root.findByProps({"data-view":"timeline"}).props["data-source"]).toBe(JSON.stringify({sample_id:"older-face"}));
+ expect(renderer.root.findAllByProps({className:"home-sequence-sidebar"})).toHaveLength(0);
+});
+
+it("keeps history paging and resets the preview to the newest event on that page", async () => {
+ const person = {slug:"alice",name:"Alice",last_seen:1700000000};
+ useResource.mockImplementation(path => ({data:path.startsWith("faces/timeline") ? {events:path.includes("offset=60") ? [{event_id:"previous-page",start_ts:1699900000}] : [{event_id:"latest-page",start_ts:1700000000}],total:61} : {people:[person],recent:[]},reload:vi.fn()}));
+ await act(() => {renderer=create(<DashboardPage navigate={vi.fn()} />);});
+ await act(() => renderer.root.findAllByType("button").find(button=>button.props.className?.includes("home-person-card")).props.onClick());
+ await act(() => renderer.root.findAllByType("button").find(button=>button.children.includes("אירועים קודמים")).props.onClick());
+ expect(renderer.root.findByProps({className:"home-video-stage"}).findByType("img").props.src).toContain("previous-page/image");
+ expect(renderer.root.findAllByType("button").filter(button=>button.children.includes("אירועים קודמים")).every(button=>button.props.disabled)).toBe(true);
+ await act(() => renderer.root.findAllByType("button").find(button=>button.children.includes("אירועים חדשים יותר")).props.onClick());
+ expect(renderer.root.findByProps({className:"home-video-stage"}).findByType("img").props.src).toContain("latest-page/image");
+});

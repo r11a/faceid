@@ -3,9 +3,10 @@ import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FaceExplorer } from "./pages/Faces.jsx";
 import { api } from "./api.js";
+import { useResource } from "./hooks.js";
 
 vi.mock("./api.js", () => ({ api: vi.fn(), assetUrl: path => `/ingress/${path}`, query: values => new URLSearchParams(values).toString() }));
-vi.mock("./hooks.js", async original => ({ ...await original(), useResource: () => ({ data: { users: [] }, reload: vi.fn() }) }));
+vi.mock("./hooks.js", async original => ({ ...await original(), useResource: vi.fn(() => ({ data: { users: [] }, reload: vi.fn() })) }));
 vi.mock("./EventVideo.jsx", () => ({ EventVideo: () => null }));
 vi.mock("./ui.jsx", async original => ({ ...await original(), Modal: ({ children }) => <div>{children}</div> }));
 
@@ -13,6 +14,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let renderer;
 beforeEach(() => {
   api.mockReset();
+  useResource.mockImplementation(() => ({ data: { users: [] }, reload: vi.fn() }));
   api.mockResolvedValue({ total: 1, cameras: ["Door"], mode: "identity", events: [{ event_id: "event/1", camera: "Door", person: "Alice", start_ts: 1700000000 }] });
 });
 afterEach(async () => { if (renderer) await act(() => renderer.unmount()); renderer = null; });
@@ -75,4 +77,14 @@ it("can search similar faces from evidence without a sample and asks which face 
   await act(async () => renderer.root.findByProps({ "aria-label": "מצא דומה בציר זמן" }).props.onClick());
   expect(JSON.stringify(renderer.toJSON())).toContain("בחר את הפנים לחיפוש מתוך האירוע");
   expect(renderer.root.findAllByType("img")).toHaveLength(2);
+});
+
+it("makes missing history actionable and requests a bounded scan of retained camera images", async () => {
+  useResource.mockImplementation(path => ({ data: path === "faces/index" ? { running:false, events_total:100, events_indexed:1, events_missing:99, remote_available:true } : { users:[] }, reload:vi.fn() }));
+  api.mockResolvedValue({ total:1,cameras:["Door"],source_event_id:"source",events:[{event_id:"source",camera:"Door",start_ts:1700000000,similarity:1}] });
+  await act(async () => { renderer=create(<FaceExplorer source={{sample_id:"s1"}} />); });
+  expect(JSON.stringify(renderer.toJSON())).toContain("החיפוש בהיסטוריה חלקי");
+  expect(JSON.stringify(renderer.toJSON())).toContain("תמונת החיפוש");
+  await act(async () => renderer.root.findAllByType("button").find(button=>button.children.includes("השלם חיפוש בהיסטוריה")).props.onClick());
+  expect(api).toHaveBeenCalledWith("faces/index?remote=true&limit=500",{method:"POST"});
 });

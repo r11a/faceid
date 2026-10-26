@@ -321,6 +321,8 @@ class AuditStore:
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_samples'").fetchone():
                 con.execute("DELETE FROM face_samples WHERE event_id NOT IN (SELECT event_id FROM events)")
                 con.execute("DELETE FROM face_indexed WHERE event_id NOT IN (SELECT event_id FROM events)")
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_scan_attempts'").fetchone():
+                con.execute("DELETE FROM face_scan_attempts WHERE event_id NOT IN (SELECT event_id FROM events)")
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='access1_attempts'").fetchone():
                 con.execute("DELETE FROM access1_attempts WHERE ts < ?", (cutoff,))
         alert_cleanup = getattr(self, "_alert_cleanup", None)
@@ -805,6 +807,8 @@ class AuditStore:
                         (self.path.parent / "face_search_images" / f"{sample_id}.jpg").unlink(missing_ok=True)
                     con.execute("DELETE FROM face_samples WHERE event_id=?", (event_id,))
                     con.execute("DELETE FROM face_indexed WHERE event_id=?", (event_id,))
+                if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_scan_attempts'").fetchone():
+                    con.execute("DELETE FROM face_scan_attempts WHERE event_id=?", (event_id,))
                 con.execute("DELETE FROM review_history WHERE event_id=?", (event_id,))
                 con.execute("DELETE FROM observations WHERE event_id=?", (event_id,))
                 con.execute("DELETE FROM jobs WHERE event_id=?", (event_id,))

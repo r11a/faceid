@@ -12,6 +12,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+from contextlib import nullcontext
 
 import cv2
 import numpy as np
@@ -39,6 +40,7 @@ def normalized_vector(value):
 class FaceSearch:
     def __init__(self, audit, gallery, engine):
         self.audit, self.gallery, self.engine = audit, gallery, engine
+        self.frigate = None
         self.image_dir = audit.path.parent / 'face_search_images'
         self.image_dir.mkdir(parents=True, exist_ok=True)
         self._index_lock = threading.Lock()
@@ -49,12 +51,24 @@ class FaceSearch:
                     sample_id TEXT PRIMARY KEY, event_id TEXT NOT NULL,
                     embedding BLOB NOT NULL, created_ts REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS face_samples_event_idx ON face_samples(event_id);
+                CREATE TABLE IF NOT EXISTS face_scan_attempts (
+                    event_id TEXT PRIMARY KEY, attempted_ts REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS face_indexed (
                     event_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);
             ''')
             con.execute('DELETE FROM face_samples WHERE event_id NOT IN (SELECT event_id FROM events)')
             con.execute('DELETE FROM face_indexed WHERE event_id NOT IN (SELECT event_id FROM events)')
+            con.execute('DELETE FROM face_scan_attempts WHERE event_id NOT IN (SELECT event_id FROM events)')
         self.prune_images()
+
+    def coverage(self):
+        with self.audit._connection() as con:
+            total, indexed = con.execute(
+                'SELECT COUNT(*), COALESCE(SUM(EXISTS(SELECT 1 FROM face_samples s '
+                'WHERE s.event_id=e.event_id)),0) FROM events e').fetchone()
+        return {**self.index_status, 'events_total': total, 'events_indexed': indexed,
+                'events_missing': total-indexed, 'coverage_percent': round(100*indexed/total,1) if total else 0,
+                'remote_available': self.frigate is not None}
 
     def record(self, event_id, embedding, crop=None):
         vector = normalized_vector(embedding)
@@ -160,16 +174,21 @@ class FaceSearch:
         offset, limit = max(0,offset), max(1,min(limit,100))
         return {'events': ordered[offset:offset+limit], 'total':len(ordered),
                 'offset':offset, 'limit':limit, 'cameras':sorted({r['camera'] for r in ordered}),
-                'mode':'identity' if person else 'similarity', 'index':dict(self.index_status)}
+                'mode':'identity' if person else 'similarity', 'index':self.coverage()}
 
-    def start_index(self):
+    def start_index(self, *, remote=False, limit=500):
+        if not 1 <= limit <= 2000:
+            raise ValueError('Scan limit must be between 1 and 2000')
+        if remote and self.frigate is None:
+            raise ValueError('Frigate is unavailable')
         with self._index_lock:
             if self.index_status['running']:
                 return dict(self.index_status)
-            self.index_status = {'running':True,'processed':0,'indexed':0,'total':0,'error':None}
+            self.index_status = {'running':True,'processed':0,'indexed':0,'total':0,'error':None,
+                                 'remote':remote,'limit':limit,'unavailable':0,'no_faces':0}
         def run():
             try:
-                self.index_existing()
+                self.index_existing(remote=remote, limit=limit)
             except Exception:
                 log.exception('Historical face indexing failed')
                 self.index_status['error'] = 'סריקת ההיסטוריה נכשלה; אפשר לנסות שוב'
@@ -177,7 +196,7 @@ class FaceSearch:
                 with self._index_lock:
                     self.index_status['running'] = False
         threading.Thread(target=run, daemon=True, name='face-search-index').start()
-        return dict(self.index_status)
+        return self.coverage()
 
     def _recover_unknowns(self, event_id=None):
         # Reuse original vectors; redetecting a tight stored crop may find no face.
@@ -208,14 +227,18 @@ class FaceSearch:
         image = cv2.imread(str(path))
         if image is None:
             return 0
-        indexed = 0
-        for face in self.engine.faces(image)[:8]:
-            if self.record(eid, face.normed_embedding, crop_face(image, face.bbox)):
-                indexed += 1
+        indexed = self._index_image(eid, image)
         # A failed/empty detection must remain retryable, including old markers.
         if indexed:
             with self.audit._connection() as con:
                 con.execute('INSERT OR REPLACE INTO face_indexed VALUES(?,?)', (eid, fingerprint))
+        return indexed
+
+    def _index_image(self, eid, image):
+        indexed = 0
+        for face in self.engine.faces(image)[:8]:
+            if self.record(eid, face.normed_embedding, crop_face(image, face.bbox)):
+                indexed += 1
         return indexed
 
     def recover_event(self, event_id):
@@ -229,17 +252,49 @@ class FaceSearch:
         if not self.sample_vectors(event_id=event_id):
             self._index_evidence(event_id, self.audit.evidence_path(event_id))
 
-    def index_existing(self):
+    def index_existing(self, *, remote=False, limit=500):
+        if not 1 <= limit <= 2000:
+            raise ValueError('Scan limit must be between 1 and 2000')
         self._recover_unknowns()
+        if self.engine is None:
+            return
         with self.audit._connection() as con:
-            events = con.execute('SELECT event_id FROM events ORDER BY start_ts DESC').fetchall()
-        # Only retained evidence is recoverable. Never download all Frigate history implicitly.
-        files = [(eid, self.audit.evidence_path(eid)) for (eid,) in events]
-        files = [(eid,path) for eid,path in files if path.is_file()]
-        self.index_status['total'] = len(files)
-        for eid,path in files:
-            self.index_status['indexed'] += self._index_evidence(eid, path)
-            self.index_status['processed'] += 1
+            # Indexed events need no inference or throttle delay. Explicit remote
+            # scans bound the entire missing corpus batch, including local images.
+            query = ('SELECT e.event_id FROM events e LEFT JOIN face_scan_attempts a '
+                     'ON a.event_id=e.event_id WHERE NOT EXISTS '
+                     '(SELECT 1 FROM face_samples s WHERE s.event_id=e.event_id) '
+                     'ORDER BY COALESCE(a.attempted_ts,0), COALESCE(e.start_ts,e.updated_ts) DESC')
+            events = con.execute(query + (' LIMIT ?' if remote else ''), (limit,) if remote else ()).fetchall()
+        candidates = [(eid, self.audit.evidence_path(eid)) for (eid,) in events]
+        if not remote:
+            candidates = [(eid,path) for eid,path in candidates if path.is_file()]
+        self.index_status['total'] = len(candidates)
+        background = self.engine.background_work() if hasattr(self.engine, 'background_work') else nullcontext()
+        with background:
+            for eid,path in candidates:
+                if remote:
+                    with self.audit._connection() as con:
+                        con.execute('INSERT OR REPLACE INTO face_scan_attempts VALUES(?,?)', (eid,time.time()))
+                try:
+                    indexed = self._index_evidence(eid, path) if path.is_file() else 0
+                    if not indexed and remote and self.frigate is not None:
+                        image = self.frigate.snapshot(eid, crop=True)
+                        if image is None:
+                            self.index_status['unavailable'] = self.index_status.get('unavailable',0) + 1
+                        else:
+                            indexed = self._index_image(eid, image)
+                            if not indexed:
+                                self.index_status['no_faces'] = self.index_status.get('no_faces',0) + 1
+                    elif not indexed:
+                        self.index_status['no_faces'] = self.index_status.get('no_faces',0) + 1
+                    self.index_status['indexed'] += indexed
+                except Exception:
+                    log.exception('Historical face snapshot failed for %s', eid)
+                    self.index_status['unavailable'] = self.index_status.get('unavailable',0) + 1
+                finally:
+                    self.index_status['processed'] += 1
+                    time.sleep(.1)
 
 
 def register_face_routes(app, processor, gallery, engine):
@@ -248,6 +303,7 @@ def register_face_routes(app, processor, gallery, engine):
         return
     service = getattr(processor,'face_search',None) or FaceSearch(audit,gallery,engine)
     processor.face_search = service
+    service.frigate = getattr(processor, 'frigate', None)
     tokens, token_lock = {}, threading.Lock()
 
     def confirmed_event(event_id, person):
@@ -327,7 +383,7 @@ def register_face_routes(app, processor, gallery, engine):
 
     @app.get('/api/faces/index')
     def index_status():
-        return dict(service.index_status)
+        return service.coverage()
 
     @app.get('/api/faces/event/{event_id}')
     def event_faces(event_id: str):
@@ -337,8 +393,11 @@ def register_face_routes(app, processor, gallery, engine):
         return {'samples':[{'sample_id':sid,'image':f'api/faces/images/{sid}' if (service.image_dir/f'{sid}.jpg').is_file() else None} for (sid,) in rows]}
 
     @app.post('/api/faces/index')
-    def index_history():
-        return service.start_index()
+    def index_history(remote: bool=False, limit: int=500):
+        try:
+            return service.start_index(remote=remote, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.post('/api/faces/search')
     async def photo_search(file: UploadFile, face_index: int | None = None):
@@ -434,6 +493,7 @@ def register_face_routes(app, processor, gallery, engine):
         if sum(bool(x) for x in (person,unknown_id,event_id,sample_id,token)) != 1:
             raise HTTPException(400,'בחר מקור פנים אחד לחיפוש')
         vectors, name = [], None
+        source_event_id = event_id
         try:
             if person:
                 name,vectors=service.person_vectors(person)
@@ -445,6 +505,7 @@ def register_face_routes(app, processor, gallery, engine):
                 meta=json.loads(path.read_text(encoding='utf-8'))
                 vectors=[meta['embedding']]
                 if isinstance(meta.get('event_id'), str) and meta['event_id']:
+                    source_event_id = meta['event_id']
                     service.record(meta['event_id'], vectors[0], cv2.imread(str(path.with_suffix('.jpg'))))
             elif token:
                 with token_lock:
@@ -459,8 +520,14 @@ def register_face_routes(app, processor, gallery, engine):
                 if not vectors: raise HTTPException(404,'אין עדיין נתוני פנים לחיפוש באירוע; סרוק את ההיסטוריה הזמינה')
                 if event_id and len(vectors)>1:
                     raise HTTPException(409,'באירוע יש כמה תמונות פנים; בחר אחת לחיפוש')
-            return service.timeline(vectors,person=name if person and not similar else None,
+            if sample_id:
+                with audit._connection() as con:
+                    row = con.execute('SELECT event_id FROM face_samples WHERE sample_id=?', (sample_id,)).fetchone()
+                source_event_id = row[0] if row else None
+            result = service.timeline(vectors,person=name if person and not similar else None,
                 threshold=threshold,camera=camera,date_from=date_from,date_to=date_to,offset=offset,limit=limit,order=order)
+            result['source_event_id'] = source_event_id
+            return result
         except (ValueError,KeyError) as exc:
             raise HTTPException(400,str(exc)) from exc
 
