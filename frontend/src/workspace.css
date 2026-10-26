@@ -192,6 +192,15 @@
 
 /* Portaled alerts and event dialogs use the same controls and typography. */
 .workspace-app.workspace-portals { display: contents; min-height: 0; }
+.workspace-app .home-workspace .home-locations { padding-top: 0; border-top: 0; }
+.workspace-app .home-event-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 14px; }
+.workspace-app .home-event-grid .home-event-card { width: 100%; min-width: 0; }
+.workspace-app .home-event-grid .home-event-card>.home-photo { height: auto; aspect-ratio: 16/10; }
+.workspace-app .home-section:has(.home-event-grid) .home-section-actions { padding-inline-end: 0; }
+.workspace-app .home-event-grid .home-event-play { top: 12px; }
+@media(min-width:1400px) { .workspace-app .home-event-grid { grid-template-columns: repeat(4,minmax(0,1fr)); } }
+@media(max-width:760px) { .workspace-app .home-event-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; } }
+@media(max-width:380px) { .workspace-app .home-event-grid { grid-template-columns: minmax(0,1fr); } }
 
 /* Selected face context beside the clip; the video owns the wider column. */
 .workspace-app .face-evidence-split { display: grid; grid-template-columns: minmax(200px, .7fr) minmax(0, 2.5fr); justify-items: stretch; align-items: start; gap: 22px; }

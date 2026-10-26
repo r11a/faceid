@@ -2,6 +2,8 @@
 
 ## 6.5.3 — 2026-10-26
 
+- Put last-known locations at the top of the home screen, followed by a responsive newest-first recent-event grid; remove redundant explanatory copy.
+
 - Show selected-face event details and video side by side on wide screens, with the larger column reserved for the clip.
 - Group the photo, person name, camera, timestamp and optional similarity score beside the video; keep a compact stacked layout on mobile. Preserve playback and similar-face search.
 
