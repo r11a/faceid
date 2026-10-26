@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Camera, ChevronLeft, ChevronRight, MapPin, Play, Search, UserPlus, UserRound, Users, X } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
 import { useResource } from "../hooks.js";
-import { Empty, ErrorState, Loading, Modal, dateTime, relativeTime } from "../ui.jsx";
+import { ActionGroup, Empty, ErrorState, Loading, Modal, dateTime, relativeTime } from "../ui.jsx";
 import { chronological, clipAfter, eventTime, identityForEvent, latestPeople } from "../home.js";
 import { PersonEditor } from "./Daily.jsx";
 import { EventVideo } from "../EventVideo.jsx";
@@ -117,24 +117,25 @@ export function DashboardPage({ navigate }) {
   if (dashboard.loading) return <Loading />;
   if (dashboard.error) return <ErrorState error={dashboard.error} retry={dashboard.reload} />;
   return <div className="home-workspace">
-    <header className="home-heading"><h1>מבט כללי</h1><div><button className="button secondary" onClick={() => setPicker(true)}><Search />לא מזוהים</button><button className="button primary" onClick={() => setEditor(true)}><UserPlus />הוסף אדם</button></div></header>
+    <header className="home-heading"><div className="home-title-group"><h1>מבט כללי</h1><p className="workspace-info-line">אירועים ומיקומים אחרונים</p></div><div className="home-heading-actions"><ActionGroup><button className="button secondary" onClick={() => setPicker(true)}><Search />פנים לא מזוהות</button><button className="button primary" onClick={() => setEditor(true)}><UserPlus />הוסף אדם</button></ActionGroup></div></header>
     <section className="home-section" aria-labelledby="home-events-title">
-      <div className="home-section-heading"><div><h2 id="home-events-title">{selection ? `ההופעות של ${selection.name}` : "אירועים אחרונים"}</h2>{selection && !selection.person && <span className="home-muted">התאמות דומות · זהות לא מאומתת</span>}</div>
-        <div className="home-section-actions">{selection ? <><button className="text-button" onClick={showDetails}><Play />פרטים ורצף</button><button className="button secondary" onClick={() => select(null)}><X />כולם</button></> : <button className="text-button" onClick={() => navigate("events")}>כל האירועים <ArrowLeft /></button>}</div>
+      <div className="home-section-heading"><div className="home-section-label"><h2 id="home-events-title">{selection ? `ההופעות של ${selection.name}` : "אירועים אחרונים"}</h2><span className="home-muted">{selection && !selection.person ? "התאמות דומות · זהות לא מאומתת" : "לפי זמן ההופעה · לחץ לצפייה בווידאו"}</span></div>
+        <div className="home-section-actions">{selection ? <><button className="text-button" onClick={showDetails}><Play />פרטים ורצף</button><button className="button secondary home-selection-chip" onClick={() => select(null)}><Photo src={selection.photo} name={selection.name} /><span>{selection.name}</span><X /><span className="home-clear-label">כולם</span></button></> : <button className="text-button" onClick={() => navigate("events")}>כל האירועים <ArrowLeft /></button>}</div>
       </div>
       {resolving && <Loading text="מאתר פנים…" />}
       {selectionError && <ErrorState error={selectionError} />}
       {loading ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : rows.length ? <Rail label="אירועים" resetKey={`${currentSource}-${page}`} className="home-event-rail">
         {rows.map(event => { const person = identityForEvent(event, people); return <button className={`home-event-card ${person?.watchlist === "black" ? "blacklist-outline" : ""}`} key={event.event_id} onClick={() => openEvent(event)}>
           <Photo src={event.image || `api/activity/${encodeURIComponent(event.event_id)}/image`} name={selection?.name || person?.name || "לא מזוהה"} />
-          <div><b>{selection?.name || person?.name || "לא מזוהה"}</b><span><Camera />{event.camera || "—"}</span><time>{dateTime(eventTime(event))}</time></div>
+          <span className="home-event-play" aria-hidden="true"><Play /></span>
+          <div className="home-event-copy"><b>{selection?.name || person?.name || "לא מזוהה"}</b><span><Camera />{event.camera || "—"}</span><time>{dateTime(eventTime(event))}</time></div>
         </button>; })}
       </Rail> : <Empty icon={Camera} title={selection ? "לא נמצאו הופעות" : "אין אירועים עדיין"} />}
       {selection && !loading && !error && <HistoryPages page={page} count={rows.length} total={appearances.data?.total || 0} onChange={setPage} />}
     </section>
-    <section className="home-section" aria-labelledby="home-people-title"><div className="home-section-heading"><h2 id="home-people-title">מיקום אחרון</h2><button className="text-button" onClick={() => navigate("people")}>כל האנשים <ArrowLeft /></button></div>
+    <section className="home-section home-locations" aria-labelledby="home-people-title"><div className="home-section-heading"><div className="home-section-label"><h2 id="home-people-title">מיקום אחרון</h2><span className="home-muted">בחר אדם להצגת ההופעות שלו</span></div><button className="text-button" onClick={() => navigate("people")}>כל האנשים <ArrowLeft /></button></div>
       {people.length ? <Rail label="אנשים"><>{people.map(person => <button className={`home-person-card ${person.watchlist === "black" ? "blacklist-outline" : ""} ${selection?.person?.slug === person.slug ? "selected" : ""}`} key={person.slug} onClick={() => selectPerson(person)} aria-pressed={selection?.person?.slug === person.slug}>
-        <Photo src={person.photo} name={person.name} /><b>{person.name}</b><span><MapPin />{person.last_camera || "טרם נראה"}</span><time title={dateTime(person.last_seen)}>{relativeTime(person.last_seen)}</time>
+        <Photo src={person.photo} name={person.name} /><div className="home-person-info"><b>{person.name}</b><span><MapPin />{person.last_camera || "טרם נראה"}</span><time title={dateTime(person.last_seen)}>{relativeTime(person.last_seen)}</time></div>
       </button>)}</></Rail> : <Empty icon={Users} title="הוסף אדם כדי להתחיל" />}
     </section>
     {editor && <PersonEditor person={{ name: "", files: [] }} onClose={() => setEditor(false)} onSaved={() => { setEditor(false); dashboard.reload(); }} />}

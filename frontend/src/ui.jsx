@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Info, LoaderCircle, X } from "lucide-react";
+import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { AlertCircle, CheckCircle2, Info, LoaderCircle, MoreHorizontal, X } from "lucide-react";
 
 const ToastContext = createContext(() => {});
 let toastSequence = 0;
@@ -29,10 +29,64 @@ export function Panel({ children, className = "" }) {
   return <section className={`panel ${className}`}>{children}</section>;
 }
 
+function actionChildren(children) {
+  return React.Children.toArray(children).flatMap(child => child?.type === React.Fragment ? actionChildren(child.props.children) : [child]);
+}
+
+export function ActionsMenu({ children, label = "אפשרויות נוספות" }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef(null), trigger = useRef(null), popup = useRef(null);
+  useLayoutEffect(() => {
+    const element = popup.current;
+    if (!open || !element) return;
+    const bounds = element.getBoundingClientRect();
+    const viewportWidth = document.documentElement.clientWidth;
+    const shift = bounds.left < 12 ? 12 - bounds.left : bounds.right > viewportWidth - 12 ? viewportWidth - 12 - bounds.right : 0;
+    element.style.transform = `translateX(${shift}px)`;
+    if (bounds.bottom > window.innerHeight - 12 && bounds.top > window.innerHeight - bounds.bottom) {
+      element.style.top = "auto"; element.style.bottom = "calc(100% + 6px)";
+    }
+    element.querySelector('button:not([disabled]),a')?.focus();
+  }, [open]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = event => { if (!root.current?.contains(event.target)) setOpen(false); };
+    const escape = event => { if (event.key === "Escape") { setOpen(false); trigger.current?.focus(); } };
+    window.addEventListener("pointerdown", outside);
+    window.addEventListener("keydown", escape);
+    return () => { window.removeEventListener("pointerdown", outside); window.removeEventListener("keydown", escape); };
+  }, [open]);
+  return <div className="actions-menu" ref={root}>
+    <button ref={trigger} type="button" className="icon-button" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)} onKeyDown={event => {
+      if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); }
+    }}><MoreHorizontal /></button>
+    {open && <div className="actions-menu-popover" role="menu" aria-label={label} ref={popup} onKeyDown={event => {
+      const items = [...event.currentTarget.querySelectorAll('button:not([disabled]),a[href]')];
+      const index = items.indexOf(document.activeElement);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        items[next]?.focus();
+      }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); }
+      if (event.key === "Tab") { trigger.current?.focus(); setOpen(false); }
+    }} onClick={event => {
+      if (event.target.closest('button:not([disabled]),a[href]')) { setOpen(false); trigger.current?.focus(); }
+    }}>{actionChildren(children).map(child => React.isValidElement(child) ? React.cloneElement(child, { role: "menuitem" }) : child)}</div>}
+  </div>;
+}
+
+export function ActionGroup({ children }) {
+  const items = actionChildren(children);
+  if (items.length < 2) return children;
+  const primary = items.find(item => item.props?.className?.split(" ").includes("primary")) || items[0];
+  return <>{primary}<ActionsMenu>{items.filter(item => item !== primary)}</ActionsMenu></>;
+}
+
 export function PageHeader({ eyebrow, title, description, actions }) {
   return <header className="page-header">
-    <div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{description && <p>{description}</p>}</div>
-    {actions && <div className="page-actions">{actions}</div>}
+    <div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{description && <p className="workspace-info-line">{description}</p>}</div>
+    {actions && <div className="page-actions"><ActionGroup>{actions}</ActionGroup></div>}
   </header>;
 }
 
