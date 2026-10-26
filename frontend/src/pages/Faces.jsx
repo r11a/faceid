@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, ChevronLeft, Clock3, ImageOff, Images, Search, Upload, UserPlus, Users } from "lucide-react";
+import { Camera, ChevronLeft, Clock3, Grid2X2, ImageOff, Images, List, Search, Upload, UserPlus, Users } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
 import { useImageRetry, useResource } from "../hooks.js";
-import { Badge, Empty, ErrorState, Loading, Modal, PageHeader, Panel, dateTime, percent, useToast } from "../ui.jsx";
+import { ActionsMenu, Badge, Empty, ErrorState, Loading, Modal, PageHeader, Panel, dateTime, percent, useToast } from "../ui.jsx";
 import { EventVideo } from "../EventVideo.jsx";
 import { isBlacklistedEvent } from "../alerts.js";
 
 const dayLabel = (value) => new Date(value * 1000).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+const eventImage = event => event.image || (event.event_id ? `api/activity/${encodeURIComponent(event.event_id)}/image` : "");
 
 function FaceImage({ src, alt }) {
   const image = useImageRetry(src);
@@ -15,7 +16,7 @@ function FaceImage({ src, alt }) {
 
 function Evidence({ event, people, onClose, onSimilar }) {
   return <Modal title={`${event.ground_truth || event.person || "פנים לא מזוהות"} · ${event.camera}`} subtitle={dateTime(event.start_ts || event.updated_ts)} onClose={onClose} wide>
-    <div className={`face-evidence ${isBlacklistedEvent(event, people) ? "blacklist-outline" : ""}`}><FaceImage src={event.image} /><EventVideo eventId={event.event_id} />
+    <div className={`face-evidence ${isBlacklistedEvent(event, people) ? "blacklist-outline" : ""}`}><FaceImage src={eventImage(event)} alt="תמונת האירוע" /><EventVideo eventId={event.event_id} />
     {event.sample_id && <button className="button secondary" onClick={() => { onSimilar({ sample_id: event.sample_id }); onClose(); }}><Search />חפש פנים דומות לאלה</button>}</div>
   </Modal>;
 }
@@ -45,10 +46,11 @@ export function HistoryReferenceChooser({ event, person, onClose, onAdded }) {
   </Modal>;
 }
 
-export function FaceExplorer({ source: initialSource, title, onEnroll, onReferencesChanged }) {
+export function FaceExplorer({ source: initialSource, title, onEnroll, onReferencesChanged, compact = false }) {
   const people = useResource("users");
   const [source, setSource] = useState(initialSource);
-  const [filters, setFilters] = useState({ camera: "", date_from: "", date_to: "", order: "asc", threshold: .55, similar: false });
+  const [filters, setFilters] = useState({ camera: "", date_from: "", date_to: "", order: "desc", threshold: .55, similar: false });
+  const [view, setView] = useState("grid");
   const [offset, setOffset] = useState(0);
   const [state, setState] = useState({ loading: true, data: null, error: null });
   const [retry, setRetry] = useState(0);
@@ -96,20 +98,22 @@ export function FaceExplorer({ source: initialSource, title, onEnroll, onReferen
     catch (error) { toast(error.message, "error"); }
   };
   return <div className="face-explorer">
-    <div className="panel-heading"><div><span className="eyebrow">מכל המצלמות</span><h2>{title || "הופעות הפנים שנבחרו"}</h2><p>{state.data?.mode === "identity" ? "אירועים שזוהו או אושרו כאדם זה" : "התאמות לפי דמיון בפנים — יש לבדוק לפני קביעת זהות"}</p></div>{source.person && <button className="button primary" onClick={() => { setReferenceMode(value => !value); change("similar", false); }}><UserPlus />{referenceMode ? "סיום בחירת תמונות" : "בחר תמונות ייחוס"}</button>}{onEnroll && <button className="button secondary" onClick={onEnroll}><UserPlus />הוסף לגלריה</button>}</div>
+    {!compact && <div className="panel-heading"><div><span className="eyebrow">מכל המצלמות</span><h2>{title || "הופעות הפנים שנבחרו"}</h2>{source.person && !filters.similar && <p>אירועים שזוהו או אושרו כאדם זה</p>}</div></div>}
+    {(!source.person || filters.similar) && <p className="face-similarity-note">התאמות לפי דמיון בפנים — יש לבדוק לפני קביעת זהות</p>}
     {source.person && (referenceMode || (people.data?.users || []).some(person => person.slug === source.person && !person.count)) && <p className="inline-alert">כדי להפעיל זיהוי, בחר תמונות ייחוס מהאירועים שכבר שויכו לאדם. תמונה איכותית אחת מספיקה להתחלה; כמה זוויות משפרות את הזיהוי.</p>}
-    <div className="face-filters">
+    <div className="face-explorer-controls"><details className="face-filter-disclosure"><summary>סינון</summary>
+    <div className="face-filters face-filters-compact">
       <label>מצלמה<input value={filters.camera} list="face-camera-options" placeholder="כל המצלמות" onChange={e => change("camera", e.target.value)} /><datalist id="face-camera-options">{(state.data?.cameras || []).map(camera => <option key={camera} value={camera} />)}</datalist></label>
       <label>מתאריך<input type="datetime-local" value={filters.date_from} onChange={e => change("date_from", e.target.value)} /></label>
       <label>עד תאריך<input type="datetime-local" value={filters.date_to} onChange={e => change("date_to", e.target.value)} /></label>
       <label>סדר<select value={filters.order} onChange={e => change("order", e.target.value)}><option value="asc">מהישן לחדש</option><option value="desc">מהחדש לישן</option></select></label>
       {source.person && <label className="face-check"><input type="checkbox" checked={filters.similar} onChange={e => change("similar", e.target.checked)} />כלול חיפוש דומה, גם ללא זיהוי</label>}
       {(!source.person || filters.similar) && <label>סף דמיון {percent(filters.threshold)}<input type="range" min="0.3" max="0.9" step="0.05" value={filters.threshold} onChange={e => change("threshold", Number(e.target.value))} /></label>}
-    </div>
+    </div></details><div className="face-explorer-actions">{source.person && (referenceMode ? <button className="button secondary" onClick={() => setReferenceMode(false)}><UserPlus />סיום בחירת תמונות</button> : <ActionsMenu label="אפשרויות היסטוריית פנים"><button className="button secondary" onClick={() => { setReferenceMode(true); change("similar", false); }}><UserPlus />בחר תמונות ייחוס</button></ActionsMenu>)}{onEnroll && <button className="button secondary" onClick={onEnroll}><UserPlus />הוסף לגלריה</button>}</div></div>
     {samples && <div><p>בחר את הפנים לחיפוש מתוך האירוע:</p><div className="face-candidates">{samples.map(sample => <button key={sample.sample_id} onClick={() => { setSource({ sample_id: sample.sample_id }); setSamples(null); setOffset(0); }}><FaceImage src={sample.image} /><span>חפש פנים אלה</span></button>)}</div></div>}
     {state.loading ? <Loading text="מחפש הופעות בכל המצלמות…" /> : state.error ? <ErrorState error={state.error} retry={() => setRetry(v => v + 1)} /> : state.data && <>
-      <div className="face-result-count"><b>{state.data.total} אירועים</b><span>{state.data.cameras.length} מצלמות</span></div>
-      {groups.map(([day, rows]) => <section className="face-day" key={day}><h3><Clock3 />{day}</h3><div className="face-timeline">{rows.map(row => <div key={row.event_id}><button className={`face-appearance ${isBlacklistedEvent(row, people.data?.users || []) ? "blacklist-outline" : ""}`} onClick={() => referenceMode && source.person && !filters.similar ? setReferenceEvent(row) : setEvent(row)}><time>{new Date((row.start_ts ?? row.updated_ts)*1000).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time><FaceImage src={row.image} /><span><b><Camera />{row.camera}</b><small>{row.ground_truth || row.person || "לא זוהה"}</small></span>{row.similarity != null && <Badge tone="info">{percent(row.similarity)} דמיון</Badge>}<ChevronLeft /></button>{referenceMode && source.person && !filters.similar && <button className="button secondary" onClick={() => setReferenceEvent(row)}>בחר פנים מהאירוע</button>}</div>)}</div></section>)}
+      <div className="face-results-toolbar"><div className="face-result-count"><b>{state.data.total} אירועים</b><span>{state.data.cameras.length} מצלמות</span></div><div className="face-view-toggle" role="group" aria-label="תצוגת אירועים"><button className={`button ${view === "grid" ? "primary" : "secondary"}`} aria-label="תצוגת רשת" aria-pressed={view === "grid"} onClick={() => setView("grid")}><Grid2X2 />רשת</button><button className={`button ${view === "list" ? "primary" : "secondary"}`} aria-label="תצוגת רשימה" aria-pressed={view === "list"} onClick={() => setView("list")}><List />רשימה</button></div></div>
+      {groups.map(([day, rows]) => <section className="face-day" key={day}><h3><Clock3 />{day}</h3><div className={`face-timeline face-timeline-${view}`}>{rows.map(row => <div className="face-timeline-item" key={row.event_id}><button className={`face-appearance ${isBlacklistedEvent(row, people.data?.users || []) ? "blacklist-outline" : ""}`} onClick={() => referenceMode && source.person && !filters.similar ? setReferenceEvent(row) : setEvent(row)}><span className="face-appearance-photo"><FaceImage src={eventImage(row)} alt={`תמונת אירוע · ${row.camera}`} /></span><span className="face-appearance-details"><time>{new Date((row.start_ts ?? row.updated_ts)*1000).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time><b className="face-appearance-camera"><Camera />{row.camera}</b><small>{row.ground_truth || row.person || "לא זוהה"}</small>{row.similarity != null && <Badge tone="info">{percent(row.similarity)} דמיון</Badge>}</span><ChevronLeft className="face-appearance-chevron" /></button>{referenceMode && source.person && !filters.similar && <button className="button secondary" onClick={() => setReferenceEvent(row)}>בחר פנים מהאירוע</button>}</div>)}</div></section>)}
       {!state.data.total && <Empty icon={Search} title="לא נמצאו הופעות בטווח שנבחר" text="אפשר להרחיב את התאריכים, לשנות את סף הדמיון או לסרוק את התמונות שנשמרו בהיסטוריה." />}
       {state.data.total > 50 && <div className="face-pagination"><button className="button secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset-50))}>הקודמים</button><span>{offset+1}–{Math.min(offset+50,state.data.total)} מתוך {state.data.total}</span><button className="button secondary" disabled={offset+50 >= state.data.total} onClick={() => setOffset(offset+50)}>הבאים</button></div>}
     </>}

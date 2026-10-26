@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowLeft, Camera, Check, ChevronLeft, ClipboardCheck, Clock3, DoorOpen, Download,
-  Film, ImageOff, Images, MapPin, Play, Plus, Search, ShieldAlert,
+  Film, ImageOff, Images, LayoutGrid, List, MapPin, Play, Plus, Search, ShieldAlert,
   Sparkles, Star, Trash2, Upload, UserCheck, UserPlus, UserRound, Users, X,
 } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
 import { useImageRetry, useResource } from "../hooks.js";
-import { ActionsMenu, Badge, Empty, ErrorState, Loading, Metric, Modal, PageHeader, Panel, dateTime, decision, percent, relativeTime, useToast } from "../ui.jsx";
+import { ActionsMenu, Badge, Empty, ErrorState, Loading, Modal, PageHeader, Panel, dateTime, decision, percent, relativeTime, useToast } from "../ui.jsx";
 
 import { FaceExplorer, HistoryReferenceChooser } from "./Faces.jsx";
 import { isBlacklistedEvent } from "../alerts.js";
@@ -159,6 +159,7 @@ export function PeoplePage({ navigate }) {
   const users = useResource("users");
   const [editor, setEditor] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [view, setView] = useState("grid");
   const toast = useToast();
   const create = () => setEditor({ slug: null, name: "", files: [] });
   const favorite = async (person) => { try { await api(`persons/${person.slug}/favorite`, { method: "POST", body: JSON.stringify({ favorite: !person.favorite }) }); toast(person.favorite ? "הוסר מהמועדפים" : "נוסף למועדפים"); users.reload(); } catch (error) { toast(error.message, "error"); } };
@@ -170,12 +171,12 @@ export function PeoplePage({ navigate }) {
   if (users.loading) return <Loading />;
   if (users.error) return <ErrorState error={users.error} retry={users.reload} />;
   return <section className="people-workspace">
-    <PageHeader eyebrow="ספרייה" title="אנשים" description="תמונות ייחוס לזיהוי והיסטוריית האירועים של כל אדם." actions={<><button className="button secondary" onClick={() => navigate("faces")}><Search />חיפוש בתמונה</button><button className="button primary" onClick={create}><UserPlus />הוסף אדם</button></>} />
-    <div className="people-index-summary"><b>{users.data?.users?.length || 0} אנשים</b><span>תמונות ייחוס מזינות את הזיהוי · אירועים משויכים נשמרים בהיסטוריה</span></div>
-    <div className="people-management-grid">{(users.data?.users || []).map((person) => <Panel className={`managed-person ${person.watchlist === "black" ? "blacklist-outline" : ""}`} key={person.slug}><button className="person-main" onClick={() => open(person)}><PersonAvatar person={person} className="large" /><div><h2>{person.name}{person.favorite && <Star className="favorite" />}</h2><Badge tone={person.state === "ready" ? "success" : person.state === "review" ? "warning" : "info"}>{person.state_label}</Badge>{person.watchlist === "black" && <Badge tone="danger">רשימה שחורה</Badge>}{person.watchlist === "white" && <Badge tone="neutral">רשימה לבנה</Badge>}<p><MapPin />{person.statistics?.last_camera || "לא נראה עדיין"} · {relativeTime(person.statistics?.last_seen)}</p></div></button><div className="person-mini-stats"><span><b>{person.statistics?.today || 0}</b>אירועים היום</span><span><b>{person.statistics?.last_30_days || 0}</b>אירועים ב־30 יום</span><span><b>{percent(person.statistics?.avg_score)}</b>רמת התאמה</span><span className="person-reference-count"><b>{person.count}</b>תמונות ייחוס</span></div><div className="card-actions"><button className="button secondary" onClick={() => open(person)}>אירועים ותמונות</button><ActionsMenu label={`אפשרויות עבור ${person.name}`}><button onClick={() => setEditor(person)}>עריכת אדם</button><button onClick={() => favorite(person)}><Star className={person.favorite ? "favorite" : ""} />{person.favorite ? "הסר ממועדפים" : "הוסף למועדפים"}</button></ActionsMenu></div></Panel>)}</div>
+    <PageHeader eyebrow="ספרייה" title="אנשים" description="מיקום אחרון ואירועים מכל המצלמות." actions={<><button className="button secondary" onClick={() => navigate("faces")}><Search />חיפוש בתמונה</button><button className="button primary" onClick={create}><UserPlus />הוסף אדם</button></>} />
+    <div className="people-index-summary"><b>{users.data?.users?.length || 0} אנשים</b><div className="segmented" aria-label="תצוגת אנשים"><button aria-label="תצוגת רשת" aria-pressed={view === "grid"} className={view === "grid" ? "active" : ""} onClick={() => setView("grid")}><LayoutGrid />רשת</button><button aria-label="תצוגת רשימה" aria-pressed={view === "list"} className={view === "list" ? "active" : ""} onClick={() => setView("list")}><List />רשימה</button></div></div>
+    <div className={`people-management-grid people-view-${view}`}>{(users.data?.users || []).map((person) => <Panel className={`managed-person ${person.watchlist === "black" ? "blacklist-outline" : ""}`} key={person.slug}><button className="person-main" onClick={() => open(person)}><PersonAvatar person={person} className="large" /><div><h2>{person.name}{person.favorite && <Star className="favorite" />}</h2><Badge tone={person.state === "ready" ? "success" : person.state === "review" ? "warning" : "info"}>{person.state_label}</Badge>{person.watchlist === "black" && <Badge tone="danger">רשימה שחורה</Badge>}{person.watchlist === "white" && <Badge tone="neutral">רשימה לבנה</Badge>}<p><MapPin />{person.statistics?.last_camera ? `${person.statistics.last_camera} · ${relativeTime(person.statistics.last_seen)}` : "לא נראה עדיין"}</p></div></button><div className="person-mini-stats"><span><b>{person.statistics?.today || 0}</b>אירועים היום</span><span className="person-reference-count"><b>{person.count}</b>תמונות ייחוס</span></div><div className="card-actions"><button className="button secondary" onClick={() => open(person)}>אירועים</button><ActionsMenu label={`אפשרויות עבור ${person.name}`}><button onClick={() => setEditor(person)}>עריכת אדם</button><button onClick={() => favorite(person)}><Star className={person.favorite ? "favorite" : ""} />{person.favorite ? "הסר ממועדפים" : "הוסף למועדפים"}</button></ActionsMenu></div></Panel>)}</div>
     {!users.data?.users?.length && <Empty icon={Users} title="הגלריה עדיין ריקה" text="הוסף אדם ראשון. האשף יסביר אילו תמונות טובות לזיהוי." action={<button className="button primary" onClick={create}><Plus />התחלה</button>} />}
     {editor && <PersonEditor person={editor} onClose={() => setEditor(null)} onSaved={() => { setEditor(null); users.reload(); }} />}
-    {profile && <PersonProfile profile={profile} onClose={() => setProfile(null)} onChanged={users.reload} />}
+    {profile && <PersonProfile profile={profile} onClose={() => setProfile(null)} onChanged={users.reload} onEdit={() => { setEditor(profile.person); setProfile(null); }} />}
   </section>;
 }
 
@@ -229,7 +230,8 @@ export function PersonEditor({ person, onClose, onSaved }) {
   </Modal>;
 }
 
-function PersonProfile({ profile, onClose, onChanged }) {
+function PersonProfile({ profile, onClose, onChanged, onEdit }) {
+  const [tab, setTab] = useState("events");
   const [refreshed, setRefreshed] = useState(null);
   const person = profile.person;
   const refreshReferences = () => {
@@ -239,5 +241,14 @@ function PersonProfile({ profile, onClose, onChanged }) {
   if (profile.loading) return <Modal title={person.name} onClose={onClose}><Loading /></Modal>;
   const data = refreshed || profile.data || {};
   const stats = person.statistics || {};
-  return <Modal title={person.name} subtitle="תמונות והופעות מכל המצלמות" onClose={onClose} wide><div className="profile-hero"><PersonAvatar person={person} className="xl" /><div><h3>{relativeTime(stats.last_seen)}</h3><p><MapPin />{stats.last_camera || "לא נראה עדיין"}</p></div></div><div className="metrics-grid compact"><Metric label="הופעות" value={stats.appearances || 0} /><Metric label="ב־30 יום" value={stats.last_30_days || 0} tone="turquoise" /><Metric label="רמת התאמה" value={percent(stats.avg_score)} tone="purple" /><Metric label="מצלמה נפוצה" value={stats.top_camera || "—"} tone="amber" /></div><Panel><div className="panel-heading"><div><span className="eyebrow">גלריה</span><h2>{data.gallery?.photos || person.count || 0} תמונות ייחוס</h2></div></div><div className="gallery-strip">{(data.gallery?.images || []).map(url => <div key={url}><img src={assetUrl(url)} alt={person.name} /></div>)}</div><p>{data.gallery?.recommendation}</p></Panel><FaceExplorer source={{ person: person.slug }} title={`האירועים של ${person.name}`} onReferencesChanged={refreshReferences} /></Modal>;
+  return <Modal title={person.name} subtitle="אירועים מכל המצלמות" onClose={onClose} wide>
+    <div className="profile-overview"><div className="profile-hero profile-hero-compact"><PersonAvatar person={person} /><div><b><MapPin />{stats.last_camera || "לא נראה עדיין"}</b><p>{relativeTime(stats.last_seen)}</p></div><ActionsMenu label={`אפשרויות עבור ${person.name}`}><button onClick={onEdit}>עריכת אדם</button></ActionsMenu></div>
+    <div className="segmented profile-tabs" role="tablist" aria-label="פרטי אדם">
+      <button id="person-events-tab" role="tab" aria-selected={tab === "events"} aria-controls="person-events-panel" className={tab === "events" ? "active" : ""} onClick={() => setTab("events")}><Film />אירועים</button>
+      <button id="person-references-tab" role="tab" aria-selected={tab === "references"} aria-controls="person-references-panel" className={tab === "references" ? "active" : ""} onClick={() => setTab("references")}><Images />תמונות ייחוס</button>
+    </div>
+    </div>
+    <div id="person-events-panel" role="tabpanel" aria-labelledby="person-events-tab" hidden={tab !== "events"}><FaceExplorer compact source={{ person: person.slug }} title={`האירועים של ${person.name}`} onReferencesChanged={refreshReferences} /></div>
+    {tab === "references" && <div id="person-references-panel" role="tabpanel" aria-labelledby="person-references-tab"><Panel><div className="panel-heading"><h2>{data.gallery?.photos || person.count || 0} תמונות ייחוס</h2><button className="button secondary" onClick={onEdit}><Plus />הוספת תמונות ועריכה</button></div><div className="gallery-strip">{(data.gallery?.images || []).map(url => <div key={url}><img src={assetUrl(url)} alt={person.name} /></div>)}</div><p>{data.gallery?.recommendation}</p></Panel></div>}
+  </Modal>;
 }
