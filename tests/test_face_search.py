@@ -1,6 +1,9 @@
 import tempfile
+import json
 import time
 import unittest
+from unittest.mock import patch
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -223,6 +226,87 @@ class FaceSearchTests(unittest.TestCase):
         result=self.client.get('/api/faces/timeline',params={'unknown_id':uid})
         self.assertEqual(result.status_code,200)
         self.assertEqual(result.json()['total'],1)
+
+    def test_remote_scan_recovers_other_known_history_without_identity_fallback(self):
+        for eid in ('source', 'match-one', 'match-two'):
+            self.event(eid, 'yard', time.time(), person='Alice')
+        self.search.record('source', vector())
+        requested = []
+        background = []
+        @contextmanager
+        def background_work():
+            background.append(True)
+            try:
+                yield
+            finally:
+                background.pop()
+        def snapshot(eid, crop):
+            self.assertTrue(background)
+            requested.append(eid)
+            return np.zeros((100,100,3), dtype=np.uint8)
+        self.engine.background_work = background_work
+        self.search.frigate = SimpleNamespace(snapshot=snapshot)
+        self.assertEqual(self.search.coverage()['events_missing'], 2)
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing(remote=True, limit=2)
+        result = self.client.get('/api/faces/timeline', params={'event_id':'source'}).json()
+        self.assertEqual(set(requested), {'match-one','match-two'})
+        self.assertEqual({e['event_id'] for e in result['events']}, {'source','match-one','match-two'})
+        self.assertEqual(result['source_event_id'], 'source')
+        self.assertEqual(result['index']['events_indexed'], 3)
+        self.assertEqual(result['index']['events_missing'], 0)
+        self.assertEqual(result['mode'], 'similarity')
+
+    def test_remote_scan_is_explicit_bounded_and_advances_past_expired_images(self):
+        for i in range(5):
+            self.event(f'old-{i}', 'yard', 100+i, person='Alice')
+        requested = []
+        self.search.frigate = SimpleNamespace(snapshot=lambda eid, crop: requested.append(eid))
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing()
+            self.assertEqual(requested, [])
+            self.search.index_existing(remote=True, limit=2)
+            self.assertEqual(requested, ['old-4','old-3'])
+            self.search.index_existing(remote=True, limit=2)
+        self.assertEqual(requested, ['old-4','old-3','old-2','old-1'])
+        self.assertEqual(self.search.coverage()['events_missing'], 5)
+        self.assertEqual(self.search.index_status['unavailable'], 4)
+        self.assertEqual(self.client.post('/api/faces/index?remote=true&limit=2001').status_code,400)
+
+    def test_background_scan_recovers_entire_saved_unknown_corpus(self):
+        for eid in ('source', 'match-one', 'match-two'):
+            self.event(eid, 'yard', time.time())
+            (self.gallery.unknown_dir / f'{eid}.json').write_text(
+                json.dumps({'event_id':eid, 'embedding':vector().tolist()}), encoding='utf-8')
+            cv2.imwrite(str(self.gallery.unknown_dir / f'{eid}.jpg'), np.zeros((80,80,3), dtype=np.uint8))
+        self.engine.faces = lambda image: (_ for _ in ()).throw(AssertionError('reuse saved vectors'))
+        self.search.index_existing()
+        result = self.client.get('/api/faces/timeline', params={'event_id':'source'}).json()
+        self.assertEqual(result['total'],3)
+        self.assertEqual(result['index']['coverage_percent'],100)
+
+    def test_remote_batch_bounds_local_evidence_and_skips_indexed_images(self):
+        for i in range(5):
+            eid = f'local-{i}'
+            self.event(eid, 'yard', time.time()+i)
+            self.audit.save_evidence(eid, np.zeros((100,100,3), dtype=np.uint8))
+        self.search.record('local-4', vector())
+        self.search.frigate = SimpleNamespace(snapshot=lambda *a, **kw: self.fail('local images available'))
+        with patch('app.face_search.time.sleep') as sleep:
+            self.search.index_existing(remote=True, limit=2)
+        self.assertEqual(sleep.call_count,2)
+        self.assertEqual(self.search.coverage()['events_indexed'],3)
+        self.assertEqual(self.search.index_status['total'],2)
+        self.assertEqual(self.search.sample_vectors(event_id='local-0'),[])
+
+    def test_delete_history_cleans_scan_attempts(self):
+        self.event('private-scan','yard',time.time(),person='Alice')
+        self.search.frigate = SimpleNamespace(snapshot=lambda *a, **kw: None)
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing(remote=True,limit=1)
+        self.audit.delete_person_history('Alice')
+        with self.audit._connection() as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM face_scan_attempts').fetchone()[0],0)
 
 
 if __name__ == '__main__':

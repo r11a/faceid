@@ -88,7 +88,7 @@ describe("event playback", () => {
   it("skips a missing middle clip once, keeps the playing snapshot stable, and stops at the end", async () => {
     const events = [1, 2, 3].map(index => ({ event_id: `qa-${index}`, start_ts: index }));
     await act(() => { renderer = create(<ClipSequence events={events} people={[]} />); });
-    await act(() => renderer.root.findByProps({ className: "button primary" }).props.onClick());
+    await act(() => renderer.root.findAllByType("button").find(button => button.children.includes("נגן רצף")).props.onClick());
     await act(() => renderer.root.findByType("video").props.onEnded());
     expect(renderer.root.findByType("video").props.src).toContain("qa-2/clip");
     const fail = renderer.root.findByType("video").props.onError;
@@ -101,6 +101,25 @@ describe("event playback", () => {
     await act(() => renderer.root.findByType("video").props.onEnded());
     expect(renderer.root.findAllByType("video")).toHaveLength(0);
     expect(renderer.root.findAllByProps({ role: "status" }).some(node => node.children.join("").includes("הרצף הסתיים"))).toBe(true);
+  });
+
+  it("previews the newest appearance and plays a chosen thumbnail in chronological order", async () => {
+    const events = [3, 1, 2].map(index => ({ event_id: `qa-${index}`, start_ts: index, camera: `Camera ${index}` }));
+    const findSimilar = vi.fn();
+    await act(() => { renderer = create(<ClipSequence events={events} onFindSimilar={findSimilar} />); });
+    expect(renderer.root.findByProps({ className: "home-video-stage" }).findByType("img").props.src).toContain("qa-3/image");
+    const entries = renderer.root.findAllByType("li");
+    expect(entries.map(entry => entry.findByType("b").children.join(""))).toEqual(["Camera 1", "Camera 2", "Camera 3"]);
+    expect(entries[2].findByType("button").props["aria-current"]).toBe("step");
+    await act(() => renderer.root.findByProps({ className: "button primary" }).props.onClick());
+    expect(renderer.root.findByType("video").props.src).toContain("qa-3/clip");
+    await act(() => entries[1].findByType("button").props.onClick());
+    expect(renderer.root.findByType("video").props.src).toContain("qa-2/clip");
+    expect(renderer.root.findByProps({ className: "home-video-caption" }).findByType("b").children).toContain("Camera 2");
+    await act(() => renderer.root.findByProps({ className: "text-button home-sequence-search" }).props.onClick());
+    expect(findSimilar).toHaveBeenCalledWith(events[2]);
+    await act(() => renderer.root.findByType("video").props.onEnded());
+    expect(renderer.root.findByType("video").props.src).toContain("qa-3/clip");
   });
 
   it("starts the selected event immediately without requesting the next clip before it loads", () => {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 6.5.5 — 2026-10-26
+
+- Person playback opens on the latest event with video beside a chronological thumbnail list. Play selected event and play full sequence are distinct actions.
+- Hide horizontal and vertical scroll tracks throughout the interface while preserving scrolling and keyboard navigation.
+- Show face-search coverage and a direct action to complete historical search using retained local images and bounded Frigate snapshot batches. Background scans yield to live inference.
+- Label the selected source as the search image, distinguish similar matches from confirmed person history, and refresh results after indexing.
+- Keep recognition thresholds, identity decisions and access-control rules unchanged; expired or unavailable recordings cannot be reconstructed.
+
 ## 6.5.4 — 2026-10-26
 
 - Home event filters stay behind a small icon: name/person, recognition status, watchlist and camera. Filters apply before pagination.
