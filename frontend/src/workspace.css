@@ -6,10 +6,10 @@
 .skip-content { position: fixed; inset-inline-start: 16px; top: -60px; z-index: 3000; padding: 9px 16px; background: var(--accent); color: var(--accent-contrast); border-radius: 7px; }
 .skip-content:focus { top: 12px; }
 .workspace-header { position: sticky; top: 0; z-index: 70; display: flex; align-items: center; gap: 24px; min-height: 60px; padding: 0 22px; border-bottom: 1px solid var(--border-soft); background: var(--navigation); }
-.workspace-brand { display: flex; align-items: center; gap: 10px; min-width: 154px; border: 0; padding: 0; background: transparent; text-align: start; }
+.workspace-brand { direction: ltr; display: flex; align-items: center; gap: 10px; min-width: 154px; border: 0; padding: 0; background: transparent; text-align: start; }
 .workspace-brand-symbol { width: 36px; height: 30px; color: var(--accent); flex: none; }
 .workspace-brand-name { font-family: inherit; font-size: 22px; font-weight: 500; letter-spacing: -.8px; line-height: 1.05; direction: ltr; }
-.workspace-brand-name>span { color: var(--accent-ink); }
+.workspace-brand-name>span { color: var(--accent); }
 .workspace-brand-name small { display: block; margin-top: 7px; color: var(--muted); font-size: 7px; font-weight: 400; letter-spacing: 4.4px; text-transform: uppercase; text-align: center; }
 .workspace-primary-nav { display: flex; align-self: stretch; align-items: center; gap: 8px; flex: 1; justify-content: center; }
 .workspace-primary-nav>button { display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 5px 12px; border: 1px solid transparent; border-radius: 7px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 500; white-space: nowrap; }
