@@ -1,5 +1,12 @@
 # Changelog
 
+## 6.5.7 — 2026-10-27
+
+- Recover transient recording and network failures before advancing an event playlist; leave codec and permission errors visible instead of skipping every clip.
+- Start event playback muted for mobile autoplay compatibility (sound remains available in the player), offer a play button when a WebView requires a tap, and stop active downloads when the player closes.
+- Delay next-clip metadata until playback starts. Avoid loading observation history for every video byte-range request.
+- If playback fails and Frigate ignores byte ranges, try the existing bounded shared clip cache once for seekable playback. Normal playback still streams immediately; only this compatibility fallback waits for preparation. Manual retry can return to the original stream.
+
 ## 6.5.6 — 2026-10-26
 
 - Add a subtle translucent circular match score on event photos; distinguish similarity from recognition matching and omit missing scores.
