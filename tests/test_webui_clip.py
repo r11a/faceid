@@ -42,6 +42,73 @@ class FakeGallery:
 
 
 class WebUIClipTests(unittest.TestCase):
+    def test_explicit_seekable_playback_uses_shared_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clip.mp4"
+            path.write_bytes(b"0123456789")
+            closed = []
+            class Upstream:
+                status_code = 200
+                headers = {"content-type": "video/mp4"}
+                def iter_content(self, chunk_size):
+                    self_test.fail("A full progressive stream must not replace a requested byte range")
+                    yield b"0123456789"
+                def close(self):
+                    closed.append(True)
+            self_test = self
+            processor = SimpleNamespace(
+                audit=FakeAudit(),
+                media_store=SimpleNamespace(cached_clip_path=lambda _: None, clip_path=lambda _: path),
+                frigate=SimpleNamespace(timeout=1, request=lambda *args, **kwargs: Upstream()),
+            )
+            app = build_app({"faceid": {}}, SimpleNamespace(), FakeGallery(), processor, Path(tmp), Path(__file__).parents[1] / "static")
+            response = TestClient(app).get("/api/activity/e1/clip?seekable=true", headers={"Range": "bytes=2-5"})
+            self.assertEqual(response.status_code, 206)
+            self.assertEqual(response.content, b"2345")
+            self.assertEqual(response.headers["content-range"], "bytes 2-5/10")
+            self.assertFalse(closed)
+
+    def test_progressive_playback_does_not_wait_for_cache_or_hit_its_size_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            class Upstream:
+                status_code = 200
+                headers = {"content-type": "video/mp4"}
+                def iter_content(self, chunk_size):
+                    yield b"progressive-video"
+                def close(self):
+                    pass
+            def unexpected_cache(_):
+                self.fail("Normal progressive playback must not download into the bounded cache")
+            processor = SimpleNamespace(
+                audit=FakeAudit(),
+                media_store=SimpleNamespace(cached_clip_path=lambda _: None, clip_path=unexpected_cache),
+                frigate=SimpleNamespace(timeout=1, request=lambda *args, **kwargs: Upstream()),
+            )
+            app = build_app({"faceid": {}}, SimpleNamespace(), FakeGallery(), processor, Path(tmp), Path(__file__).parents[1] / "static")
+            response = TestClient(app).get("/api/activity/e1/clip", headers={"Range": "bytes=0-"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"progressive-video")
+            processor.media_store.clip_path = lambda _: None
+            self.assertEqual(TestClient(app).get("/api/activity/e1/clip?seekable=true").status_code, 502)
+            self.assertEqual(TestClient(app).get("/api/activity/e1/clip").content, b"progressive-video")
+
+    def test_clip_range_access_does_not_load_observation_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clip.mp4"
+            path.write_bytes(b"video-content")
+            def unexpected_detail(_):
+                self.fail("Each media range must not load the full observation history")
+            processor = SimpleNamespace(
+                audit=SimpleNamespace(event_exists=lambda eid: eid == "e1", event_detail=unexpected_detail),
+                media_store=FakeMedia(path),
+            )
+            app = build_app({"faceid": {}}, SimpleNamespace(), FakeGallery(), processor, Path(tmp), Path(__file__).parents[1] / "static")
+            client = TestClient(app)
+            result = client.get("/api/activity/e1/clip", headers={"Range": "bytes=0-1"})
+            self.assertEqual(result.status_code, 206)
+            self.assertEqual(result.content, b"vi")
+            self.assertEqual(client.get("/api/activity/missing/clip").status_code, 404)
+
     def test_reference_quality_advice_does_not_disable_recognition(self):
         with tempfile.TemporaryDirectory() as tmp:
             gallery = SimpleNamespace(persons=lambda: {
@@ -285,11 +352,11 @@ class WebUIClipTests(unittest.TestCase):
             self.assertIn("no-store", index.headers["cache-control"])
             self.assertNotIn("etag", index.headers)
             self.assertNotIn("last-modified", index.headers)
-            self.assertEqual(index.headers["x-faceid-ui-version"], "6.5.6")
+            self.assertEqual(index.headers["x-faceid-ui-version"], "6.5.7")
             versioned = TestClient(app).get("/ui-previous-release")
             self.assertEqual(versioned.status_code, 200)
             self.assertEqual(versioned.content, index.content)
-            ui_asset = TestClient(app).get("/assets/faceid-6.5.6.js")
+            ui_asset = TestClient(app).get("/assets/faceid-6.5.7.js")
             self.assertEqual(ui_asset.status_code, 200)
             self.assertIn("immutable", ui_asset.headers["cache-control"])
             self.assertEqual(ui_asset.headers["x-content-type-options"], "nosniff")

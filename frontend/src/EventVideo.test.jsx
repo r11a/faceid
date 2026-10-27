@@ -13,10 +13,87 @@ let renderer;
 afterEach(async () => { if (renderer) await act(() => renderer.unmount()); renderer = null; vi.useRealTimers(); api.mockReset(); });
 
 describe("event playback", () => {
+  it("prepares seekable playback only after a progressive stream fails, once per event", async () => {
+    api.mockResolvedValue({ ready: true, seekable: false, retryable: false });
+    await act(() => { renderer = create(<EventVideo eventId="progressive" />); });
+    expect(renderer.root.findByType("video").props.src).not.toContain("seekable");
+    await act(async () => renderer.root.findByType("video").props.onError({ currentTarget: { error: { code: 4 } } }));
+    expect(renderer.root.findByType("video").props.src).toContain("seekable=true");
+    await act(async () => renderer.root.findByType("video").props.onError({ currentTarget: { error: { code: 4 } } }));
+    expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(1);
+    await act(() => renderer.root.findByType("button").props.onClick());
+    expect(renderer.root.findByType("video").props.src).not.toContain("seekable");
+  });
+
+  it("keeps a fresh clip selected while its recording becomes ready", async () => {
+    vi.useFakeTimers();
+    const unavailable = vi.fn();
+    api.mockResolvedValue({ retryable: true, upstream_http: 400, message: "Recording not ready" });
+    await act(() => { renderer = create(<EventVideo eventId="fresh" onUnavailable={unavailable} />); });
+    await act(async () => renderer.root.findByType("video").props.onError());
+    expect(unavailable).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);
+    await act(() => renderer.root.findByType("video").props.onPlaying());
+    expect(unavailable).not.toHaveBeenCalled();
+  });
+
+  it("retries a network failure when the server confirms the clip exists", async () => {
+    vi.useFakeTimers();
+    api.mockResolvedValue({ ready: true, retryable: false });
+    const unavailable = vi.fn();
+    await act(() => { renderer = create(<EventVideo eventId="network" onUnavailable={unavailable} />); });
+    await act(async () => renderer.root.findByType("video").props.onError({ currentTarget: { error: { code: 2 } } }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);
+    expect(unavailable).not.toHaveBeenCalled();
+  });
+
+  it("keeps decode failures visible instead of skipping the whole playlist", async () => {
+    vi.useFakeTimers();
+    api.mockResolvedValue({ ready: true, retryable: false, message: "Clip available" });
+    const unavailable = vi.fn();
+    await act(() => { renderer = create(<EventVideo eventId="codec" onUnavailable={unavailable} />); });
+    await act(async () => renderer.root.findByType("video").props.onError({ currentTarget: { error: { code: 3 } } }));
+    expect(renderer.root.findByProps({ role: "alert" }).children).toBeTruthy();
+    expect(JSON.stringify(renderer.toJSON())).toContain("פורמט");
+    expect(unavailable).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("offers a user gesture when mobile autoplay is blocked and releases the media on close", async () => {
+    const node = { play: vi.fn().mockRejectedValueOnce({ name: "NotAllowedError" }).mockResolvedValue(undefined), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn(), getAttribute: vi.fn(), setAttribute: vi.fn() };
+    await act(async () => { renderer = create(<EventVideo eventId="mobile" />, { createNodeMock: element => element.type === "video" ? node : null }); });
+    const play = renderer.root.findAllByType("button").find(button => button.children.includes("נגן וידאו"));
+    expect(play).toBeTruthy();
+    expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);
+    await act(async () => play.props.onClick());
+    await act(() => renderer.root.findByType("video").props.onPlaying());
+    expect(renderer.root.findAllByType("button")).toHaveLength(0);
+    await act(() => renderer.unmount()); renderer = null;
+    expect(node.pause).toHaveBeenCalled();
+    expect(node.removeAttribute).toHaveBeenCalledWith("src");
+    expect(node.load).toHaveBeenCalled();
+  });
+
+  it("restores the video source when StrictMode remounts its effects", async () => {
+    let source = "/ingress/api/activity/strict/clip";
+    const node = {
+      play: () => { expect(source).toContain("strict/clip"); return Promise.resolve(); },
+      pause: () => {}, load: () => {},
+      getAttribute: () => source,
+      setAttribute: (_, value) => { source = value; },
+      removeAttribute: () => { source = null; },
+    };
+    await act(async () => { renderer = create(<React.StrictMode><EventVideo eventId="strict" /></React.StrictMode>, { createNodeMock: element => element.type === "video" ? node : null }); });
+    expect(source).toContain("strict/clip");
+  });
+
   it("retries only fresh recording readiness and stops after three automatic attempts", async () => {
     vi.useFakeTimers();
-    api.mockResolvedValue({ retryable: true, message: "Recording segments not ready (HTTP 400)" });
-    await act(() => { renderer = create(<EventVideo eventId="fresh" />); });
+    const unavailable = vi.fn();
+    api.mockResolvedValue({ retryable: true, upstream_http: 400, message: "Recording segments not ready (HTTP 400)" });
+    await act(() => { renderer = create(<EventVideo eventId="fresh" onUnavailable={unavailable} />); });
     for (let attempt = 0; attempt < 4; attempt++) {
       await act(async () => { renderer.root.findByType("video").props.onError(); });
       expect(JSON.stringify(renderer.toJSON())).toContain("HTTP 400");
@@ -25,6 +102,7 @@ describe("event playback", () => {
     expect(api).toHaveBeenCalledTimes(4);
     expect(vi.getTimerCount()).toBe(0);
     expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(1);
+    expect(unavailable).not.toHaveBeenCalled();
   });
 
   it("shows a permission failure without retrying it", async () => {
@@ -62,14 +140,15 @@ describe("event playback", () => {
   });
 
   it("reports an unavailable clip once per attempt and retries without skipping direct playback", async () => {
+    api.mockResolvedValue({ ready: false, retryable: false, upstream_http: 404 });
     const unavailable = vi.fn();
     await act(() => { renderer = create(<EventVideo eventId="missing" nextEventId="next" onUnavailable={unavailable} />); });
     const fail = renderer.root.findByType("video").props.onError;
-    await act(() => { fail(); fail(); });
+    await act(async () => { fail(); fail(); });
     expect(unavailable).toHaveBeenCalledTimes(1);
     expect(renderer.root.findByProps({ role: "alert" })).toBeTruthy();
     await act(() => renderer.root.findByType("button").props.onClick());
-    await act(() => renderer.root.findByType("video").props.onError());
+    await act(async () => renderer.root.findByType("video").props.onError());
     expect(unavailable).toHaveBeenCalledTimes(2);
   });
 
@@ -78,6 +157,8 @@ describe("event playback", () => {
     await act(() => { renderer = create(<EventVideo eventId="current" nextEventId="missing-next" onUnavailable={unavailable} />); });
     expect(renderer.root.findAllByType("video")).toHaveLength(1);
     await act(() => renderer.root.findByType("video").props.onLoadedData());
+    expect(renderer.root.findAllByType("video")).toHaveLength(1);
+    await act(() => renderer.root.findByType("video").props.onPlaying());
     const videos = renderer.root.findAllByType("video");
     expect(videos).toHaveLength(2);
     expect(videos[1].props.preload).toBe("metadata");
@@ -86,13 +167,14 @@ describe("event playback", () => {
   });
 
   it("skips a missing middle clip once, keeps the playing snapshot stable, and stops at the end", async () => {
+    api.mockResolvedValue({ ready: false, retryable: false, upstream_http: 404 });
     const events = [1, 2, 3].map(index => ({ event_id: `qa-${index}`, start_ts: index }));
     await act(() => { renderer = create(<ClipSequence events={events} people={[]} />); });
     await act(() => renderer.root.findAllByType("button").find(button => button.children.includes("נגן רצף")).props.onClick());
     await act(() => renderer.root.findByType("video").props.onEnded());
     expect(renderer.root.findByType("video").props.src).toContain("qa-2/clip");
     const fail = renderer.root.findByType("video").props.onError;
-    await act(() => { fail(); fail(); });
+    await act(async () => { fail(); fail(); });
     expect(renderer.root.findByType("video").props.src).toContain("qa-3/clip");
     await act(() => renderer.update(<ClipSequence events={[...events, { event_id: "new", start_ts: 4 }]} people={[]} />));
     expect(renderer.root.findAllByType("li")).toHaveLength(3);

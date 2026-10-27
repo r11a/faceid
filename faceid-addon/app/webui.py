@@ -923,6 +923,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         if probe:
             if processor.media_store is not None and processor.media_store.cached_clip_path(event_id) is not None:
                 return {"cached": True, "ready": True, "retryable": False,
+                        "seekable": True,
                         "message": "FaceID has a cached clip. Check browser codec support and the HA ingress connection if playback fails."}
             # Inspect the exact playback endpoint, reading no video body and exposing no credentials.
             upstream = frigate_clip_response(event_id, {"Accept-Encoding": "identity", "Range": "bytes=0-0"})
@@ -942,6 +943,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             end = detail.get("end_ts")
             recent = detail.get("status") == "processing" or (isinstance(end, (int, float)) and 0 <= time.time() - end < 90)
             return {"upstream_http": code, "ready": ready, "message": message,
+                    "seekable": code == 206,
                     "retryable": code in (400, 404) and recent}
         if processor.media_store is None:
             return {"cached": False, "has_clip": None, "legacy_stream": True}
@@ -960,11 +962,13 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         return status
 
     @app.get("/api/activity/{event_id}/clip")
-    def activity_clip(event_id: str, request: Request, download: bool = False):
+    def activity_clip(event_id: str, request: Request, download: bool = False, seekable: bool = False):
         """Serve cached bytes immediately, otherwise proxy Frigate's byte stream."""
-        from urllib.parse import quote
         from starlette.background import BackgroundTask
-        if processor.audit is None or processor.audit.event_detail(event_id) is None:
+        exists = getattr(processor.audit, "event_exists", None)
+        known = (exists(event_id) if callable(exists) else
+                 processor.audit is not None and processor.audit.event_detail(event_id) is not None)
+        if not known:
             raise HTTPException(404, "Unknown event")
         response_headers = {"Cache-Control": "private, max-age=300"}
         disposition = "attachment" if download else "inline"
@@ -972,6 +976,12 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         response_headers["Content-Disposition"] = f'{disposition}; filename="faceid-{safe_event_id}.mp4"'
         if processor.media_store is not None:
             path = processor.media_store.cached_clip_path(event_id)
+            # Only a failed player asks for compatibility preparation. Preserve
+            # immediate progressive playback (including large clips) by default.
+            if path is None and seekable:
+                path = processor.media_store.clip_path(event_id)
+                if path is None:
+                    raise HTTPException(502, "Could not prepare a seekable recording within the cache limits; retry original playback")
             if path is not None:
                 return FileResponse(path, media_type="video/mp4", headers=response_headers)
 

@@ -60,6 +60,7 @@ class ReportingTests(unittest.TestCase):
                 self.assertEqual(response.status_code,200)
                 report=response.json()
                 self.assertEqual(report['upstream_http'],code)
+                self.assertEqual(report['seekable'],code == 206)
                 self.assertEqual(report['retryable'],code in [400,404])
                 upstream.iter_content.assert_not_called();upstream.close.assert_called_once()
                 self.assertEqual(processor.frigate.request.call_args.kwargs['headers']['Range'],'bytes=0-0')
