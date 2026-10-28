@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Camera, ChevronLeft, ChevronRight, MapPin, Play, Search, SlidersHorizontal, UserPlus, UserRound, Users, X } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
-import { useImageRetry, useResource } from "../hooks.js";
+import { eventImageUrl, useImageRetry, useResource } from "../hooks.js";
 import { ActionGroup, FaceScore, Empty, ErrorState, Loading, Modal, dateTime, relativeTime } from "../ui.jsx";
 import { chronological, clipAfter, eventTime, identityForEvent, latestPeople } from "../home.js";
 import { PersonEditor } from "./Daily.jsx";
@@ -65,7 +65,7 @@ export function ClipSequence({ events, people = [], selection, total = events.le
   return <div className="home-sequence">
     <div className="home-sequence-main">
       <div className="home-video-stage">{playing ? <EventVideo eventId={current.event_id} nextEventId={rows[index + 1]?.event_id} onEnded={() => advance(false)} onUnavailable={() => advance(true)} className={identityForEvent(current, people)?.watchlist === "black" ? "blacklist-outline" : ""} /> : <>
-        <Photo src={current.image || `api/activity/${encodeURIComponent(current.event_id)}/image`} name="תמונת האירוע" event={current} eager />
+        <Photo src={eventImageUrl(current)} name="תמונת האירוע" event={current} eager />
         <button className="button primary" onClick={() => start(finished ? 0 : index)}><Play />{finished ? "נגן שוב" : "נגן אירוע"}</button>
       </>}</div>
       <div className="home-video-caption"><b><Camera />{current.camera || "מצלמה לא ידועה"}</b><time>{dateTime(eventTime(current))}</time><span>{index + 1} / {rows.length}</span></div>
@@ -76,7 +76,7 @@ export function ClipSequence({ events, people = [], selection, total = events.le
     <aside className="home-sequence-sidebar" aria-label="רצף הופעות">
       {selection && <div className="home-person-summary"><Photo src={selection.photo} name={selection.name} /><div><b>{selection.name}</b>{!selection.person && <span className="home-muted">התאמות דומות · זהות לא מאומתת</span>}</div></div>}
       <div className="home-sequence-heading"><div><h3>רצף הופעות</h3><span className="home-muted">{rows.length} מתוך {total} · מהישן לחדש</span></div><button className="text-button" onClick={() => start(0)}><Play />נגן רצף</button></div>
-      <ol ref={route} className="home-route">{rows.map((row, i) => <li key={row.event_id}><button className={i === index ? "active" : ""} aria-current={i === index ? "step" : undefined} onClick={() => start(i)}><Photo className="home-route-photo" src={row.image || `api/activity/${encodeURIComponent(row.event_id)}/image`} event={row} name={`אירוע ${i + 1}`} /><span className="home-route-copy"><b>{row.camera || "מצלמה לא ידועה"}</b><time>{dateTime(eventTime(row))}</time></span><span className="home-route-number">{i + 1}</span><Play /></button></li>)}</ol>
+      <ol ref={route} className="home-route">{rows.map((row, i) => <li key={row.event_id}><button className={i === index ? "active" : ""} aria-current={i === index ? "step" : undefined} onClick={() => start(i)}><Photo className="home-route-photo" src={eventImageUrl(row)} event={row} name={`אירוע ${i + 1}`} /><span className="home-route-copy"><b>{row.camera || "מצלמה לא ידועה"}</b><time>{dateTime(eventTime(row))}</time></span><span className="home-route-number">{i + 1}</span><Play /></button></li>)}</ol>
     </aside>
   </div>;
 }
@@ -121,7 +121,7 @@ export function DashboardPage({ navigate }) {
   const selectEvent = async event => {
     const person = identityForEvent(event, people);
     if (person) { select({ name: person.name, photo: person.photo, person, source: { person: person.slug } }); return; }
-    const choice = { name: "לא מזוהה", photo: event.image || `api/activity/${encodeURIComponent(event.event_id)}/image`, source: { event_id: event.event_id } };
+    const choice = { name: "לא מזוהה", photo: eventImageUrl(event), source: { event_id: event.event_id } };
     if (event.sample_id) { select({ ...choice, source: { sample_id: event.sample_id } }); return; }
     request.current?.abort(); const controller = new AbortController(); request.current = controller;
     setResolving(true); setSelectionError(null);
@@ -164,7 +164,7 @@ export function DashboardPage({ navigate }) {
       {selectionError && <ErrorState error={selectionError} />}
       {(loading || dashboard.loading) ? <Loading /> : error ? <ErrorState error={error} retry={() => setRetry(v => v + 1)} /> : rows.length ? <div className="home-event-grid" role="region" aria-label="אירועים">
         {[...rows].reverse().map((event, index) => { const person = identityForEvent(event, people); return <button className={`home-event-card ${person?.watchlist === "black" ? "blacklist-outline" : ""}`} key={event.event_id} onClick={() => openEvent(event)}>
-          <Photo src={event.image || `api/activity/${encodeURIComponent(event.event_id)}/image`} name={selection?.name || person?.name || "לא מזוהה"} event={event} eager={index < 3} />
+          <Photo src={eventImageUrl(event)} name={selection?.name || person?.name || "לא מזוהה"} event={event} eager={index < 3} />
           <span className="home-event-play" aria-hidden="true"><Play /></span>
           <div className="home-event-copy"><b>{selection?.name || person?.name || "לא מזוהה"}</b><span><Camera />{event.camera || "—"}</span><time>{dateTime(eventTime(event))}</time></div>
         </button>; })}

@@ -38,6 +38,20 @@ describe("actual health contract", () => {
 });
 
 describe("HTTP ingress reviews", () => {
+  it("refreshes native list and modal images from the current event revision", async () => {
+    const event = { event_id: "faceid-door-1", updated_ts: 100, status: "recognized" };
+    const values = { "activity?": { events: [event] }, "audit/faceid-door-1": { event } };
+    resources(values);
+    expect(renderToStaticMarkup(<EventsPage />)).toContain("faceid-door-1/image?faceid_version=100");
+    const props = { eventId: event.event_id, people: [], onClose: vi.fn() };
+    await act(() => { renderer = create(<EventModal {...props} />); });
+    await act(() => renderer.root.findAllByType("button").find(button => button.children.includes("חזרה לתמונה")).props.onClick());
+    expect(renderer.root.findByProps({ alt: "צילום האירוע" }).props.src).toBe("/ingress/api/activity/faceid-door-1/image?faceid_version=100");
+    event.updated_ts = 101;
+    await act(() => renderer.update(<EventModal {...props} />));
+    expect(renderer.root.findByProps({ alt: "צילום האירוע" }).props.src).toBe("/ingress/api/activity/faceid-door-1/image?faceid_version=101");
+  });
+
   it("keeps event rows as a single button with a noninteractive thumbnail", () => {
     resources({ users: { users: [{ name: "Test", slug: "test", watchlist: "black" }] },
       "activity?": { events: [{ event_id: "row-1", status: "recognized", person: "Test", camera: "Door", start_ts: 1, score: .8 }] } });

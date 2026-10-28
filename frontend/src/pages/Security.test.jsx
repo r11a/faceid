@@ -14,6 +14,7 @@ const camera = {
   min_face_px: 120, night_min_face_px: 140, burst_frames: 5,
   liveness_mode: "required", require_second_factor: true,
   fast_recognition: false, high_resolution: true, critical: false,
+  recognition_mode: "event", recognition_interval_seconds: .5, recognition_rearm_seconds: 2,
 };
 beforeEach(() => {
   api.mockReset().mockResolvedValue({});
@@ -23,6 +24,46 @@ afterEach(async () => { if (renderer) await act(() => renderer.unmount()); rende
 const mount = async () => { await act(() => { renderer = create(<CamerasPage />); }); };
 
 describe("camera controls", () => {
+  it("saves the selected recognition mode and timing without changing security settings", async () => {
+    await mount();
+    const selector = renderer.root.findByProps({ "aria-label": "מתי לזהות פנים" });
+    expect(selector.findAllByType("option").map(option => option.props.value)).toEqual(["event", "presence", "continuous"]);
+    await act(() => selector.props.onChange({ target: { value: "presence" } }));
+    const interval = renderer.root.findByProps({ "aria-label": "מרווח בין בדיקות (שניות)" });
+    const rearm = renderer.root.findByProps({ "aria-label": "היעדרות פנים לפני הופעה חדשה (שניות)" });
+    await act(() => interval.props.onChange({ target: { value: "0.75" } }));
+    await act(() => rearm.props.onChange({ target: { value: "3" } }));
+    expect(api).not.toHaveBeenCalled();
+    const save = renderer.root.findAllByType("button").find(node => text(node) === "שמירת הגדרות");
+    await act(async () => { await save.props.onClick(); });
+    expect(JSON.parse(api.mock.calls[0][1].body)).toEqual({ ...camera, recognition_mode: "presence", recognition_interval_seconds: .75, recognition_rearm_seconds: 3 });
+  });
+
+  it("offers fast recognition only for event mode and restores its saved preference", async () => {
+    resource.data.cameras[0].fast_recognition = true;
+    await mount();
+    const selector = renderer.root.findByProps({ "aria-label": "מתי לזהות פנים" });
+    const fastInput = () => renderer.root.findAllByType("label").find(node => text(node).includes("זיהוי מהיר"))?.findByType("input");
+    expect(fastInput().props.checked).toBe(true);
+    for (const value of ["presence", "continuous"]) {
+      await act(() => selector.props.onChange({ target: { value } }));
+      expect(fastInput()).toBeUndefined();
+    }
+    await act(() => selector.props.onChange({ target: { value: "event" } }));
+    expect(fastInput().props.checked).toBe(true);
+  });
+
+  it("defaults old cameras to event mode and reloads settings when selecting a camera", async () => {
+    delete resource.data.cameras[0].recognition_mode;
+    resource.data.cameras.push({ ...camera, camera: "yard", recognition_mode: "continuous", recognition_interval_seconds: 1 });
+    await mount();
+    expect(renderer.root.findByProps({ "aria-label": "מתי לזהות פנים" }).props.value).toBe("event");
+    const yard = renderer.root.findAllByType("button").find(node => text(node).startsWith("yard"));
+    await act(() => yard.props.onClick());
+    expect(renderer.root.findByProps({ "aria-label": "מתי לזהות פנים" }).props.value).toBe("continuous");
+    expect(renderer.root.findByProps({ "aria-label": "מרווח בין בדיקות (שניות)" }).props.value).toBe(1);
+  });
+
   it("exposes the immediate enable switch with its camera and checked state", async () => {
     await mount();
     const control = renderer.root.findByProps({ role: "switch" });

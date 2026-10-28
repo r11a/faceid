@@ -1,5 +1,13 @@
 # Changelog
 
+## 6.6.0 — Selectable camera recognition modes
+
+- Choose per camera: existing event recognition, continuous sampling while Frigate reports people, or always-on sampling without a person event. Existing installations keep event mode by default.
+- Track multiple faces independently and notify on each newly confirmed appearance, including rapid re-entry. Continue sampling beyond the old event retry budget while avoiding per-frame duplicate alerts.
+- Configure sampling and observed-absence intervals. Bound concurrent camera jobs, use current images, reconcile missed Frigate activity, and stop stale work when camera settings change.
+- Preserve identity/quality/liveness thresholds and secure Access1 admission checks. Improve the matching face image after confirmation and play native sightings from the recorded camera/time window around recognition.
+- Add migration, API/UI, tracking, repeated appearance, failure/reconnect, media, and security regression coverage. See docs/recognition-modes.md for setup and hardware verification limits.
+
 ## 6.5.8 — 2026-10-28
 
 - Notification-only fast recognition samples bounded current camera frames instead of repeatedly recognizing Frigate's unchanged best event snapshot. Identity thresholds, consensus and verified Access1 capture rules remain enforced.

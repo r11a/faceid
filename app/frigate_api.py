@@ -1,5 +1,6 @@
 """Minimaler Frigate-HTTP-Client: Snapshot-Crops holen, sub_label setzen."""
 import logging
+import math
 import warnings
 from urllib3.exceptions import InsecureRequestWarning
 import time
@@ -15,6 +16,35 @@ log = logging.getLogger("faceid.frigate")
 # snapshot request. This does not modify Session.verify or authentication.
 warnings.filterwarnings("default", category=InsecureRequestWarning,
                         module=r"urllib3\.connectionpool")
+
+
+def sighting_recording_path(metadata: dict | None) -> str | None:
+    """A bounded recording window for a local face sighting, never an event ID."""
+    if not metadata or not metadata.get("camera"):
+        return None
+    try:
+        start = float(metadata["start_ts"])
+        now = time.time()
+        end = float(metadata["end_ts"]) if metadata.get("end_ts") is not None else now
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < start or start >= now:
+            return None
+        # Recognition can happen long after a track first appears. Keep that
+        # evidence in the bounded clip, even for a track lasting hours.
+        if metadata.get("recognition_ts") is not None:
+            recognized = float(metadata["recognition_ts"])
+            if not math.isfinite(recognized) or not start <= recognized <= min(end, now):
+                return None
+            start = max(start, recognized - 2.0)
+            end = min(end, start + 60.0, now)
+        else:
+            end = min(end + 2.0, start + 62.0, now)
+            start = max(0.0, start - 2.0)
+        if end <= start:
+            return None
+        camera = quote(str(metadata["camera"]), safe="")
+        return f"/api/{camera}/start/{start:.3f}/end/{end:.3f}/clip.mp4"
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
 
 
 class FrigateAPI:
@@ -195,15 +225,23 @@ class FrigateAPI:
             log.debug("recording frame %s@%s failed: %s", camera, ts, e)
             return None
 
-    def download_clip(self, event_id: str, dest: str, max_bytes: int = 80_000_000) -> bool:
+    def download_clip(self, event_id: str, dest: str, max_bytes: int = 80_000_000,
+                      *, metadata: dict | None = None) -> bool:
         """Ereignis-Clip (volle Aufnahme-Auflösung) nach ``dest`` streamen.
 
         Nur fürs Enrollment: ein Download deckt das ganze Ereignis ab, statt einzelne
         Zeitpunkte zu raten. ``max_bytes`` bricht überlange Clips ab.
         """
         encoded_id = quote(event_id, safe="")
-        paths = [f"/api/events/{encoded_id}/clip.mp4"]
-        metadata = None
+        native = event_id.startswith("faceid-")
+        if native:
+            path = sighting_recording_path(metadata)
+            if path is None:
+                return False
+            paths = [path]
+        else:
+            paths = [f"/api/events/{encoded_id}/clip.mp4"]
+            metadata = None
         last_status = None
         for index, path in enumerate(paths):
             try:
@@ -225,11 +263,11 @@ class FrigateAPI:
                         if written > 1000:
                             return True
             except (requests.RequestException, OSError) as exc:
-                log.debug("clip %s path %s failed: %s", event_id, path, exc)
+                log.debug("clip %s path %s failed: %s", event_id, path, type(exc).__name__)
 
             # An event clip may be absent even while the underlying recordings still
             # exist. Frigate officially exposes a camera/time recording endpoint.
-            if index == 0:
+            if index == 0 and not native:
                 metadata = self.event(event_id)
                 if metadata and metadata.get("camera") and metadata.get("start_time"):
                     start = max(0.0, float(metadata["start_time"]) - 2.0)

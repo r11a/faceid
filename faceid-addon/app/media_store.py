@@ -13,6 +13,8 @@ import threading
 import time
 from pathlib import Path
 
+from .frigate_api import sighting_recording_path
+
 log = logging.getLogger("faceid.media")
 
 
@@ -20,8 +22,10 @@ class EventMediaStore:
     def __init__(
         self, data_dir: Path, frigate, *, max_clip_bytes: int = 150_000_000,
         max_cache_bytes: int = 1_000_000_000, retention_hours: float = 24.0,
+        metadata_resolver=None,
     ):
         self.frigate = frigate
+        self.metadata_resolver = metadata_resolver
         self.cache_dir = data_dir / "media_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.max_clip_bytes = max(10_000_000, int(max_clip_bytes))
@@ -32,7 +36,12 @@ class EventMediaStore:
         self.prune()
 
     def _path(self, event_id: str) -> Path:
-        digest = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+        cache_key = event_id
+        if event_id.startswith("faceid-") and self.metadata_resolver:
+            metadata = self.metadata_resolver(event_id)
+            if metadata and metadata.get("recognition_ts") is not None:
+                cache_key = f"{event_id}:recognition:{metadata['recognition_ts']}"
+        digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()
         return self.cache_dir / f"{digest}.mp4"
 
     def _lock_for(self, event_id: str) -> threading.Lock:
@@ -87,8 +96,15 @@ class EventMediaStore:
                 )
                 temporary.unlink(missing_ok=True)
                 try:
+                    kwargs = {}
+                    if event_id.startswith("faceid-"):
+                        metadata = self.metadata_resolver(event_id) if self.metadata_resolver else None
+                        if sighting_recording_path(metadata) is None:
+                            return None
+                        kwargs["metadata"] = metadata
                     ok = self.frigate.download_clip(
                         event_id, str(temporary), max_bytes=self.max_clip_bytes,
+                        **kwargs,
                     )
                     if not ok or not self._valid_mp4(temporary):
                         temporary.unlink(missing_ok=True)
@@ -104,6 +120,15 @@ class EventMediaStore:
     def status(self, event_id: str) -> dict:
         path = self._path(event_id)
         cached = self._valid_mp4(path)
+        if event_id.startswith("faceid-"):
+            metadata = self.metadata_resolver(event_id) if self.metadata_resolver else None
+            return {
+                "cached": cached, "has_clip": False,
+                "has_recording_window": sighting_recording_path(metadata) is not None,
+                "camera": metadata.get("camera") if metadata else None,
+                "start_time": metadata.get("start_ts") if metadata else None,
+                "end_time": metadata.get("end_ts") if metadata else None,
+            }
         metadata = self.frigate.event(event_id)
         return {
             "cached": cached,

@@ -5,7 +5,7 @@ import {
   Sparkles, Star, Trash2, Upload, UserCheck, UserPlus, UserRound, Users, X,
 } from "lucide-react";
 import { api, assetUrl, query } from "../api.js";
-import { useImageRetry, useResource } from "../hooks.js";
+import { eventImageUrl, useImageRetry, useResource } from "../hooks.js";
 import { ActionsMenu, Badge, Empty, ErrorState, Loading, Modal, PageHeader, Panel, dateTime, decision, percent, relativeTime, useToast } from "../ui.jsx";
 
 import { FaceExplorer, HistoryReferenceChooser } from "./Faces.jsx";
@@ -17,7 +17,7 @@ function PersonAvatar({ person, className = "" }) {
 }
 
 function EventThumb({ event, onClick }) {
-  const image = useImageRetry(`api/activity/${encodeURIComponent(event.event_id)}/image`);
+  const image = useImageRetry(eventImageUrl(event));
   const Element = onClick ? "button" : "span";
   return <Element className="event-thumb" onClick={onClick}>{image.failed ? <ImageOff /> : <img src={assetUrl(image.url)} onError={image.onError} alt="תמונת אירוע" decoding="async" loading="lazy" />}</Element>;
 }
@@ -62,7 +62,7 @@ export function EventModal({ eventId, people, onClose, onChanged }) {
   return <Modal title="בדיקת אירוע" subtitle={`${dateTime(event.start_ts || event.updated_ts)} · ${event.camera || "מצלמה לא ידועה"}`} onClose={onClose} wide>
     <div className="event-review-layout">
       <div className={`event-media-large ${isBlacklistedEvent(event, people) ? "blacklist-outline" : ""}`}>
-        {clip ? <EventVideo eventId={eventId} /> : <img src={assetUrl(`api/activity/${eventId}/image`)} alt="צילום האירוע" />}
+        {clip ? <EventVideo eventId={eventId} /> : <img src={assetUrl(eventImageUrl({ ...event, event_id: eventId }))} alt="צילום האירוע" />}
         <div className="media-toolbar"><button className="button primary" onClick={() => setClip(!clip)}>{clip ? <Images /> : <Play />}{clip ? "חזרה לתמונה" : "נגן קליפ"}</button><a className="button secondary" href={assetUrl(`api/activity/${eventId}/clip?download=true`)}><Download />הורדה</a></div>
       </div>
       <div className="review-summary">

@@ -20,6 +20,12 @@ beforeEach(() => {
 afterEach(async () => { if (renderer) await act(() => renderer.unmount()); renderer = null; });
 async function open() { await act(async () => { renderer = create(<FaceExplorer source={{ person: "alice" }} />); }); }
 
+it("versions native result evidence while retaining its supplied face crop", async () => {
+  api.mockResolvedValue({ total: 1, cameras: ["Door"], events: [{ event_id: "faceid-door-1", updated_ts: 100, camera: "Door", image: "api/faces/sample/s1/image" }] });
+  await open();
+  expect(renderer.root.findByType("img").props.src).toBe("/ingress/api/faces/sample/s1/image?faceid_version=100");
+});
+
 it("requests newest events first and preserves the results when switching to list view", async () => {
   await open();
   expect(new URLSearchParams(api.mock.calls[0][0].split("?")[1]).get("order")).toBe("desc");

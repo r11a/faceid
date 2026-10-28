@@ -178,6 +178,7 @@ class AlertTests(unittest.TestCase):
         self.gallery.set_alert_policy(self.slug, notify_on_recognition=True)
         latest = self.alerts.record(event_id='saved', camera='door', status='recognized', person='Alice')
         self.processor.frigate_topic = 'frigate'
+        self.processor.continuous = SimpleNamespace(reconnect=Mock())
         self.processor.alerts = self.alerts
         self.processor._publish_discovery = Mock()
         self.processor.client.reset_mock()

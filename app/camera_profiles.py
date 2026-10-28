@@ -7,6 +7,15 @@ from pathlib import Path
 ROLES = {"observation", "entry", "exit", "entry_exit", "restricted", "intercom"}
 MODES = {"standard", "intercom"}
 LIVENESS_MODES = {"off", "advisory", "required"}
+RECOGNITION_MODES = {"event", "presence", "continuous"}
+
+
+def _stored_seconds(value, default: float, minimum: float, maximum: float) -> float:
+    try:
+        seconds = float(value)
+        return seconds if minimum <= seconds <= maximum else default
+    except (TypeError, ValueError):
+        return default
 
 
 class CameraProfiles:
@@ -30,6 +39,7 @@ class CameraProfiles:
     def get(self, camera: str) -> dict:
         stored = self.all().get(camera) or {}
         mode = stored.get("mode", "intercom" if stored.get("role") == "intercom" else "standard")
+        recognition_mode = stored.get("recognition_mode", "event")
         return {
             "camera": camera,
             "enabled": bool(stored.get("enabled", True)),
@@ -40,6 +50,9 @@ class CameraProfiles:
             "burst_frames": int(stored.get("burst_frames", 8)),
             "high_resolution": bool(stored.get("high_resolution", mode == "intercom")),
             "fast_recognition": bool(stored.get("fast_recognition", False)),
+            "recognition_mode": recognition_mode if isinstance(recognition_mode, str) and recognition_mode in RECOGNITION_MODES else "event",
+            "recognition_interval_seconds": _stored_seconds(stored.get("recognition_interval_seconds"), .5, .25, 5),
+            "recognition_rearm_seconds": _stored_seconds(stored.get("recognition_rearm_seconds"), 2., 1, 30),
             "critical": bool(stored.get("critical", False)),
             "require_second_factor": bool(stored.get("require_second_factor", mode == "intercom")),
             "liveness_mode": stored.get(
@@ -56,6 +69,9 @@ class CameraProfiles:
         roi: list | None = None, enabled: bool | None = None,
         fast_recognition: bool | None = None,
         critical: bool | None = None,
+        recognition_mode: str | None = None,
+        recognition_interval_seconds: float | None = None,
+        recognition_rearm_seconds: float | None = None,
     ) -> dict:
         camera = str(camera).strip()
         if not camera:
@@ -69,6 +85,16 @@ class CameraProfiles:
         mode = str(mode)
         if mode not in MODES:
             raise ValueError("unknown camera mode")
+        if recognition_mode is not None and (not isinstance(recognition_mode, str) or recognition_mode not in RECOGNITION_MODES):
+            raise ValueError("unknown recognition mode")
+        if recognition_interval_seconds is not None:
+            recognition_interval_seconds = float(recognition_interval_seconds)
+            if not .25 <= recognition_interval_seconds <= 5:
+                raise ValueError("recognition_interval_seconds must be between 0.25 and 5")
+        if recognition_rearm_seconds is not None:
+            recognition_rearm_seconds = float(recognition_rearm_seconds)
+            if not 1 <= recognition_rearm_seconds <= 30:
+                raise ValueError("recognition_rearm_seconds must be between 1 and 30")
         liveness_mode = str(liveness_mode or ("required" if mode == "intercom" else "advisory"))
         if liveness_mode not in LIVENESS_MODES:
             raise ValueError("unknown liveness mode")
@@ -83,6 +109,9 @@ class CameraProfiles:
         with self._lock:
             profiles = self._read()
             stored = profiles.get(camera) or {}
+            saved_recognition_mode = stored.get("recognition_mode", "event")
+            if not isinstance(saved_recognition_mode, str) or saved_recognition_mode not in RECOGNITION_MODES:
+                saved_recognition_mode = "event"
             profiles[camera] = {
                 "enabled": bool(stored.get("enabled", True) if enabled is None else enabled),
                 "min_face_px": min_face_px, "role": role, "mode": mode,
@@ -90,6 +119,9 @@ class CameraProfiles:
                 "burst_frames": burst_frames,
                 "high_resolution": bool(high_resolution),
                 "fast_recognition": bool(stored.get("fast_recognition", False) if fast_recognition is None else fast_recognition),
+                "recognition_mode": saved_recognition_mode if recognition_mode is None else recognition_mode,
+                "recognition_interval_seconds": _stored_seconds(stored.get("recognition_interval_seconds"), .5, .25, 5) if recognition_interval_seconds is None else recognition_interval_seconds,
+                "recognition_rearm_seconds": _stored_seconds(stored.get("recognition_rearm_seconds"), 2., 1, 30) if recognition_rearm_seconds is None else recognition_rearm_seconds,
                 "critical": bool(stored.get("critical", False) if critical is None else critical),
                 "require_second_factor": bool(require_second_factor),
                 "liveness_mode": liveness_mode,

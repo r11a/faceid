@@ -2,8 +2,32 @@ import { afterEach, expect, test, vi } from "vitest";
 
 vi.stubGlobal("window", { location: { pathname: "/" } });
 const { subscribeRealtime } = await import("./realtime.js");
-const { createResourceLoader, resourceState } = await import("./hooks.js");
+const { createResourceLoader, resourceState, eventImageUrl } = await import("./hooks.js");
 afterEach(() => { vi.useRealTimers(); });
+
+test("native evidence URLs change on revision while legacy event URLs stay stable", () => {
+  expect(eventImageUrl({ event_id: "faceid-door/1", updated_ts: 100.25 })).toBe("api/activity/faceid-door%2F1/image?faceid_version=100.25");
+  expect(eventImageUrl({ event_id: "faceid-door/1", updated_ts: 101 })).toBe("api/activity/faceid-door%2F1/image?faceid_version=101");
+  for (const updated_ts of [100, 101]) {
+    expect(eventImageUrl({ event_id: "legacy/1", updated_ts })).toBe("api/activity/legacy%2F1/image");
+    expect(eventImageUrl({ event_id: "legacy/1", updated_ts, image: "api/faces/sample/s1/image?crop=1#face" })).toBe("api/faces/sample/s1/image?crop=1#face");
+  }
+});
+
+test("image revisions preserve explicit image paths, existing queries and fragments", () => {
+  expect(eventImageUrl({ event_id: "faceid-1", updated_ts: 3, image: "api/faces/sample/s1/image?crop=1#face" })).toBe("api/faces/sample/s1/image?crop=1&faceid_version=3#face");
+  for (const image of ["data:image/jpeg;base64,abc", "blob:https://host/image"]) {
+    expect(eventImageUrl({ event_id: "faceid-1", updated_ts: 3, image })).toBe(image);
+  }
+});
+
+test("missing or invalid revisions do not add unstable image versions", () => {
+  for (const updated_ts of [undefined, null, "", NaN, Infinity]) {
+    expect(eventImageUrl({ event_id: "faceid-1", updated_ts })).toBe("api/activity/faceid-1/image");
+  }
+  expect(eventImageUrl({})).toBe("");
+  expect(eventImageUrl({ image: "existing.jpg" })).toBe("existing.jpg");
+});
 
 test("consumers share a stream and coalesce bursts until final unsubscribe", () => {
   vi.useFakeTimers();

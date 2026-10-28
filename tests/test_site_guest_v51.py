@@ -74,7 +74,7 @@ class GuestAndSiteTests(unittest.TestCase):
         html = (root / "static" / "index.html").read_text(encoding="utf-8")
         source = (root / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
         advanced = (root / "frontend" / "src" / "pages" / "Advanced.jsx").read_text(encoding="utf-8")
-        self.assertIn("faceid-6.5.8.js", html)
+        self.assertIn("faceid-6.6.0.js", html)
         self.assertIn('guests: { title: "אורחים"', source)
         self.assertIn('"routes", "מסלולים ומפה"', advanced)
         self.assertIn("visits?days=30", advanced)
