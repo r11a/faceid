@@ -391,6 +391,28 @@ class ContinuousRecognitionTests(unittest.TestCase):
         eid = self.messages()[0]['event_id']
         self.assertEqual(self.audit.event_metadata(eid)['recognition_ts'], now + 120.5)
 
+    def test_native_guest_recognition_does_not_authorize_admission(self):
+        self.gallery.match_candidates.side_effect = lambda *a, **kw: []
+        self.p.guest_access = SimpleNamespace(threshold=.8, margin=.08,
+            candidates=Mock(return_value=[('guest:visitor', 'Visitor', .99)]), evaluate=Mock(return_value={'allowed': True}))
+        self.frame([self.face(n=1)])
+        self.frame([self.face(n=2)])
+        self.assertEqual([m['person'] for m in self.messages()], ['Visitor'])
+        self.p.guest_access.evaluate.assert_not_called()
+        self.assertFalse(any(c.args[0] == 'faceid/v1/guest_access' for c in self.p.client.publish.call_args_list))
+
+    def test_camera_wide_sightings_do_not_train_or_identify_a_bystanders_body(self):
+        self.p.reid = SimpleNamespace(seed=Mock(), match=Mock())
+        self.p.body_recognition = SimpleNamespace(predict=Mock(return_value={'advisory': True}), add_pending=Mock())
+        now = time.time()
+        self.frame([self.face(n=1)], now)
+        self.frame([self.face(n=2)], now + .5)
+        self.frame([], now + 3)
+        self.p._finalize_events(now + 8)
+        self.p.reid.seed.assert_not_called()
+        self.p.body_recognition.predict.assert_not_called()
+        self.p.body_recognition.add_pending.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

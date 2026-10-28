@@ -945,7 +945,7 @@ class EventProcessor:
             self._flush_face_samples(eid, st)
             if self.audit:
                 self.audit.observation(eid, st["attempts"], decision.status, **observation)
-            if actionable and decision.slug and str(decision.slug).startswith("guest:"):
+            if actionable and not st.get("continuous_sighting") and decision.slug and str(decision.slug).startswith("guest:"):
                 guest_id = str(decision.slug).split(":", 1)[1]
                 st["guest"] = {"id": guest_id, "name": decision.person}
                 access_result = guest_access.evaluate(
@@ -960,7 +960,7 @@ class EventProcessor:
                         f"{self.prefix}/v1/guest_access",
                         json.dumps(access_result, ensure_ascii=False), retain=False,
                     )
-            if actionable and self.reid is not None:
+            if actionable and self.reid is not None and not st.get("continuous_sighting"):
                 self.reid.seed(
                     decision.person, st["camera"], st.get("context_frame"),
                     ts=st.get("start_time"),
@@ -1214,7 +1214,7 @@ class EventProcessor:
                 self.frigate.set_sub_label(eid, person, score)
             except Exception:
                 log.exception("Could not update Frigate label for event %s", eid)
-        if self.body_recognition is not None and st.get("context_frame") is not None:
+        if self.body_recognition is not None and st.get("context_frame") is not None and not st.get("continuous_sighting"):
             try:
                 st["body"] = self.body_recognition.predict(st["context_frame"], eid)
             except Exception as exc:
@@ -1225,6 +1225,7 @@ class EventProcessor:
         probable_person, probable_score = None, 0.0
         if (
             self.reid is not None
+            and not st.get("continuous_sighting")
             and status in {"unknown", "ambiguous", "no_face"}
             and st.get("context_frame") is not None
         ):
@@ -1283,6 +1284,7 @@ class EventProcessor:
             )
         if (
             actionable and self.body_recognition is not None
+            and not st.get("continuous_sighting")
             and status == "recognized" and person
             and st.get("context_frame") is not None
         ):

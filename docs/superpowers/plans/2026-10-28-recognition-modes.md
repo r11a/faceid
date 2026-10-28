@@ -37,6 +37,8 @@
 
 ## Progress
 
-Final local verification: 375 backend tests passed (3 skipped), 92 frontend tests passed, UI build passed, source/static addon mirrors byte-identical, import/version checks passed. Browser QA saved presence and continuous modes and verified persistence after reload.
+Final local verification: 377 backend tests passed (3 skipped), 92 frontend tests passed, UI build passed, source/static addon mirrors byte-identical, import/version checks passed. Browser QA saved presence and continuous modes and verified persistence after reload.
 
 Independent review fixes verified with failing-then-passing regressions: observed absence instead of sampler delay; notification cancellation when disabled during evidence I/O and retry; access-only event suppression; per-camera MQTT reconciliation; immediate policy changes with old votes discarded; known presence refresh; recognition-time recording windows and cache invalidation. Native evidence changes now refresh event/list image URLs. No outstanding critical/important review findings. Real-camera throughput and detection accuracy remain unverified on the installed hardware.
+
+Additional verified isolation: native sightings never evaluate guest admission or seed/learn a body from an unassigned full-camera frame; both regressions failed before guards and passed in the 377-test suite.
