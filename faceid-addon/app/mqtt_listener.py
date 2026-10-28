@@ -676,6 +676,18 @@ class EventProcessor:
         found = (self.engine.detect_faces(img)
                  if live_access and hasattr(self.engine, "detect_faces")
                  else self.engine.faces(img))
+        if source == "live_camera" and any(
+            other_eid != eid and other.get("camera") == st["camera"]
+            and not other.get("ended") and not other.get("end_time")
+            for other_eid, other in list(self.events.items())
+        ):
+            # Even one visible face is ambiguous when another tracked person
+            # remains present, including after that person's recognition ended.
+            if self.audit:
+                self.audit.observation(eid, st["attempts"], "multiple_events", source=source)
+            log.info("event %s (%s): attempt %d, multiple active person events for current camera frame",
+                     eid, st["camera"], st["attempts"])
+            return
         if source == "live_camera" and len(found) > 1:
             # Current camera frames have no event-specific person crop. Choosing
             # the clearest face could attribute a bystander to this event.

@@ -225,6 +225,30 @@ class RecognitionLatencyTests(unittest.TestCase):
         p._process('live')
         p.frigate.latest_frame_bytes.assert_called_once_with('door', timeout=2.0)
 
+    def test_fast_single_visible_face_cannot_choose_between_active_person_events(self):
+        import cv2
+        for other_done in (False, True):
+            with self.subTest(other_done=other_done):
+                p, state = self.processor()
+                profile = {'enabled': True, 'fast_recognition': True, 'high_resolution': False,
+                           'min_face_px': 24, 'night_min_face_px': 24}
+                p.camera_profiles = SimpleNamespace(get=lambda _: profile, all=lambda: {'door': profile})
+                other = p._new_event_state('other', 'door')
+                other['done'] = other_done
+                p.events['other'] = other
+                p.audit = SimpleNamespace(observation=Mock(), save_evidence=Mock(), finalize=Mock())
+                p.frigate.latest_frame_bytes.return_value = cv2.imencode('.jpg', np.zeros((100, 100, 3), dtype=np.uint8))[1].tobytes()
+                face = SimpleNamespace(bbox=np.array([0, 0, 80, 80]), det_score=.99,
+                                       normed_embedding=np.array([1., .1], dtype=np.float32))
+                p.engine = SimpleNamespace(faces=Mock(return_value=[face]))
+                quality = SimpleNamespace(usable=True, score=.8, to_dict=lambda: {'score': .8})
+                with patch('app.mqtt_listener.measure_face_quality', return_value=quality):
+                    p._process('live')
+                p.gallery.match_candidates.assert_not_called()
+                self.assertEqual(state['decision'].observations, [])
+                self.assertFalse(state['done'])
+                self.assertEqual(p.audit.observation.call_args.args[2], 'multiple_events')
+
     def test_live_frame_timeout_override_preserves_existing_preview_default(self):
         api = FrigateAPI('https://fixture.invalid', timeout=6, verify_tls=True)
         api.request = Mock(return_value=SimpleNamespace(status_code=200, content=b'image'))
