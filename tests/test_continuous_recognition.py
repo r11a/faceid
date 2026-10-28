@@ -62,6 +62,18 @@ class ContinuousRecognitionTests(unittest.TestCase):
         self.p.camera_profiles.update(camera, min_face_px=24, role='entry',
                                      recognition_mode=mode, liveness_mode='off', **extra)
 
+    def test_presence_stream_is_prewarmed_before_person_and_removed_when_disabled(self):
+        self.frigate.supports_live_frames = True
+        self.set_mode('presence', high_resolution=True)
+        self.service.tick(now=100)
+        warm = [job for job in self.executor.jobs if job[0] == self.service._sync_live_cameras]
+        self.assertEqual(len(warm), 1)
+        warm[0][0]()
+        self.frigate.sync_live_cameras.assert_called_with(['door'])
+        self.set_mode('event', high_resolution=True)
+        self.service._sync_live_cameras()
+        self.frigate.sync_live_cameras.assert_called_with([])
+
     def face(self, who='alice', n=1, x=0):
         emb = np.array([1, n / 100, 0] if who == 'alice' else [0, n / 100, 1], dtype=np.float32)
         return SimpleNamespace(bbox=np.array([x, 0, x + 60, 80]), det_score=.99,

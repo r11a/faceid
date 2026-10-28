@@ -35,16 +35,21 @@ async function receive(alerts, cursor = alerts.at(-1)?.id) {
 }
 const popups = () => renderer.root.findAllByProps({ role: "alert" });
 
-it("baselines without replay, queues each recognition, uses ingress evidence, and expires in five seconds", async () => {
+it("replaces the visible recognition immediately and restarts its five-second expiry", async () => {
   await mount();
   expect(api.mock.calls[0][0]).toBe("alerts?include_recognitions=true");
   expect(popups()).toHaveLength(0);
-  await receive([alert(10), alert(11)]);
+  await receive([alert(10)]);
   expect(popups()[0].findByType("b").children.join("")).toContain("Person 10");
   expect(popups()[0].findByType("img").props.src).toBe("/ingress/api/activity/e10/image");
-  await act(async () => { vi.advanceTimersByTime(5000); });
+  await act(async () => { vi.advanceTimersByTime(1000); });
+  await receive([alert(11)]);
+  expect(popups()).toHaveLength(1);
   expect(popups()[0].findByType("b").children.join("")).toContain("Person 11");
-  await act(async () => { vi.advanceTimersByTime(5000); });
+  await act(async () => { vi.advanceTimersByTime(4000); });
+  expect(popups()).toHaveLength(1);
+  expect(popups()[0].findByType("b").children.join("")).toContain("Person 11");
+  await act(async () => { vi.advanceTimersByTime(1000); });
   expect(popups()).toHaveLength(0);
 });
 
@@ -52,9 +57,10 @@ it("bounds bursts, deduplicates queued events, rejects remote image URLs, and cl
   await mount();
   await receive([alert(10)]);
   await receive(Array.from({ length: 35 }, (_, index) => alert(index + 10)));
-  expect(popups()[0].findAllByType("small").at(-1).children.join("")).toContain("19");
-  await act(async () => { renderer.root.findByProps({ "aria-label": "סגירת התראה" }).props.onClick(); });
-  expect(popups()[0].findByType("b").children.join("")).toContain("Person 26");
+  expect(popups()).toHaveLength(1);
+  expect(popups()[0].findByType("b").children.join("")).toContain("Person 44");
+  await act(async () => { popups()[0].findByProps({ "aria-label": "סגירת התראה" }).props.onClick(); });
+  expect(popups()).toHaveLength(0);
   await receive([{ ...alert(50), image_url: "https://example.com/private.jpg" }]);
   await act(async () => { renderer.unmount(); }); renderer = null;
   expect(unsubscribe).toHaveBeenCalledOnce();
@@ -78,7 +84,7 @@ it("keeps existing critical alerts persistent when disabled and tolerates prefer
 
 it("refuses remote photos and clears queued normal notifications when disabled", async () => {
   await mount();
-  await receive([{ ...alert(10), image_url: "https://camera.local/private.jpg" }, alert(11)]);
+  await receive([alert(10), { ...alert(11), image_url: "https://camera.local/private.jpg" }]);
   expect(popups()[0].findAllByType("img")).toHaveLength(0);
   await act(() => renderer.root.findByProps({ title: "התראות זיהוי" }).props.onClick());
   await act(async () => renderer.root.findByType("input").props.onChange({ target: { checked: false } }));

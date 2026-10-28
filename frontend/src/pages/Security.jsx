@@ -34,9 +34,11 @@ function CameraSamplingStatus({ camera }) {
   const health = useResource("health", { poll: 3000 });
   if ((camera.recognition_mode || "event") === "event") return null;
   const status = health.data?.performance?.camera_sampling?.cameras?.[camera.camera];
+  const stream = health.data?.performance?.camera_sampling?.streams?.[camera.camera];
   return <div className="guidance" role="status">
     <b>{!camera.enabled ? "הזיהוי במצלמה כבוי" : health.error ? "לא ניתן לקרוא את מצב הסריקה" : samplingLabels[status?.state] || "ממתין להפעלת הסריקה"}</b>
     {status?.source && <p>{status.source === "main_stream" ? "מקור: זרם ראשי" : "מקור: זרם גילוי של Frigate"}{status.frame_width ? ` · ${status.frame_width}×${status.frame_height}` : ""}</p>}
+    {stream && <p>{stream.state === "streaming" ? `חיבור רציף פעיל · גיל הפריים שהתקבל ${stream.age_ms} אלפיות שנייה` : ["connecting", "catching_up"].includes(stream.state) ? "מכין חיבור רציף ותמונה עדכנית" : "החיבור הרציף אינו זמין; צילום חלופי עשוי להיות איטי"}</p>}
     {status?.frame_width && <p>בתמונה האחרונה: {status.visible_faces} פנים · {status.usable_faces} מתאימות לזיהוי · הגדולות ביותר {status.largest_face_px}px · מינימום {status.min_face_px}px</p>}
     {Object.entries(status?.rejected_reasons || {}).map(([reason, count]) => <p key={reason}>{rejectionLabels[reason] || reason}: {count}</p>)}
     {status?.frame_processing_ms != null && <p>זמן הבדיקה האחרונה: {(status.frame_processing_ms / 1000).toFixed(2)} שניות. המרווח שהוגדר הוא מינימום; הקצב בפועל תלוי במקור התמונה ובעומס.</p>}
@@ -113,7 +115,7 @@ function CameraSettings({ camera, onSaved, onToggle }) {
     </div>
     <div className="camera-options" role="group" aria-label="אפשרויות זיהוי">
       {recognitionMode === "event" && <label className="face-check"><input type="checkbox" checked={Boolean(form.fast_recognition)} onChange={e => setForm({ ...form, fast_recognition: e.target.checked })} /><span><b>זיהוי מהיר</b><small>פחות המתנה, אותם ספי אישור</small></span></label>}
-      <label className="face-check"><input type="checkbox" checked={Boolean(form.high_resolution)} onChange={e => setForm({ ...form, high_resolution: e.target.checked })} /><span><b>תמונות מלאות</b><small>{recognitionMode === "event" ? "מ־Frigate, נדרש לראיות גישה חיות" : "מהזרם הראשי ב־Frigate; צילום עשוי להימשך כמה שניות"}</small></span></label>
+      <label className="face-check"><input type="checkbox" checked={Boolean(form.high_resolution)} onChange={e => setForm({ ...form, high_resolution: e.target.checked })} /><span><b>תמונות מלאות</b><small>{recognitionMode === "event" ? "מ־Frigate, נדרש לראיות גישה חיות" : "חיבור רציף לזרם הראשי ב־Frigate לקבלת תמונות ללא פתיחת צילום מחדש"}</small></span></label>
       <label className="face-check"><input type="checkbox" checked={Boolean(form.critical)} onChange={e => setForm({ ...form, critical: e.target.checked })} /><span><b>מצלמה קריטית</b><small>התראה בכל אירוע עם זיהוי פנים</small></span></label>
     </div>
     <div className="camera-settings-actions"><button className="button primary" onClick={save}><Save />שמירת הגדרות</button></div>

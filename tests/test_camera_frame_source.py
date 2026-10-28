@@ -74,10 +74,45 @@ class CameraFrameSourceTests(unittest.TestCase):
 
     def api(self, live=None, camera='office', streams=None):
         api = FrigateAPI('https://frigate.invalid', verify_tls=True)
+        api.live_frames = Mock()
+        api.live_frames.ensure.return_value = None  # Exercise compatibility capture.
         config = {'cameras': {camera: {'live': {'streams': live or {}}}},
                   'go2rtc': {'streams': streams or {'office': []}}}
         api.request = Mock(side_effect=[self.response(config), self.response()])
         return api
+
+    def test_live_frame_returns_immediately_without_snapshot(self):
+        api = self.api()
+        reader = Mock()
+        reader.frame.return_value = b'live'
+        api.live_frames.ensure.return_value = reader
+        self.assertEqual(api.main_stream_frame_bytes('office'), b'live')
+        api.live_frames.ensure.assert_called_once_with('office', 'rtsp://frigate.invalid:8554/office')
+        self.assertEqual(api.request.call_count, 1)
+
+    def test_connecting_stream_does_not_block_on_slow_snapshot(self):
+        api = self.api()
+        reader = Mock()
+        reader.frame.return_value = None
+        reader.report.return_value = {'state': 'connecting'}
+        api.live_frames.ensure.return_value = reader
+        self.assertIsNone(api.main_stream_frame_bytes('office'))
+        self.assertEqual(api.request.call_count, 1)
+
+    def test_failed_reader_uses_authenticated_snapshot(self):
+        api = self.api()
+        reader = Mock()
+        reader.frame.return_value = None
+        reader.report.return_value = {'state': 'unavailable'}
+        api.live_frames.ensure.return_value = reader
+        self.assertEqual(api.main_stream_frame_bytes('office'), b'jpeg')
+
+    def test_prewarm_only_configured_names_and_remove_disabled_streams(self):
+        api = self.api()
+        api.sync_live_cameras(['office', 'unknown'])
+        api.live_frames.sync.assert_called_once_with({'office': 'rtsp://frigate.invalid:8554/office'})
+        api.sync_live_cameras([])
+        api.live_frames.sync.assert_called_with({})
 
     def test_event_mode_keeps_original_source_even_when_high_resolution_is_enabled(self):
         api = Mock()
