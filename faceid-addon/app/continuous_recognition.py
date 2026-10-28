@@ -13,6 +13,7 @@ import numpy as np
 from .decision import DecisionAccumulator
 from .engine import crop_face
 from .face_tracks import FaceTracker
+from .frigate_api import camera_frame_bytes
 from .quality import measure_face_quality
 
 log = logging.getLogger("faceid.continuous")
@@ -212,18 +213,22 @@ class ContinuousRecognition:
                    "states": {}, "fingerprint": None, "visible": []}
             self.cameras[camera] = run
         started = time.perf_counter()
-        content = p.frigate.latest_frame_bytes(camera, timeout=2.0)
+        source = "main_stream" if expected.get("high_resolution") else "detect_stream"
+        with self.lock:
+            self.status[camera] = {**self.status.get(camera, {}), "state": "fetching", "source": source,
+                                   "last_attempt": now}
+        content = camera_frame_bytes(p.frigate, camera, expected, timeout=2.0)
         p.record_timing("camera_fetch", time.perf_counter() - started)
         if not self.current(camera, expected):
             return
         if not content:
             with self.lock:
-                self.status[camera] = {"state": "no_frame"}
+                self.status[camera] = {"state": "no_frame", "source": source, "last_attempt": now}
             return
         img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             with self.lock:
-                self.status[camera] = {"state": "invalid_frame"}
+                self.status[camera] = {"state": "invalid_frame", "source": source, "last_attempt": now}
             return
         fingerprint = hashlib.sha256(img.tobytes()).hexdigest()
         now = time.time()
@@ -251,12 +256,20 @@ class ContinuousRecognition:
             run["visible"] = [eid for eid, _ in assignments]
             hour = time.localtime().tm_hour
             minimum = expected.get("night_min_face_px" if hour >= 19 or hour < 6 else "min_face_px", p.min_face_px)
+            usable_faces = 0
+            largest_face_px = 0
+            rejected_reasons = {}
             for eid, face in assignments:
                 if not self.current(camera, expected):
                     return
                 quality = measure_face_quality(img, face, min_face_px=minimum, min_quality=p.min_face_quality)
+                largest_face_px = max(largest_face_px, quality.to_dict().get("face_px", 0))
                 if not quality.usable:
+                    reason = ("small_face" if quality.face_px < minimum else
+                              "weak_detection" if quality.detection < .55 else "low_quality")
+                    rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
                     continue
+                usable_faces += 1
                 state = run["states"].get(eid)
                 if state is None:
                     state = p._new_event_state(eid, camera, start_time=now,
@@ -288,7 +301,10 @@ class ContinuousRecognition:
                     p.audit.trim_observations(eid, keep=64)
         self._retry_notifications(run)
         with self.lock:
-            self.status[camera] = {"state": "sampling", "last_frame_received": now,
+            self.status[camera] = {"state": "faces_rejected" if assignments and not usable_faces else "sampling",
+                "source": source, "last_attempt": now, "last_frame_received": now,
+                "frame_width": img.shape[1], "frame_height": img.shape[0], "min_face_px": minimum,
+                "usable_faces": usable_faces, "largest_face_px": largest_face_px, "rejected_reasons": rejected_reasons,
                 "visible_faces": len(assignments), "tracked_faces": len(run["states"]),
                 "frame_processing_ms": round((time.perf_counter() - started) * 1000, 2)}
 

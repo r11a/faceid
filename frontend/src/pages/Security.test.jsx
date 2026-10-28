@@ -24,6 +24,21 @@ afterEach(async () => { if (renderer) await act(() => renderer.unmount()); rende
 const mount = async () => { await act(() => { renderer = create(<CamerasPage />); }); };
 
 describe("camera controls", () => {
+  it("shows the live source, resolution and reason small faces cannot be recognized", async () => {
+    resource.data.cameras[0].recognition_mode = "presence";
+    resource.data.performance = { camera_sampling: { cameras: { "front/door": {
+      state: "faces_rejected", source: "detect_stream", frame_width: 320, frame_height: 240,
+      visible_faces: 2, usable_faces: 0, largest_face_px: 12, min_face_px: 48,
+      rejected_reasons: { small_face: 2 }, frame_processing_ms: 340,
+    } } } };
+    await mount();
+    const content = renderer.toJSON().map(text).join("");
+    expect(content).toContain("320×240");
+    expect(content).toContain("12px");
+    expect(content).toContain("48px");
+    expect(content).toContain("פנים קטנות מדי");
+  });
+
   it("saves the selected recognition mode and timing without changing security settings", async () => {
     await mount();
     const selector = renderer.root.findByProps({ "aria-label": "מתי לזהות פנים" });

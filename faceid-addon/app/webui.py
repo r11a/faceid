@@ -23,6 +23,7 @@ from .backup_util import build_backup_gz, write_backup_file, prune_backups, vali
 from .calibration import UNKNOWN_LABEL, build_calibration_report
 from .gallery_coach import gallery_coach_report
 from .quality import measure_face_quality
+from .frigate_api import camera_frame_bytes
 from .enrollment import choose_enrollment_face
 from .face_search import register_face_routes
 from .access1 import register_access1_routes
@@ -1639,7 +1640,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     def camera_frame(camera: str):
         if camera not in _camera_names():
             raise HTTPException(404, "Unknown camera")
-        content = processor.frigate.latest_frame_bytes(camera)
+        content = camera_frame_bytes(processor.frigate, camera, processor.camera_profiles.get(camera))
         if not content:
             raise HTTPException(404, "Frigate did not return a current frame")
         return Response(
@@ -1651,24 +1652,31 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     def analyze_camera_frame(camera: str):
         if camera not in _camera_names():
             raise HTTPException(404, "Unknown camera")
-        content = processor.frigate.latest_frame_bytes(camera)
-        image = cv2.imdecode(np.frombuffer(content or b"", np.uint8), cv2.IMREAD_COLOR)
+        profile = processor.camera_profiles.get(camera)
+        content = camera_frame_bytes(processor.frigate, camera, profile)
+        if not content:
+            raise HTTPException(404, "Frigate did not return a current frame")
+        image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise HTTPException(404, "Frigate did not return a readable frame")
-        profile = processor.camera_profiles.get(camera)
         faces = []
+        hour = time.localtime().tm_hour
+        minimum = profile.get("night_min_face_px" if hour >= 19 or hour < 6 else "min_face_px", processor.min_face_px)
         for face in engine.faces(image):
             quality = measure_face_quality(
-                image, face, min_face_px=profile["min_face_px"],
+                image, face, min_face_px=minimum,
                 min_quality=processor.min_face_quality,
             )
             faces.append({
                 "box": [round(float(value), 1) for value in face.bbox],
                 **quality.to_dict(),
+                "rejection_reason": None if quality.usable else (
+                    "small_face" if quality.face_px < minimum else
+                    "weak_detection" if quality.detection < .55 else "low_quality"),
             })
         return {
             "camera": camera, "width": int(image.shape[1]),
-            "height": int(image.shape[0]), "profile": profile, "faces": faces,
+            "height": int(image.shape[0]), "profile": profile, "faces": faces, "min_face_px": minimum,
         }
 
     @app.get("/api/intercom")

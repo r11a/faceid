@@ -1,6 +1,8 @@
 """Minimaler Frigate-HTTP-Client: Snapshot-Crops holen, sub_label setzen."""
 import logging
 import math
+import re
+import threading
 import warnings
 from urllib3.exceptions import InsecureRequestWarning
 import time
@@ -16,6 +18,15 @@ log = logging.getLogger("faceid.frigate")
 # snapshot request. This does not modify Session.verify or authentication.
 warnings.filterwarnings("default", category=InsecureRequestWarning,
                         module=r"urllib3\.connectionpool")
+
+
+def camera_frame_bytes(frigate, camera, profile, *, timeout=None):
+    """One source choice for native sampling, its preview and its diagnostics."""
+    if profile.get("recognition_mode", "event") != "event" and profile.get("high_resolution"):
+        return frigate.main_stream_frame_bytes(camera)
+    if timeout is None:
+        return frigate.latest_frame_bytes(camera)
+    return frigate.latest_frame_bytes(camera, timeout=timeout)
 
 
 def sighting_recording_path(metadata: dict | None) -> str | None:
@@ -60,6 +71,12 @@ class FrigateAPI:
         self.session = requests.Session()
         self.session.verify = verify_tls
         self._authenticated = False
+        self._stream_config_lock = threading.Lock()
+        self._stream_config_until = 0.0
+        self._main_streams = {}
+        self._main_captures = threading.BoundedSemaphore(2)
+        self._main_pending_lock = threading.Lock()
+        self._main_pending = {}
 
     @property
     def secure_mode(self) -> bool:
@@ -187,6 +204,84 @@ class FrigateAPI:
         except requests.RequestException as exc:
             log.debug("latest frame %s failed: %s", camera, exc)
             return None
+
+    def _main_stream(self, camera):
+        with self._stream_config_lock:
+            if time.monotonic() >= self._stream_config_until:
+                response = None
+                self._main_streams = {}
+                # Cache missing/unsupported config too, avoiding a request storm.
+                self._stream_config_until = time.monotonic() + 60
+                try:
+                    response = self.request("GET", "/api/config", timeout=2)
+                    if response.status_code != 200:
+                        return None
+                    config = response.json()
+                    streams = (config.get("go2rtc") or {}).get("streams") or {}
+                    for name, settings in (config.get("cameras") or {}).items():
+                        configured = (settings.get("live") or {}).get("streams") or {}
+                        choices = list(configured.values()) if isinstance(configured, dict) else []
+                        # Frigate uses the camera-named restream if no live alias is configured.
+                        if not choices:
+                            choices = [name]
+                        stream = next((value for value in choices if isinstance(value, str)
+                                       and value in streams and re.fullmatch(r"[A-Za-z0-9_.-]+", value)
+                                       and value not in (".", "..")), None)
+                        if stream:
+                            self._main_streams[name] = stream
+                except (requests.RequestException, ValueError, TypeError, AttributeError):
+                    return None
+                finally:
+                    if response is not None:
+                        response.close()
+            return self._main_streams.get(camera)
+
+    def main_stream_frame_bytes(self, camera: str) -> bytes | None:
+        """Capture a real main-stream frame through authenticated Frigate.
+
+        latest.jpg is the detect stream (often 320x240); resizing it adds no
+        facial detail. Only configured restream names are sent to Frigate's
+        bounded capture endpoint. Camera credentials never leave Frigate.
+        """
+        with self._main_pending_lock:
+            flight = self._main_pending.get(camera)
+            owner = flight is None
+            if owner:
+                flight = {"ready": threading.Event(), "content": None}
+                self._main_pending[camera] = flight
+        if not owner:
+            # Preview/analysis consume the same fresh frame as an in-flight scan.
+            return flight["content"] if flight["ready"].wait(14) else None
+        try:
+            flight["content"] = self._capture_main_frame(camera)
+            return flight["content"]
+        finally:
+            with self._main_pending_lock:
+                self._main_pending.pop(camera, None)
+                flight["ready"].set()
+
+    def _capture_main_frame(self, camera):
+        # Bounded waiting lets a preview of another camera use the next slot.
+        # Native sampling itself still has at most two jobs, with no frame queue.
+        if not self._main_captures.acquire(timeout=6):
+            return None
+        response = None
+        try:
+            stream = self._main_stream(camera)
+            if not stream:
+                return None
+            response = self.request("GET", "/api/ffprobe/snapshot", params={
+                "url": f"rtsp://127.0.0.1:8554/{stream}", "timeout": 5,
+            }, timeout=6)
+            if response.status_code != 200 or not response.content or len(response.content) > 20_000_000:
+                return None
+            return response.content
+        except requests.RequestException:
+            return None
+        finally:
+            if response is not None:
+                response.close()
+            self._main_captures.release()
 
     def cameras(self) -> list[str]:
         try:
