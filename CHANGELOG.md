@@ -1,5 +1,12 @@
 # Changelog
 
+## 6.6.2 — Persistent camera frames and immediate recognition popups
+
+- Native full-image recognition reuses a persistent Frigate RTSP connection instead of opening a multi-second snapshot for every check. Presence-mode connections stay warm while inference still follows person occupancy.
+- Readers retain only the newest frame, monitor stream timestamps for decoder backlog, reconnect on stalled sources, and use bounded authenticated capture when RTSP is unavailable. Diagnostics show connection state and received-frame age.
+- Each new recognition immediately replaces the current test popup and restarts its five-second timer, without a waiting queue during busy periods. The history includes all recognition alerts when this mode is enabled.
+- Existing event recognition, identity confirmation thresholds and access-control evidence remain unchanged.
+
 ## 6.6.1
 
 - Fix full-resolution native camera recognition: the existing full-image option now captures the configured Frigate main restream for presence/continuous modes instead of the low-resolution detect image. Event/access evidence keeps its original behavior.

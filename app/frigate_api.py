@@ -6,11 +6,12 @@ import threading
 import warnings
 from urllib3.exceptions import InsecureRequestWarning
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import cv2
 import numpy as np
 import requests
+from .live_frames import LiveFramePool
 
 log = logging.getLogger("faceid.frigate")
 
@@ -59,6 +60,8 @@ def sighting_recording_path(metadata: dict | None) -> str | None:
 
 
 class FrigateAPI:
+    supports_live_frames = True
+
     def __init__(
         self, base_url: str, timeout: float = 6.0, *,
         username: str = "", password: str = "", verify_tls: bool = True,
@@ -77,6 +80,7 @@ class FrigateAPI:
         self._main_captures = threading.BoundedSemaphore(2)
         self._main_pending_lock = threading.Lock()
         self._main_pending = {}
+        self.live_frames = LiveFramePool()
 
     @property
     def secure_mode(self) -> bool:
@@ -236,13 +240,32 @@ class FrigateAPI:
                         response.close()
             return self._main_streams.get(camera)
 
-    def main_stream_frame_bytes(self, camera: str) -> bytes | None:
-        """Capture a real main-stream frame through authenticated Frigate.
+    def _live_url(self, camera):
+        stream = self._main_stream(camera)
+        host = urlsplit(self.base).hostname
+        if not stream or not host:
+            return None
+        # Connect only to the configured Frigate host and known restream alias.
+        # HTTP/camera credentials must never be repurposed as RTSP credentials.
+        authority = f"[{host}]" if ":" in host else host
+        return f"rtsp://{authority}:8554/{stream}"
 
-        latest.jpg is the detect stream (often 320x240); resizing it adds no
-        facial detail. Only configured restream names are sent to Frigate's
-        bounded capture endpoint. Camera credentials never leave Frigate.
-        """
+    def sync_live_cameras(self, cameras):
+        sources = {camera: url for camera in cameras if (url := self._live_url(camera))}
+        self.live_frames.sync(sources)
+
+    def main_stream_frame_bytes(self, camera: str) -> bytes | None:
+        """Read the latest full frame; bounded authenticated capture is a fallback."""
+        url = self._live_url(camera)
+        if not url:
+            return None
+        reader = self.live_frames.ensure(camera, url)
+        if reader is not None:
+            content = reader.frame()
+            if content:
+                return content
+            if reader.report()["state"] in ("connecting", "catching_up"):
+                return None
         with self._main_pending_lock:
             flight = self._main_pending.get(camera)
             owner = flight is None

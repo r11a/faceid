@@ -36,6 +36,8 @@ class ContinuousRecognition:
         self.reconciling = False
         self.next_reconcile = 0.0
         self.status = {}
+        self.syncing_streams = False
+        self.next_stream_sync = 0.0
 
     def profiles(self):
         profiles = self.processor.camera_profiles
@@ -116,6 +118,11 @@ class ContinuousRecognition:
         now = time.time() if now is None else now
         profiles = self.profiles()
         with self.lock:
+            if (getattr(self.processor.frigate, "supports_live_frames", False) is True
+                    and not self.syncing_streams and now >= self.next_stream_sync):
+                self.syncing_streams = True
+                self.next_stream_sync = now + 5
+                self.executor.submit(self._sync_live_cameras)
             if any(p.get("recognition_mode") == "presence" for p in profiles.values()):
                 if not self.reconciling and now >= self.next_reconcile and self.online:
                     self.reconciling = True
@@ -137,6 +144,19 @@ class ContinuousRecognition:
                 self.pending.add(camera)
                 self.last_started[camera] = now
                 self.executor.submit(self._run_camera, camera, profile)
+
+    def _sync_live_cameras(self):
+        try:
+            # Keep presence streams warm while empty; inference still requires
+            # a person. Re-read profiles when this bounded job actually runs.
+            cameras = [camera for camera, profile in self.profiles().items()
+                       if self.online and self.processor.camera_enabled(camera)
+                       and profile.get("recognition_mode", "event") != "event"
+                       and profile.get("high_resolution")]
+            self.processor.frigate.sync_live_cameras(cameras)
+        finally:
+            with self.lock:
+                self.syncing_streams = False
 
     def _reconcile_active(self):
         response = None
@@ -343,6 +363,9 @@ class ContinuousRecognition:
             p.audit.save_evidence(eid, crop)
 
     def report(self):
+        streams = (self.processor.frigate.live_frames.report()
+                   if getattr(self.processor.frigate, "supports_live_frames", False) is True else {})
         with self.lock:
             return {"in_flight": len(self.pending), "max_in_flight": 2,
+                    "streams": streams,
                     "cameras": {camera: dict(value) for camera, value in self.status.items()}}
