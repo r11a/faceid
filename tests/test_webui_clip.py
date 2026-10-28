@@ -12,6 +12,10 @@ from starlette.requests import Request
 
 from app.webui import build_app
 from app.camera_profiles import CameraProfiles
+from app.audit import AuditStore
+from app.frigate_api import FrigateAPI
+from app.media_store import EventMediaStore
+from tests.test_media_store import RecordingResponse
 
 
 class FakeAudit:
@@ -42,6 +46,90 @@ class FakeGallery:
 
 
 class WebUIClipTests(unittest.TestCase):
+    def test_native_sighting_stream_probe_prepare_and_range_keep_local_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            event_id = "faceid-3de2a62c-27be-447e-9044-4b6bc63fe06a"
+            audit.start_event(event_id, "front", 100.)
+            audit.finalize(event_id, "recognized", end_ts=300., person="Alice", recognition_ts=220.)
+            api = FrigateAPI("http://frigate.invalid")
+            calls = []
+            def request(method, path, **kwargs):
+                calls.append((path, kwargs))
+                self.assertEqual(path, "/api/front/start/218.000/end/278.000/clip.mp4")
+                return RecordingResponse()
+            api.request = request
+            store = EventMediaStore(Path(tmp), api, metadata_resolver=audit.event_metadata)
+            processor = SimpleNamespace(audit=audit, media_store=store, frigate=api)
+            app = build_app({"faceid": {}}, SimpleNamespace(), FakeGallery(), processor, Path(tmp), Path(__file__).parents[1] / "static")
+            client = TestClient(app)
+            url = f"/api/activity/{event_id}/clip"
+            streamed = client.get(url, headers={"Range": "bytes=0-", "If-Range": '"recording"'})
+            self.assertEqual(streamed.status_code, 200)
+            self.assertEqual(streamed.content, RecordingResponse.content)
+            self.assertEqual(calls[0][1]["headers"]["If-Range"], '"recording"')
+            self.assertIsNone(store.cached_clip_path(event_id))
+            probe = client.get(url + "/status?probe=true").json()
+            self.assertTrue(probe["ready"])
+            self.assertFalse(probe["seekable"])
+            self.assertEqual(calls[-1][1]["headers"]["Range"], "bytes=0-0")
+            ranged = client.get(url + "?seekable=true", headers={"Range": "bytes=4-7"})
+            self.assertEqual(ranged.status_code, 206)
+            self.assertEqual(ranged.content, b"ftyp")
+            self.assertTrue(client.get(url + "/status?prepare=true").json()["ready"])
+            self.assertEqual(len(calls), 3)
+
+    def test_native_sighting_image_uses_evidence_without_synthetic_snapshot_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / "audit.db")
+            event_id = "faceid-image"
+            audit.start_event(event_id, "front", 100.)
+            api = FrigateAPI("http://frigate.invalid")
+            api.request = lambda *a, **k: self.fail("Native sightings have no Frigate event snapshot")
+            processor = SimpleNamespace(audit=audit, media_store=None, frigate=api)
+            app = build_app({"faceid": {}}, SimpleNamespace(), FakeGallery(), processor, Path(tmp), Path(__file__).parents[1] / "static")
+            client = TestClient(app)
+            self.assertEqual(client.get(f"/api/activity/{event_id}/image").status_code, 404)
+            saved = audit.save_evidence(event_id, np.full((20, 20, 3), 128, dtype=np.uint8))
+            response = client.get(f"/api/activity/{event_id}/image")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, saved.read_bytes())
+            self.assertEqual(response.headers['cache-control'], 'private, no-cache')
+
+    def test_camera_profile_api_persists_recognition_settings_and_rejects_invalid_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = CameraProfiles(Path(tmp) / "camera_profiles.json")
+            processor = SimpleNamespace(audit=None, media_store=None,
+                                        frigate=SimpleNamespace(cameras=lambda: ["door"], timeout=1),
+                                        camera_profiles=profiles, cameras=set(), min_face_px=48)
+            app = build_app({"faceid": {"auth": {}}}, SimpleNamespace(), FakeGallery(),
+                            processor, Path(tmp), Path(__file__).parents[1] / "static")
+            client = TestClient(app)
+            payload = {"min_face_px": 80, "role": "entry", "enabled": False,
+                       "recognition_mode": "continuous", "recognition_interval_seconds": .75,
+                       "recognition_rearm_seconds": 3, "liveness_mode": "required",
+                       "require_second_factor": True}
+            response = client.post("/api/cameras/door/profile", json=payload)
+            self.assertEqual(response.status_code, 200)
+            profile = response.json()["profile"]
+            self.assertEqual(profile.get("recognition_mode"), "continuous")
+            self.assertEqual(profile.get("recognition_interval_seconds"), .75)
+            self.assertEqual(profile.get("recognition_rearm_seconds"), 3)
+            for key in ("recognition_mode", "recognition_interval_seconds", "recognition_rearm_seconds", "enabled"):
+                payload.pop(key)
+            updated = client.post("/api/cameras/door/profile", json=payload).json()["profile"]
+            self.assertEqual(updated["recognition_mode"], "continuous")
+            self.assertEqual(updated["recognition_interval_seconds"], .75)
+            self.assertEqual(updated["recognition_rearm_seconds"], 3)
+            self.assertFalse(updated["enabled"])
+            self.assertEqual(updated["liveness_mode"], "required")
+            self.assertTrue(updated["require_second_factor"])
+            for bad in ({"recognition_mode": "invalid"}, {"recognition_interval_seconds": .1},
+                        {"recognition_rearm_seconds": 31}):
+                with self.subTest(bad=bad):
+                    response = client.post("/api/cameras/door/profile", json={**payload, **bad})
+                    self.assertEqual(response.status_code, 400)
+
     def test_explicit_seekable_playback_uses_shared_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "clip.mp4"
@@ -352,11 +440,11 @@ class WebUIClipTests(unittest.TestCase):
             self.assertIn("no-store", index.headers["cache-control"])
             self.assertNotIn("etag", index.headers)
             self.assertNotIn("last-modified", index.headers)
-            self.assertEqual(index.headers["x-faceid-ui-version"], "6.5.8")
+            self.assertEqual(index.headers["x-faceid-ui-version"], "6.6.0")
             versioned = TestClient(app).get("/ui-previous-release")
             self.assertEqual(versioned.status_code, 200)
             self.assertEqual(versioned.content, index.content)
-            ui_asset = TestClient(app).get("/assets/faceid-6.5.8.js")
+            ui_asset = TestClient(app).get("/assets/faceid-6.6.0.js")
             self.assertEqual(ui_asset.status_code, 200)
             self.assertIn("immutable", ui_asset.headers["cache-control"])
             self.assertEqual(ui_asset.headers["x-content-type-options"], "nosniff")

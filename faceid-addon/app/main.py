@@ -138,6 +138,7 @@ def main():
         data_dir / "audit.db",
         retention_days=int(cfg["faceid"].get("audit_retention_days", 90)),
     )
+    media_store.metadata_resolver = audit.event_metadata
     audit.prune_evidence(
         int(cfg["faceid"].get("known_evidence_days", 30)),
         int(cfg["faceid"].get("unknown_evidence_days", 14)),

@@ -66,6 +66,15 @@ export function useResource(path, { poll = 0, enabled = true, realtime = false }
 }
 
 
+export function eventImageUrl(event) {
+  const src = event.image || (event.event_id ? `api/activity/${encodeURIComponent(event.event_id)}/image` : "");
+  if (!src || !event.event_id?.startsWith("faceid-") || !Number.isFinite(event.updated_ts) || /^(data|blob):/i.test(src)) return src;
+  const hashIndex = src.indexOf("#");
+  const path = hashIndex < 0 ? src : src.slice(0, hashIndex);
+  const fragment = hashIndex < 0 ? "" : src.slice(hashIndex);
+  return `${path}${path.includes("?") ? "&" : "?"}faceid_version=${event.updated_ts}${fragment}`;
+}
+
 // A confirmed event can arrive just before its image is persisted. Retry only
 // transient image loading, without changing identity or refreshing whole pages.
 export function useImageRetry(src) {

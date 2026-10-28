@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { DashboardPage } from "./pages/Home.jsx";
 import { useResource } from "./hooks.js";
 vi.mock("./api.js", () => ({ api: vi.fn(), assetUrl: path => path, query: values => new URLSearchParams(Object.entries(values).filter(([,v]) => v !== "" && v != null)).toString() }));
-vi.mock("./hooks.js", () => ({ useResource: vi.fn(), useImageRetry: src => ({ url: src }) }));
+vi.mock("./hooks.js", async original => ({ ...await original(), useResource: vi.fn(), useImageRetry: src => ({ url: src }) }));
 vi.mock("./pages/Daily.jsx", () => ({ PersonEditor: () => null }));
 vi.mock("./pages/Faces.jsx", () => ({ FaceExplorer: ({source, initialView}) => <div data-source={JSON.stringify(source)} data-view={initialView} /> }));
 vi.mock("./EventVideo.jsx", () => ({ EventVideo: () => null }));
@@ -16,6 +16,15 @@ async function open() {
  useResource.mockReturnValue({data:{people:[{slug:"alice",name:"Alice",last_seen:1700000000,last_camera:"Door"}], recent:[{event_id:"e1",sample_id:"s1",person:"Alice",status:"recognized",camera:"Door",start_ts:1700000000}],cameras:["Door"],recent_total:1},reload:vi.fn()});
  await act(async () => {renderer=create(<DashboardPage navigate={vi.fn()} />);});
 }
+it("refreshes native event thumbnails when better evidence updates their revision", async () => {
+ const event = {event_id:"faceid-door-1",updated_ts:100,status:"recognized",camera:"Door"};
+ useResource.mockReturnValue({data:{people:[],recent:[event],cameras:["Door"]},reload:vi.fn()});
+ await act(() => {renderer=create(<DashboardPage navigate={vi.fn()} />);});
+ expect(renderer.root.findByType("img").props.src).toBe("api/activity/faceid-door-1/image?faceid_version=100");
+ event.updated_ts=101;
+ await act(() => renderer.update(<DashboardPage navigate={vi.fn()} />));
+ expect(renderer.root.findByType("img").props.src).toBe("api/activity/faceid-door-1/image?faceid_version=101");
+});
 it("keeps filters collapsed and sends combined filters to the server", async () => {
  await open();
  expect(renderer.root.findAllByProps({id:"home-event-filters"})).toHaveLength(0);

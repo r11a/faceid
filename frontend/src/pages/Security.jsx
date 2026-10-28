@@ -17,6 +17,11 @@ const roleLabels = {
   intercom: "אינטרקום",
 };
 const modeLabels = { standard: "רגילה", intercom: "אינטרקום מאובטח" };
+const recognitionModes = {
+  event: { label: "לפי אירוע", description: "זיהוי פנים בעקבות אירוע אדם מ־Frigate." },
+  presence: { label: "כל עוד Frigate רואה אדם", description: "בדיקות פנים חוזרות בזמן ש־Frigate מדווח על אדם במצלמה." },
+  continuous: { label: "תמיד", description: "בדיקות פנים לאורך כל הזמן, גם ללא אירוע מ־Frigate. צורך יותר משאבי עיבוד." },
+};
 
 function LiveFrame({ camera, refreshKey = 0, analyze }) {
   const [failed, setFailed] = useState(false);
@@ -58,16 +63,27 @@ export function CamerasPage() {
 function CameraSettings({ camera, onSaved, onToggle }) {
   const [form, setForm] = useState({ ...camera });
   const toast = useToast();
+  const recognitionMode = form.recognition_mode || "event";
   useEffect(() => setForm({ ...camera }), [camera]);
   const save = async () => {
-    try { await api(`cameras/${encodeURIComponent(camera.camera)}/profile`, { method: "POST", body: JSON.stringify({ ...form, min_face_px: Number(form.min_face_px), night_min_face_px: Number(form.night_min_face_px || form.min_face_px), burst_frames: Number(form.burst_frames || 3) }) }); toast("הגדרות המצלמה נשמרו"); onSaved(); }
+    try { await api(`cameras/${encodeURIComponent(camera.camera)}/profile`, { method: "POST", body: JSON.stringify({ ...form, min_face_px: Number(form.min_face_px), night_min_face_px: Number(form.night_min_face_px || form.min_face_px), burst_frames: Number(form.burst_frames || 3), recognition_mode: recognitionMode, recognition_interval_seconds: Number(form.recognition_interval_seconds ?? .5), recognition_rearm_seconds: Number(form.recognition_rearm_seconds ?? 2) }) }); toast("הגדרות המצלמה נשמרו"); onSaved(); }
     catch (error) { toast(error.message, "error"); }
   };
   return <div className="camera-settings">
     <div className="setting-row important camera-settings-header">
-      <div><b>זיהוי במצלמה</b><span>כיבוי מפסיק את עיבוד אירועי המצלמה ב־FaceID</span></div>
+      <div><b>זיהוי במצלמה</b><span>כיבוי מפסיק את הזיהוי האוטומטי במצלמה ב־FaceID</span></div>
       <button type="button" role="switch" aria-checked={Boolean(camera.enabled)} aria-label={`זיהוי במצלמה ${camera.camera}`} className={`switch ${camera.enabled ? "on" : ""}`} onClick={() => onToggle(camera.camera, !camera.enabled)}><i /></button>
     </div>
+    <label>מתי לזהות פנים<select aria-label="מתי לזהות פנים" value={recognitionMode} onChange={e => setForm({ ...form, recognition_mode: e.target.value })}>{Object.entries(recognitionModes).map(([value, item]) => <option value={value} key={value}>{item.label}</option>)}</select></label>
+    <p>{recognitionModes[recognitionMode]?.description}</p>
+    {recognitionMode !== "event" && <>
+      <p>הזיהוי החוזר מיועד לניטור ולהתראות על הופעות חדשות. פתיחת דלת ממשיכה לדרוש את אימות הגישה המאובטח הקיים.</p>
+      <div className="settings-columns">
+        <label>מרווח בין בדיקות (שניות)<input aria-label="מרווח בין בדיקות (שניות)" type="number" min="0.25" max="5" step="0.25" value={form.recognition_interval_seconds ?? .5} onChange={e => setForm({ ...form, recognition_interval_seconds: e.target.value })} /></label>
+        <label>היעדרות פנים לפני הופעה חדשה (שניות)<input aria-label="היעדרות פנים לפני הופעה חדשה (שניות)" type="number" min="1" max="30" step="0.5" value={form.recognition_rearm_seconds ?? 2} onChange={e => setForm({ ...form, recognition_rearm_seconds: e.target.value })} /></label>
+      </div>
+      <p>פנים שחוזרות לאחר הזמן שנקבע ייחשבו להופעה חדשה, גם אם הוסתרו לזמן קצר.</p>
+    </>}
     <div className="settings-columns">
       <label>תפקיד המצלמה<select value={form.role || "observation"} onChange={(e) => setForm({ ...form, role: e.target.value })}>{Object.entries(roleLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       <label>מצב עבודה<select value={form.mode || "standard"} onChange={(e) => setForm({ ...form, mode: e.target.value })}>{Object.entries(modeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
@@ -75,7 +91,7 @@ function CameraSettings({ camera, onSaved, onToggle }) {
       <label>הגנת חיוּת<select value={form.liveness_mode || "off"} onChange={(e) => setForm({ ...form, liveness_mode: e.target.value })}><option value="off">כבויה</option><option value="advisory">מסייעת בלבד</option><option value="required">חובה — חסימה ללא אישור</option></select></label>
     </div>
     <div className="camera-options" role="group" aria-label="אפשרויות זיהוי">
-      <label className="face-check"><input type="checkbox" checked={Boolean(form.fast_recognition)} onChange={e => setForm({ ...form, fast_recognition: e.target.checked })} /><span><b>זיהוי מהיר</b><small>פחות המתנה, אותם ספי אישור</small></span></label>
+      {recognitionMode === "event" && <label className="face-check"><input type="checkbox" checked={Boolean(form.fast_recognition)} onChange={e => setForm({ ...form, fast_recognition: e.target.checked })} /><span><b>זיהוי מהיר</b><small>פחות המתנה, אותם ספי אישור</small></span></label>}
       <label className="face-check"><input type="checkbox" checked={Boolean(form.high_resolution)} onChange={e => setForm({ ...form, high_resolution: e.target.checked })} /><span><b>תמונות מלאות</b><small>מ־Frigate, נדרש לראיות גישה חיות</small></span></label>
       <label className="face-check"><input type="checkbox" checked={Boolean(form.critical)} onChange={e => setForm({ ...form, critical: e.target.checked })} /><span><b>מצלמה קריטית</b><small>התראה בכל אירוע עם זיהוי פנים</small></span></label>
     </div>

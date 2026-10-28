@@ -2,6 +2,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,67 @@ from app.audit import AuditStore
 
 
 class AuditStoreTests(unittest.TestCase):
+    def test_native_evidence_replacement_updates_browser_revision(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = AuditStore(Path(tmp) / 'audit.db')
+            audit.start_event('faceid-photo', 'door', 100.)
+            with patch('app.audit.time.time', return_value=200.):
+                audit.save_evidence('faceid-photo', np.zeros((40, 40, 3), dtype=np.uint8))
+            first = audit.event_detail('faceid-photo')['event']['updated_ts']
+            with patch('app.audit.time.time', return_value=201.):
+                audit.save_evidence('faceid-photo', np.full((40, 40, 3), 100, dtype=np.uint8))
+            second = audit.event_detail('faceid-photo')['event']['updated_ts']
+            self.assertEqual((first, second), (200., 201.))
+
+    def test_first_recognition_time_survives_later_finalization_and_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audit.db"
+            audit = AuditStore(path)
+            audit.start_event("faceid-late", "door", 100.)
+            audit.finalize("faceid-late", "unknown")
+            audit.finalize("faceid-late", "recognized", person="Alice", recognition_ts=220.)
+            audit.finalize("faceid-late", "recognized", person="Alice", recognition_ts=250.)
+            audit.finalize("faceid-late", "recognized", end_ts=300., person="Alice")
+            reopened = AuditStore(path)
+            metadata = reopened.event_metadata("faceid-late")
+            self.assertEqual(metadata["recognition_ts"], 220.)
+            self.assertEqual(metadata["end_ts"], 300.)
+            self.assertEqual(metadata["start_ts"], 100.)
+
+    def test_recognition_time_migrates_existing_events_without_erasing_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audit.db"
+            audit = AuditStore(path)
+            audit.start_event("legacy", "door", 100.)
+            with closing(sqlite3.connect(path)) as con:
+                columns = {row[1] for row in con.execute("PRAGMA table_info(events)")}
+                if "recognition_ts" in columns:
+                    con.execute("ALTER TABLE events DROP COLUMN recognition_ts")
+                con.commit()
+            migrated = AuditStore(path)
+            metadata = migrated.event_metadata("legacy")
+            self.assertEqual(metadata["start_ts"], 100.)
+            self.assertIn("recognition_ts", metadata)
+            self.assertIsNone(metadata["recognition_ts"])
+
+    def test_media_metadata_reads_event_without_loading_observations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audit.db"
+            audit = AuditStore(path)
+            audit.start_event("faceid-local", "door", 100.)
+            audit.finalize("faceid-local", "recognized", end_ts=120., person="Alice")
+            # An unavailable history table must not prevent serving media ranges.
+            with closing(sqlite3.connect(path)) as con:
+                con.execute("ALTER TABLE observations RENAME TO unavailable_observations")
+                con.commit()
+            metadata = audit.event_metadata("faceid-local")
+            self.assertEqual(metadata["camera"], "door")
+            self.assertEqual(metadata["start_ts"], 100.)
+            self.assertEqual(metadata["end_ts"], 120.)
+            self.assertEqual(metadata["status"], "recognized")
+            self.assertIsNone(audit.event_metadata("missing"))
+
     def test_liveness_evidence_is_persisted_and_searchable(self):
         with tempfile.TemporaryDirectory() as tmp:
             audit = AuditStore(Path(tmp) / "audit.db")

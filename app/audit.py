@@ -46,6 +46,9 @@ class AuditStore:
             temporary = target.with_suffix(".tmp")
             temporary.write_bytes(encoded.tobytes())
             temporary.replace(target)
+            if event_id.startswith("faceid-"):
+                with self._lock, self._connection() as con:
+                    con.execute("UPDATE events SET updated_ts=? WHERE event_id=?", (time.time(), event_id))
             self._evidence_since_prune += 1
             if self._evidence_since_prune >= 25:
                 self._evidence_since_prune = 0
@@ -163,6 +166,7 @@ class AuditStore:
                 ("liveness_status", "TEXT"),
                 ("liveness_score", "REAL"),
                 ("occurrence", "TEXT"),
+                ("recognition_ts", "REAL"),
             ):
                 self._ensure_column(con, "events", column, declaration)
 
@@ -265,12 +269,14 @@ class AuditStore:
         margin: float = 0.0,
         confirmations: int = 0,
         occurrence: str | None = None,
+        recognition_ts: float | None = None,
     ):
         with self._lock, self._connection() as con:
             con.execute(
                 """
                 UPDATE events SET end_ts=?, status=?, person=?, score=?, margin=?,
-                    confirmations=?, occurrence=?, updated_ts=?
+                    confirmations=?, occurrence=?, updated_ts=?,
+                    recognition_ts=COALESCE(recognition_ts, ?)
                 WHERE event_id=?
                 """,
                 (
@@ -282,6 +288,7 @@ class AuditStore:
                     confirmations,
                     occurrence,
                     time.time(),
+                    recognition_ts,
                     event_id,
                 ),
             )
@@ -468,12 +475,32 @@ class AuditStore:
             out.append(row)
         return out
 
+    def trim_observations(self, event_id: str, *, keep: int = 64):
+        """Bound diagnostic detail for a face sighting that can remain open all day."""
+        with self._lock, self._connection() as con:
+            con.execute(
+                "DELETE FROM observations WHERE event_id=? AND id NOT IN "
+                "(SELECT id FROM observations WHERE event_id=? ORDER BY id DESC LIMIT ?)",
+                (event_id, event_id, max(1, int(keep))),
+            )
+
     def event_exists(self, event_id: str) -> bool:
         """Check image access without loading the event's observation history."""
         with self._connection() as con:
             return con.execute(
                 "SELECT 1 FROM events WHERE event_id=?", (event_id,)
             ).fetchone() is not None
+
+    def event_metadata(self, event_id: str) -> dict | None:
+        """Read media timing and state without loading the observation history."""
+        with self._connection() as con:
+            con.row_factory = sqlite3.Row
+            event = con.execute(
+                "SELECT event_id, camera, start_ts, end_ts, status, recognition_ts "
+                "FROM events WHERE event_id=?",
+                (event_id,),
+            ).fetchone()
+            return dict(event) if event is not None else None
 
     def event_detail(self, event_id: str):
         with self._lock, self._connection() as con:

@@ -26,6 +26,7 @@ from .decision import DecisionAccumulator, DecisionPolicy
 from .quality import measure_face_quality
 from .clip_analyzer import ClipAnalyzer
 from .presence import RecognitionSessionTracker
+from .continuous_recognition import ContinuousRecognition
 from .media_errors import ClipNotReady
 
 log = logging.getLogger("faceid.mqtt")
@@ -101,6 +102,7 @@ class EventProcessor:
         self._last_presence: dict[str, list] = {}  # zuletzt publizierter Stand je Kamera
         self._person_presence_state: dict[str, bool] = {}
         self._update_policy()
+        self.continuous = ContinuousRecognition(self)
         self.clip_analyzer = ClipAnalyzer(
             engine, frigate,
             max_frames=int(f.get("clip_max_frames", 24)),
@@ -304,6 +306,9 @@ class EventProcessor:
             return
         log.info("MQTT connected (%s), subscribing to %s/events", reason_code, self.frigate_topic)
         client.subscribe(f"{self.frigate_topic}/events")
+        client.subscribe(f"{self.frigate_topic}/+/person")
+        client.subscribe(f"{self.frigate_topic}/available")
+        self.continuous.reconnect()
         client.subscribe(f"{self.prefix}/v1/review/set")
         client.publish(f"{self.prefix}/status", "online", retain=True)
         self._publish_discovery()
@@ -313,6 +318,8 @@ class EventProcessor:
 
     def _on_message(self, client, userdata, msg):
         received_monotonic = time.perf_counter()
+        if self.continuous.mqtt(msg.topic, msg.payload):
+            return
         try:
             payload = json.loads(msg.payload)
         except json.JSONDecodeError:
@@ -338,6 +345,7 @@ class EventProcessor:
             return
         after = payload.get("after") or {}
         etype = payload.get("type")
+        self.continuous.observe_event(after, etype)
         if after.get("label") != "person":
             return
         cam = after.get("camera", "")
@@ -345,6 +353,10 @@ class EventProcessor:
             return
         eid = after.get("id")
         if not eid:
+            return
+        profile = self.camera_profiles.get(cam) if self.camera_profiles else {}
+        continuous_mode = profile.get("recognition_mode", "event") != "event"
+        if continuous_mode and not self._live_access_camera({"camera": cam}):
             return
         if eid not in self.events and self.audit and self.audit.was_finalized(eid):
             return
@@ -358,6 +370,7 @@ class EventProcessor:
                 mqtt_received_monotonic=received_monotonic,
             )
             self.events[eid] = st
+        st["access_only"] = continuous_mode
         if cam != st["camera"]:
             return
         if etype in ("new", "update"):
@@ -394,6 +407,7 @@ class EventProcessor:
             time.sleep(.25)
             try:
                 self._schedule_live_jobs()
+                self.continuous.tick()
             except Exception:
                 log.exception("Live frame scheduling failed; access checks remain required")
 
@@ -441,7 +455,8 @@ class EventProcessor:
         report = {name: {"samples": len(values), "p50_ms": round(values[len(values)//2], 2),
                          "p95_ms": round(values[min(len(values)-1, int(len(values)*.95))], 2)}
                   for name, values in samples.items()}
-        return {**report, "live_queue": self.queue.qsize(), "clip_queue": self.clip_queue.qsize()}
+        return {**report, "live_queue": self.queue.qsize(), "clip_queue": self.clip_queue.qsize(),
+                "camera_sampling": self.continuous.report()}
 
     def _worker(self, kind="snapshot"):
         work_queue = self.clip_queue if kind == "clip" else self.queue
@@ -592,6 +607,11 @@ class EventProcessor:
             self.camera_profiles.get(st["camera"])
             if self.camera_profiles is not None else None
         )
+        if camera_profile and camera_profile.get("recognition_mode", "event") != "event":
+            if not self._live_access_camera(st):
+                st.update(done=True, clip_analyzed=True)
+                return
+            st["access_only"] = True
         img = None
         fetch_started = time.perf_counter()
         source = "snapshot"
@@ -749,6 +769,9 @@ class EventProcessor:
     def _process_face(self, eid: str, st: dict, img, face, quality=None, source="snapshot"):
         if st["done"]:
             return
+        guard = st.get("recognition_guard")
+        if guard is not None and not guard():
+            return
         pending_live_identity = False
         liveness_service = getattr(self, "liveness", None)
         profile = self.camera_profiles.get(st["camera"]) if self.camera_profiles else {}
@@ -817,6 +840,8 @@ class EventProcessor:
             candidates[1] if len(candidates) > 1 else (None, None, 0.0)
         )
         ig, _, ignore_group = self.gallery.match_ignored_detail(emb)
+        if guard is not None and not guard():
+            return
         observation_key = hashlib.sha256(emb.astype("float32").tobytes()).hexdigest()
         decision = st["decision"].add(
             key=observation_key,
@@ -888,6 +913,8 @@ class EventProcessor:
             occurrence = self.recognition_sessions.classify(
                 decision.person, st["camera"], st.get("start_time")
             )
+            if st.get("continuous_sighting") and occurrence == "presence_update":
+                occurrence = "arrival"
             st["recognition_occurrence"] = occurrence
             actionable = occurrence != "presence_update"
             st["best_score"], st["best_person"] = decision.score, decision.person
@@ -902,7 +929,7 @@ class EventProcessor:
             self._publish_notification(eid, st, decision.status, decision.person, decision.score,
                 margin=decision.margin, confirmations=decision.confirmations)
             access1 = getattr(self, "access1", None)
-            if access1 is not None:
+            if access1 is not None and not st.get("continuous_sighting"):
                 access1.enqueue({
                     "event_id": eid, "slug": decision.slug, "camera": st["camera"],
                     "score": decision.score, "occurred_at": st.get("start_time"),
@@ -944,6 +971,7 @@ class EventProcessor:
                     person=decision.person, score=decision.score,
                     margin=decision.margin, confirmations=decision.confirmations,
                     occurrence=occurrence,
+                    **({"recognition_ts": time.time()} if st.get("continuous_sighting") else {}),
                 )
             return
 
@@ -997,6 +1025,8 @@ class EventProcessor:
                     continue
                 cam = ev.get("camera", "")
                 if not self.camera_enabled(cam):
+                    continue
+                if self.camera_profiles and self.camera_profiles.get(cam).get("recognition_mode", "event") != "event":
                     continue
                 self._polled.append(eid)
                 self._ensure_discovery(cam)
@@ -1068,7 +1098,7 @@ class EventProcessor:
                         if observation.get("person") == u.get("guess")
                     )
                     crop, emb, full = u["crop"], u["emb"], u.get("full")
-                    if self.hires_enroll:
+                    if self.hires_enroll and not st.get("continuous_sighting"):
                         # schärferes Gesicht aus der Aufnahme holen (bessere Referenz)
                         try:
                             hi = upgrade_face(self.engine, self.frigate, st["camera"],
@@ -1169,12 +1199,17 @@ class EventProcessor:
         score: float, *, margin: float = 0.0, confirmations: int = 0,
     ):
         """Publish one enriched final event after all frame/clip evidence is known."""
+        if st.get("access_only"):
+            return
+        guard = st.get("configuration_guard")
+        if guard is not None and not guard():
+            return
         if st.get("post_processed"):
             return
         st["post_processed"] = True
         self._publish_notification(eid, st, status, person, score, margin=margin, confirmations=confirmations)
         self._flush_face_samples(eid, st)
-        if self.set_sub_label and status == "recognized" and person:
+        if self.set_sub_label and status == "recognized" and person and not st.get("continuous_sighting"):
             try:
                 self.frigate.set_sub_label(eid, person, score)
             except Exception:
@@ -1286,7 +1321,11 @@ class EventProcessor:
                     log.exception("Could not index face for event %s", eid)
 
     def _publish_notification(self, eid, st, status, person, score, *, margin=0.0, confirmations=0):
-        if st.get("notification_complete") or st.get("recognition_occurrence") == "presence_update":
+        guard = st.get("recognition_guard")
+        if guard is not None and not guard():
+            st["notification_complete"] = True
+            return
+        if st.get("access_only") or st.get("notification_complete") or st.get("recognition_occurrence") == "presence_update":
             return
         now = time.perf_counter()
         payload = st.get("notification_payload")
@@ -1339,6 +1378,11 @@ class EventProcessor:
         self, eid: str, st: dict, name: str, score: float,
         decision=None, decision_status: str | None = None,
     ):
+        if st.get("access_only"):
+            return
+        guard = st.get("recognition_guard")
+        if guard is not None and not guard():
+            return
         payload = {
             "person": name, "score": round(float(score), 3), "camera": st["camera"],
             "event_id": eid, "ts": time.time(),

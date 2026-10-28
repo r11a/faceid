@@ -873,7 +873,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         if not known:
             raise HTTPException(404, "Unknown event")
         cached = processor.audit.evidence_path(event_id)
-        if not cached.is_file():
+        if not cached.is_file() and not event_id.startswith("faceid-"):
             image = processor.frigate.snapshot(event_id, crop=True)
             cached = processor.audit.save_evidence(event_id, image)
         if cached is None or not cached.is_file():
@@ -882,18 +882,28 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             )
         return FileResponse(
             cached, media_type="image/jpeg",
-            headers={"Cache-Control": "private, max-age=86400"},
+            headers={"Cache-Control": "private, no-cache" if event_id.startswith("faceid-") else "private, max-age=86400"},
         )
 
     def frigate_clip_response(event_id, headers):
         from urllib.parse import quote
+        from .frigate_api import sighting_recording_path
+        native = event_id.startswith("faceid-")
+        path = f"/api/events/{quote(event_id, safe='')}/clip.mp4"
+        if native:
+            resolver = getattr(processor.audit, "event_metadata", None)
+            metadata = (resolver(event_id) if callable(resolver) else
+                        (processor.audit.event_detail(event_id) or {}).get("event"))
+            path = sighting_recording_path(metadata)
+            if path is None:
+                raise HTTPException(404, "No recording window is available for this sighting")
         try:
             upstream = processor.frigate.request(
-                "GET", f"/api/events/{quote(event_id, safe='')}/clip.mp4",
+                "GET", path,
                 headers=headers, stream=True,
                 timeout=(processor.frigate.timeout, processor.frigate.timeout * 8),
             )
-            if upstream.status_code == 404 and hasattr(processor.frigate, "event"):
+            if not native and upstream.status_code == 404 and hasattr(processor.frigate, "event"):
                 upstream.close()
                 metadata = processor.frigate.event(event_id)
                 # Preserve the recording fallback for this exact finished event.
@@ -1409,6 +1419,9 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         burst_frames: int = 8
         high_resolution: bool = False
         fast_recognition: bool | None = None
+        recognition_mode: str | None = None
+        recognition_interval_seconds: float | None = None
+        recognition_rearm_seconds: float | None = None
         critical: bool | None = None
         require_second_factor: bool = True
         liveness_mode: str | None = None
@@ -1591,6 +1604,9 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 burst_frames=body.burst_frames,
                 high_resolution=body.high_resolution,
                 fast_recognition=body.fast_recognition,
+                recognition_mode=body.recognition_mode,
+                recognition_interval_seconds=body.recognition_interval_seconds,
+                recognition_rearm_seconds=body.recognition_rearm_seconds,
                 critical=body.critical,
                 require_second_factor=body.require_second_factor,
                 liveness_mode=body.liveness_mode,
