@@ -1,5 +1,12 @@
 # Changelog
 
+## 6.5.8 — 2026-10-28
+
+- Notification-only fast recognition samples bounded current camera frames instead of repeatedly recognizing Frigate's unchanged best event snapshot. Identity thresholds, consensus and verified Access1 capture rules remain enforced.
+- Select review evidence using measured image quality and sharpness; save the best qualifying crop for the confirmed identity before publishing notifications, including presence updates.
+- Add an optional five-second popup for each confirmed encounter in the open FaceID interface, showing the event face and camera with a bounded queue. Enable it from the notification bell. Existing critical/watchlist notifications retain their policy.
+- Show notification delivery age separately from capture-to-recognition latency; popup timing is not a camera latency measurement. HOMEii Beyond is a separate frontend and does not automatically inherit this popup setting.
+
 ## 6.5.7 — 2026-10-27
 
 - Recover transient recording and network failures before advancing an event playlist; leave codec and permission errors visible instead of skipping every clip.

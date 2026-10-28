@@ -145,11 +145,12 @@ class FrigateAPI:
                  event_id, reason, time.monotonic() - started)
         return None
 
-    def latest_frame_bytes(self, camera: str) -> bytes | None:
+    def latest_frame_bytes(self, camera: str, *, timeout: float | None = None) -> bytes | None:
         """Fetch Frigate's current camera frame without exposing its credentials."""
         try:
             encoded = quote(str(camera), safe="")
-            r = self.request("GET", f"/api/{encoded}/latest.jpg", timeout=self.timeout * 2)
+            r = self.request("GET", f"/api/{encoded}/latest.jpg",
+                             timeout=self.timeout * 2 if timeout is None else timeout)
             if r.status_code != 200 or not r.content or len(r.content) > 20_000_000:
                 return None
             return r.content
