@@ -55,6 +55,43 @@ class AlertTests(unittest.TestCase):
         self.alerts.record(event_id='new', camera='door', status='recognized', person='Alice')
         self.assertEqual([a['event_id'] for a in self.alerts.list(after=baseline['cursor'])['alerts']], ['new'])
 
+    def test_every_recognition_is_opt_in_without_changing_policy_mqtt(self):
+        old = self.alerts.record(event_id='old-normal', camera='door', status='recognized', person='Alice', ts=1)
+        self.assertEqual(self.alerts.list(after=0)['alerts'], [])
+        self.assertEqual(self.processor.client.publish.call_count, 0)
+        baseline = self.alerts.list(include_recognitions=True)
+        self.assertEqual(baseline['alerts'], [])
+        current = self.alerts.record(event_id='normal', camera='door', status='recognized', person='Alice')
+        result = self.alerts.list(after=baseline['cursor'], include_recognitions=True)['alerts']
+        self.assertEqual([a['event_id'] for a in result], ['normal'])
+        self.assertEqual(result[0]['image_url'], 'api/activity/normal/image')
+        self.assertGreater(old['notified_ts'], old['ts'])
+        self.assertGreater(current['id'], old['id'])
+        self.assertIsNone(self.alerts.record(event_id='normal', camera='door', status='recognized', person='Alice'))
+        self.assertIsNone(self.alerts.record(event_id='guess', camera='door', status='ambiguous', person='Alice'))
+
+    def test_normal_recognition_never_changes_or_resurrects_policy_sensor(self):
+        import json
+        self.gallery.set_alert_policy(self.slug, notify_on_recognition=True)
+        policy = self.alerts.record(event_id='policy', camera='door', status='recognized', person='Alice')
+        self.gallery.set_alert_policy(self.slug, notify_on_recognition=False)
+        self.alerts.record(event_id='normal', camera='door', status='recognized', person='Alice')
+        self.alerts.publish_latest(self.processor.client)
+        self.assertEqual(json.loads(self.processor.client.publish.call_args.args[1])['id'], policy['id'])
+        with self.audit._lock, self.audit._connection() as con:
+            con.execute("DELETE FROM recognition_alerts WHERE event_id='policy'")
+        restored = AlertStore(self.audit, self.gallery, self.processor)
+        restored.publish_latest(self.processor.client)
+        self.assertIsNone(json.loads(self.processor.client.publish.call_args.args[1])['person'])
+
+    def test_all_recognition_pagination_and_selected_evidence_url(self):
+        self.alerts.record(event_id='one', camera='door', status='recognized', person='Alice')
+        self.alerts.record(event_id='two', camera='door', status='recognized', person='Alice')
+        first = self.alerts.list(after=0, limit=1, include_recognitions=True)
+        self.assertTrue(first['has_more'])
+        self.assertEqual(first['alerts'][0]['image_url'], 'api/activity/one/image')
+        self.assertEqual(self.alerts.list(after=first['cursor'], include_recognitions=True)['alerts'][0]['event_id'], 'two')
+
     def test_policy_route_validation_and_readonly_role(self):
         import json
         from fastapi.testclient import TestClient

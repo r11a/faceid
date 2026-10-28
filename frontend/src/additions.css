@@ -77,6 +77,7 @@
 .recognition-popup { position: fixed; z-index: 1500; top: 90px; left: 24px; width: min(360px, calc(100vw - 48px)); padding: 20px; background: var(--surface, #17212b); color: var(--text, #fff); border: 1px solid #718096; border-radius: 16px; box-shadow: 0 12px 40px #0006; display: grid; gap: 12px; direction: rtl; }
 .recognition-popup > .icon-button { position: absolute; left: 4px; top: 4px; }
 .recognition-popup > b { padding-left: 20px; }
+.recognition-popup-photo { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; }
 .recognition-alert-list { display: grid; gap: 12px; }
 .recognition-alert-list > button { display: grid; text-align: right; gap: 6px; }
 .history-reference-choices>div{display:grid;justify-items:center;align-content:start;gap:10px;padding:16px;border:1px solid var(--border-soft);border-radius:14px;background:var(--surface-2);max-width:240px}.history-reference-choices img{width:144px;height:144px;object-fit:cover}.history-reference-choices p{margin:0;text-align:center}.face-timeline>div>.button{margin-top:8px}

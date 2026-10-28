@@ -17,6 +17,8 @@ from collections import deque
 
 import paho.mqtt.client as mqtt
 import requests
+import cv2
+import numpy as np
 
 from .engine import FaceEngine, crop_face
 from .hires import upgrade_face
@@ -596,6 +598,9 @@ class EventProcessor:
         st["access1_evidence_ts"] = None
         live_access = (self._live_access_camera(st) and not st["ended"]
                        and not st.get("end_time") and not st.get("recovered") and not st.get("polled"))
+        notification_live = bool(camera_profile and camera_profile.get("fast_recognition")
+                                 and not st["ended"] and not st.get("end_time")
+                                 and not st.get("recovered") and not st.get("polled"))
         if live_access:
             if (st.get("live_fetches", 0) >= 12 or time.time() - st["created"] >= 30
                     or not 0 <= time.time() - st.get("live_updated_at", 0) < 10):
@@ -625,13 +630,23 @@ class EventProcessor:
             source = "secure_live_snapshot"
             st["access1_evidence_ts"] = timestamp
             st["candidate_snapshot_ts"] = timestamp
-        elif (camera_profile and camera_profile.get("fast_recognition")
-              and not st["ended"] and not st.get("recovered") and not st.get("polled")):
-            # Notification-only fast mode does not depend on Access1. Preserve
-            # full-frame resolution and quality gates; this is not access proof.
+        elif notification_live:
+            # Event snapshots retain Frigate's best person image and can stay
+            # unchanged while the person turns toward the camera. Notification
+            # sampling needs current frames; these never carry admission proof.
+            if st.get("live_fetches", 0) >= 12 or time.time() - st["created"] >= 30:
+                return
             st["live_fetches"] = st.get("live_fetches", 0) + 1
-            img = self.frigate.snapshot(eid, crop=not camera_profile.get("high_resolution"))
-        if not live_access and img is None and camera_profile and camera_profile.get("high_resolution"):
+            content = self.frigate.latest_frame_bytes(st["camera"], timeout=2.0)
+            if content:
+                img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+                if img is not None:
+                    source = "live_camera"
+            if st["ended"] or st.get("end_time") or st["done"] or not self.camera_enabled(st["camera"]):
+                return
+            if img is None:
+                img = self.frigate.snapshot(eid, crop=not camera_profile.get("high_resolution"))
+        if not live_access and not notification_live and img is None and camera_profile and camera_profile.get("high_resolution"):
             # Preserve the non-access/enrollment-compatible capture path.
             timestamps = [time.time(), float(st.get("start_time") or time.time())]
             for timestamp in timestamps:
@@ -661,6 +676,14 @@ class EventProcessor:
         found = (self.engine.detect_faces(img)
                  if live_access and hasattr(self.engine, "detect_faces")
                  else self.engine.faces(img))
+        if source == "live_camera" and len(found) > 1:
+            # Current camera frames have no event-specific person crop. Choosing
+            # the clearest face could attribute a bystander to this event.
+            if self.audit:
+                self.audit.observation(eid, st["attempts"], "multiple_faces", source=source)
+            log.info("event %s (%s): attempt %d, multiple faces in current camera frame",
+                     eid, st["camera"], st["attempts"])
+            return
         if camera_profile and camera_profile.get("mode") == "intercom":
             height, width = img.shape[:2]
             left, top, right, bottom = camera_profile.get("roi", [0, 0, 1, 1])
@@ -793,6 +816,14 @@ class EventProcessor:
             ignore_score=float(ig),
             ignore_group=ignore_group,
         )
+        quality_data = quality.to_dict() if quality else {}
+        evidence_rank = (float(quality_data.get("score", 0)),
+                         float(quality_data.get("sharpness", 0)), float(face.det_score))
+        if decision.status in ("recognized_candidate", "recognized"):
+            evidence = st.setdefault("best_recognized", {})
+            previous = evidence.get(slug)
+            if previous is None or evidence_rank > previous["rank"]:
+                evidence[slug] = {"rank": evidence_rank, "crop": crop_face(img, face.bbox).copy()}
         if pending_live_identity:
             return
         if decision.status == "recognized":
@@ -850,6 +881,12 @@ class EventProcessor:
             st["best_score"], st["best_person"] = decision.score, decision.person
             st["done"] = True
             st["final_decision"] = decision
+            if self.audit:
+                # Notifications and realtime alerts can trigger an immediate
+                # image fetch. Publish the chosen crop first, including updates
+                # within an existing presence session.
+                evidence = st.get("best_recognized", {}).get(decision.slug, {})
+                self.audit.save_evidence(eid, evidence.get("crop", crop))
             self._publish_notification(eid, st, decision.status, decision.person, decision.score,
                 margin=decision.margin, confirmations=decision.confirmations)
             access1 = getattr(self, "access1", None)
@@ -869,8 +906,6 @@ class EventProcessor:
             self._flush_face_samples(eid, st)
             if self.audit:
                 self.audit.observation(eid, st["attempts"], decision.status, **observation)
-                if actionable:
-                    self.audit.save_evidence(eid, crop)
             if actionable and decision.slug and str(decision.slug).startswith("guest:"):
                 guest_id = str(decision.slug).split(":", 1)[1]
                 st["guest"] = {"id": guest_id, "name": decision.person}
@@ -903,14 +938,15 @@ class EventProcessor:
         # Keep the best review image until the event ends. A high but insufficiently
         # confirmed match is ambiguous, never silently promoted or ignored.
         prev = st.get("best_unknown")
-        if prev is None or face.det_score > prev["det_score"]:
+        if prev is None or evidence_rank > prev["rank"]:
             st["best_unknown"] = {
+                "rank": evidence_rank,
                 "crop": crop, "emb": emb, "det_score": float(face.det_score),
                 "guess": name, "guess_score": float(score), "full": img,
                 "decision": st["decision"].pending_status(),
                 "runner_up": runner_up, "runner_up_score": float(runner_up_score),
                 "margin": float(decision.margin),
-                "quality": quality.to_dict() if quality else {},
+                "quality": quality_data,
             }
 
     def _poller(self):
