@@ -23,6 +23,27 @@ const recognitionModes = {
   continuous: { label: "תמיד", description: "בדיקות פנים לאורך כל הזמן, גם ללא אירוע מ־Frigate. צורך יותר משאבי עיבוד." },
 };
 
+const samplingLabels = {
+  fetching: "קורא תמונה חיה", sampling: "הסריקה פעילה", faces_rejected: "פנים נמצאו אך נפסלו",
+  waiting: "ממתין לגילוי אדם ב־Frigate", no_frame: "מקור התמונה אינו זמין",
+  invalid_frame: "התקבלה תמונה לא תקינה", unchanged_frame: "ממתין לתמונה חדשה", error: "שגיאה בסריקה",
+};
+const rejectionLabels = { small_face: "פנים קטנות מדי", weak_detection: "גילוי פנים חלש", low_quality: "איכות פנים נמוכה" };
+
+function CameraSamplingStatus({ camera }) {
+  const health = useResource("health", { poll: 3000 });
+  if ((camera.recognition_mode || "event") === "event") return null;
+  const status = health.data?.performance?.camera_sampling?.cameras?.[camera.camera];
+  return <div className="guidance" role="status">
+    <b>{!camera.enabled ? "הזיהוי במצלמה כבוי" : health.error ? "לא ניתן לקרוא את מצב הסריקה" : samplingLabels[status?.state] || "ממתין להפעלת הסריקה"}</b>
+    {status?.source && <p>{status.source === "main_stream" ? "מקור: זרם ראשי" : "מקור: זרם גילוי של Frigate"}{status.frame_width ? ` · ${status.frame_width}×${status.frame_height}` : ""}</p>}
+    {status?.frame_width && <p>בתמונה האחרונה: {status.visible_faces} פנים · {status.usable_faces} מתאימות לזיהוי · הגדולות ביותר {status.largest_face_px}px · מינימום {status.min_face_px}px</p>}
+    {Object.entries(status?.rejected_reasons || {}).map(([reason, count]) => <p key={reason}>{rejectionLabels[reason] || reason}: {count}</p>)}
+    {status?.frame_processing_ms != null && <p>זמן הבדיקה האחרונה: {(status.frame_processing_ms / 1000).toFixed(2)} שניות. המרווח שהוגדר הוא מינימום; הקצב בפועל תלוי במקור התמונה ובעומס.</p>}
+    {status?.state === "no_frame" && status.source === "main_stream" && <p>נדרש זרם חי מוגדר ב־Frigate ותמיכה בצילום מהזרם הראשי עם הרשאת מנהל ב־Frigate.</p>}
+  </div>;
+}
+
 function LiveFrame({ camera, refreshKey = 0, analyze }) {
   const [failed, setFailed] = useState(false);
   const frameUrl = useMemo(() => assetUrl(`api/cameras/${encodeURIComponent(camera)}/frame?_=${Date.now()}-${refreshKey}`), [camera, refreshKey]);
@@ -55,7 +76,7 @@ export function CamerasPage() {
     <PageHeader eyebrow="מצלמות" title="מצלמות" description="תמונה חיה והגדרות זיהוי לכל מצלמה." />
     <div className="camera-workspace">
       <Panel className="camera-list"><div className="panel-heading"><div><span className="eyebrow">מקורות</span><h2>{studio.data?.cameras?.length || 0} מצלמות</h2></div></div>{(studio.data?.cameras || []).map((camera) => <button className={selected === camera.camera ? "active" : ""} onClick={() => { setSelected(camera.camera); setAnalysis(null); }} key={camera.camera}><span className={`camera-state ${camera.enabled ? "on" : "off"}`}><Camera /></span><span><b>{camera.camera}</b><small>{modeLabels[camera.mode] || camera.mode} · מינימום {camera.min_face_px}px</small></span><Badge tone={camera.enabled ? "success" : "neutral"}>{camera.enabled ? "פעילה" : "מושבתת"}</Badge></button>)}</Panel>
-      {current ? <Panel className="camera-stage"><div className="panel-heading"><div><span className="eyebrow">תצוגה חיה</span><h2>{current.camera}</h2></div><div><button className="button secondary" onClick={() => setRefresh((value) => value + 1)}><RefreshCw />רענון</button><button className="button primary" disabled={analyzing} onClick={analyze}><ScanFace />{analyzing ? "בודק…" : "בדיקת פנים בתמונה"}</button></div></div><LiveFrame camera={current.camera} refreshKey={refresh} analyze={analysis} />{analysis && <div className="analysis-strip"><strong>{analysis.faces?.length || 0} פנים נמצאו</strong>{analysis.faces?.map((face, index) => <Badge key={index} tone={face.usable ? "success" : "warning"}>פנים {index + 1}: {Math.round(face.face_px)}px · איכות {percent(face.score)}</Badge>)}</div>}<CameraSettings camera={current} onSaved={studio.reload} onToggle={toggle} /></Panel> : <Empty icon={Camera} title="אין מצלמות" text="FaceID לא קיבל כרגע רשימת מצלמות מ־Frigate." />}
+      {current ? <Panel className="camera-stage"><div className="panel-heading"><div><span className="eyebrow">תצוגה חיה</span><h2>{current.camera}</h2></div><div><button className="button secondary" onClick={() => setRefresh((value) => value + 1)}><RefreshCw />רענון</button><button className="button primary" disabled={analyzing} onClick={analyze}><ScanFace />{analyzing ? "בודק…" : "בדיקת פנים בתמונה"}</button></div></div><LiveFrame camera={current.camera} refreshKey={`${refresh}-${current.high_resolution}-${current.recognition_mode}`} analyze={analysis} />{analysis && <div className="analysis-strip"><strong>{analysis.width}×{analysis.height} · {analysis.faces?.length || 0} פנים נמצאו</strong>{analysis.faces?.map((face, index) => <Badge key={index} tone={face.usable ? "success" : "warning"}>פנים {index + 1}: {Math.round(face.face_px)}px · איכות {percent(face.score)}{face.rejection_reason ? ` · ${rejectionLabels[face.rejection_reason]}` : ""}</Badge>)}</div>}<CameraSamplingStatus camera={current} /><CameraSettings camera={current} onSaved={studio.reload} onToggle={toggle} /></Panel> : <Empty icon={Camera} title="אין מצלמות" text="FaceID לא קיבל כרגע רשימת מצלמות מ־Frigate." />}
     </div>
   </>;
 }
@@ -92,7 +113,7 @@ function CameraSettings({ camera, onSaved, onToggle }) {
     </div>
     <div className="camera-options" role="group" aria-label="אפשרויות זיהוי">
       {recognitionMode === "event" && <label className="face-check"><input type="checkbox" checked={Boolean(form.fast_recognition)} onChange={e => setForm({ ...form, fast_recognition: e.target.checked })} /><span><b>זיהוי מהיר</b><small>פחות המתנה, אותם ספי אישור</small></span></label>}
-      <label className="face-check"><input type="checkbox" checked={Boolean(form.high_resolution)} onChange={e => setForm({ ...form, high_resolution: e.target.checked })} /><span><b>תמונות מלאות</b><small>מ־Frigate, נדרש לראיות גישה חיות</small></span></label>
+      <label className="face-check"><input type="checkbox" checked={Boolean(form.high_resolution)} onChange={e => setForm({ ...form, high_resolution: e.target.checked })} /><span><b>תמונות מלאות</b><small>{recognitionMode === "event" ? "מ־Frigate, נדרש לראיות גישה חיות" : "מהזרם הראשי ב־Frigate; צילום עשוי להימשך כמה שניות"}</small></span></label>
       <label className="face-check"><input type="checkbox" checked={Boolean(form.critical)} onChange={e => setForm({ ...form, critical: e.target.checked })} /><span><b>מצלמה קריטית</b><small>התראה בכל אירוע עם זיהוי פנים</small></span></label>
     </div>
     <div className="camera-settings-actions"><button className="button primary" onClick={save}><Save />שמירת הגדרות</button></div>

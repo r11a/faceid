@@ -1,5 +1,11 @@
 # Changelog
 
+## 6.6.1
+
+- Fix full-resolution native camera recognition: the existing full-image option now captures the configured Frigate main restream for presence/continuous modes instead of the low-resolution detect image. Event/access evidence keeps its original behavior.
+- Use the same source in camera preview and face analysis. Show live sampling state, source, resolution, usable face count, rejection reasons and actual processing time.
+- Main-stream capture is bounded to two requests with timeouts; unsupported or unavailable sources are reported explicitly. Requires Frigate main restream and authenticated snapshot support; actual cadence depends on capture/inference time.
+
 ## 6.6.0 — Selectable camera recognition modes
 
 - Choose per camera: existing event recognition, continuous sampling while Frigate reports people, or always-on sampling without a person event. Existing installations keep event mode by default.

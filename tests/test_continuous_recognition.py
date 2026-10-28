@@ -227,6 +227,29 @@ class ContinuousRecognitionTests(unittest.TestCase):
         self.engine.faces.assert_not_called()
         self.frigate.snapshot.assert_not_called()
 
+    def test_small_faces_report_why_no_identity_observation_was_created(self):
+        quality = SimpleNamespace(usable=False, face_px=12, detection=.8, score=.6,
+                                  to_dict=lambda: {'face_px': 12, 'detection': .8, 'score': .6})
+        with patch('app.continuous_recognition.measure_face_quality', return_value=quality):
+            self.frame([self.face()])
+        status = self.service.report()['cameras']['door']
+        self.assertEqual(status['state'], 'faces_rejected')
+        self.assertEqual(status['largest_face_px'], 12)
+        self.assertEqual(status['rejected_reasons'], {'small_face': 1})
+        self.assertEqual(status['frame_width'], 200)
+        self.assertEqual(status['frame_height'], 120)
+        self.assertEqual(status['usable_faces'], 0)
+        self.assertEqual(self.messages(), [])
+
+    def test_full_resolution_profile_uses_main_frame_and_reports_source_failure(self):
+        self.set_mode('continuous', high_resolution=True)
+        self.frigate.main_stream_frame_bytes.return_value = None
+        self.service.sample_camera('door', self.p.camera_profiles.get('door'))
+        self.frigate.main_stream_frame_bytes.assert_called_once_with('door')
+        self.frigate.latest_frame_bytes.assert_not_called()
+        self.assertEqual(self.service.report()['cameras']['door']['source'], 'main_stream')
+        self.assertEqual(self.service.report()['cameras']['door']['state'], 'no_frame')
+
     def test_reconcile_restores_presence_after_startup_and_removes_missed_end(self):
         self.set_mode('presence')
         response = Mock(status_code=200)
