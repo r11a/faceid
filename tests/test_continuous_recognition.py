@@ -265,6 +265,8 @@ class ContinuousRecognitionTests(unittest.TestCase):
         for camera in ('b', 'c'):
             self.set_mode('continuous', camera)
         self.service.tick()
+        initially_started = {job[1][0] for job in self.executor.jobs}
+        not_started = {'door', 'b', 'c'} - initially_started
         first, args, future = self.executor.jobs.pop(0)
         self.frigate.latest_frame_bytes.side_effect = RuntimeError('camera unavailable')
         with self.assertLogs('faceid.continuous', level='ERROR'):
@@ -272,7 +274,7 @@ class ContinuousRecognitionTests(unittest.TestCase):
         self.assertNotIn(args[0], self.service.pending)
         self.service.tick(time.time() + 1)
         starts = [job[1][0] for job in self.executor.jobs]
-        self.assertIn('door', starts)
+        self.assertEqual(set(starts), (initially_started - {args[0]}) | not_started)
         self.assertEqual(len(self.service.pending), 2)
 
     def test_confirmed_sighting_finalizes_with_no_synthetic_frigate_event_request(self):
