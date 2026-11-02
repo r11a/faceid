@@ -158,6 +158,36 @@ class FrigateAPI:
             log.warning("snapshot %s failed: %s", event_id, e)
             return None
 
+    def association_frame(self, event_id, camera):
+        """Person-cropped active-event anchor only; never live admission evidence."""
+        response=None
+        try:
+            def active():
+                metadata=None
+                try:
+                    metadata=self.request('GET',f"/api/events/{quote(event_id,safe='')}",timeout=2.0)
+                    value=metadata.json() if metadata.status_code==200 else None
+                    return value if isinstance(value,dict) else None
+                finally:
+                    if metadata is not None:metadata.close()
+            before=active()
+            if not before or before.get('camera')!=camera or before.get('end_time') or before.get('label')!='person':
+                return None
+            response=self.request('GET',f"/api/events/{quote(event_id,safe='')}/snapshot.jpg",
+                params={'crop':1,'timestamp':0,'bbox':0,'quality':100},
+                headers={'Cache-Control':'no-cache, no-store'},timeout=2.0)
+            if response.status_code!=200 or not response.content or len(response.content)>20_000_000:
+                return None
+            image=cv2.imdecode(np.frombuffer(response.content,np.uint8),cv2.IMREAD_COLOR)
+            after=active()
+            if not after or after.get('camera')!=camera or after.get('end_time') or after.get('label')!='person':
+                return None
+            return image
+        except (requests.RequestException,ValueError,cv2.error):
+            return None
+        finally:
+            if response is not None:response.close()
+
     def live_event_frame(self, event_id: str) -> np.ndarray | None:
         """Read an active event's full detect frame, never an archived snapshot.
 

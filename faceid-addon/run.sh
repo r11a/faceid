@@ -1,5 +1,8 @@
 #!/usr/bin/with-contenv bashio
 set -e
+# Native RTSP diagnostics may expose URLs; Python categorical diagnostics remain available.
+export OPENCV_FFMPEG_LOGLEVEL=-8
+export OPENCV_LOG_LEVEL=SILENT
 
 # Optionen direkt aus /data/options.json lesen — robust gegenüber
 # bashio/Supervisor-API-Versionsunterschieden.
@@ -72,6 +75,7 @@ faceid:
   port: 8600
   mqtt_prefix: $(cfg_json '.mqtt_prefix')
   backend: $(cfg_json '.backend')
+  timing_diagnostics: $(cfg_json '.timing_diagnostics // false')
   cpu_threads: $(cfg_json '.cpu_threads // 0')
   cpu_allow_spinning: $(cfg_json 'if .cpu_allow_spinning == null then true else .cpu_allow_spinning end')
   match_threshold: $(cfg_json '.match_threshold')

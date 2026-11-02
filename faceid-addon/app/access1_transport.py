@@ -22,7 +22,7 @@ class Transport:
         path='/faceid/v1/events'+('/'+event_id if method=='GET' else '')
         result=self._request(method,path,payload)
         if (result.get('event_id')!=event_id or result.get('source')!='faceid' or
-                result.get('status') not in ('pending','accepted','denied','cancelled','expired','unconfirmed','dispatched','completed','failed')):
+                result.get('status') not in ('pending','accepted','denied','cancelled','expired','unconfirmed','dispatched','completed','failed','relay_activated','blocked','expired_unconfirmed')):
             raise ValueError('Unexpected Access1 result')
         return {key:result.get(key) for key in ('event_id','request_id','status','reason','execution_confirmed','door_open_confirmed')}
 
@@ -47,7 +47,8 @@ class Transport:
             connection.request(method,path,body=json.dumps(payload) if payload else None,
                 headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
             response=connection.getresponse();raw=response.read(16385)
-            if response.status!=200 or len(raw)>16384:raise ValueError('Access1 response unavailable')
+            if response.status!=200:raise ValueError('access1_http_'+str(response.status))
+            if len(raw)>16384:raise ValueError('access1_response_oversized')
             result=json.loads(raw)
             if not isinstance(result,dict):raise ValueError('Unexpected Access1 response')
             return result

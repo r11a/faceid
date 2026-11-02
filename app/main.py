@@ -7,6 +7,7 @@ import uvicorn
 import yaml
 
 from . import logbuffer
+from .diagnostic_mode import DIAGNOSTIC_ONLY, start_operational_services
 from .engine import FaceEngine
 from .frigate_api import FrigateAPI
 from .gallery import Gallery
@@ -203,22 +204,29 @@ def main():
         enabled=bool(f.get("liveness_enabled", True)),
         threshold=float(f.get("liveness_threshold", 0.5)),
         required_frames=int(f.get("liveness_required_frames", 3)),
+        cpu_threads=f.get("cpu_threads", 0),
+        cpu_allow_spinning=f.get("cpu_allow_spinning", True),
     )
+    if processor.liveness.enabled and not processor.liveness.prepare():
+        log.warning("Liveness runtime unavailable at startup; required liveness remains blocking")
     processor.migration = migration
     processor.vision_advisor = vision_advisor
     processor.runtime_health = RuntimeHealth(data_dir, processor)
     from .face_search import FaceSearch
     processor.face_search = FaceSearch(audit, gallery, engine)
-    processor.face_search.start_index()
+    if not DIAGNOSTIC_ONLY:
+        processor.face_search.start_index()
     from .access1 import Access1Integration
     processor.access1 = None
-    try:
-        processor.access1 = Access1Integration(data_dir, audit, gallery=gallery,
-            processor=processor, options=f.get('access1_connector') or {})
-        processor.access1.start()
-    except Exception:
-        log.error('Optional Access1 module unavailable; recognition continues unchanged')
-    processor.start()
+    def start_connector():
+        try:
+            processor.access1 = Access1Integration(data_dir, audit, gallery=gallery,
+                processor=processor, options=f.get('access1_connector') or {})
+            processor.access1.start()
+        except Exception:
+            log.error('Optional Access1 module unavailable; recognition continues unchanged')
+    if not start_operational_services(processor,start_connector):
+        log.warning('DIAGNOSTIC-ONLY BUILD: automatic recognition and Access1 connector are NOT started; saved settings unchanged')
     start_auto_backup(cfg["faceid"], data_dir)
     app = build_app(cfg, engine, gallery, processor, data_dir, BASE / "static")
     uvicorn.run(app, host="0.0.0.0", port=int(cfg["faceid"].get("port", 8600)), log_level="warning")

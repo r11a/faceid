@@ -1,0 +1,45 @@
+DEVELOPER HANDOFF — 6.6.11-access1.test1
+Base: 6.6.10-access1.diag5. This is an operational test-rig release, not diagnostic-only.
+
+User explicitly authorized restored operation with disconnected relays. Do not
+interpret an open diagnostic page as a global inhibition switch.
+
+Changes
+1. app/diagnostic_mode.py: DIAGNOSTIC_ONLY=False. Existing startup function and its
+   ordering are retained: connector then processor. main.py's existing guard also
+   restores background face indexing. Saved enable flags remain authoritative.
+2. app/decode_diagnostics.py: blockers now require the engine only. The former
+   connector/camera-disable policy was intentionally removed on user instruction.
+   run_decode and preview maintain no-access/no-event local result isolation.
+   No sample calls enqueue/present/publish/_process_face or records access evidence.
+   Shared model background priority and all deadlines/budgets/cooldown remain.
+   Invalid PTS/local stale frames rejected before hashing/inference. Redundant
+   post-sample .1-second sleep removed; next_sample cadence still controls sampling.
+3. app/acquisition_diagnostics.py: authenticated status includes runtime VERSION.
+4. Diagnostic HTML: actual server version exported; bilingual active-operation
+   notice, preview and test modes preserved. Frontend release label/cache refreshed.
+5. Tests distinguish operational coexistence from isolated diagnostic-only startup.
+   Verify running connector is never called by diagnostic paths, missing engine
+   still blocks, early rejection avoids model calls, same-subject/duplicate/threshold
+   guards remain. Existing decoder implementation unchanged.
+
+Preservation
+main.py, mqtt_listener.py, access1.py, engine.py, liveness.py, decision.py,
+camera_profiles.py, pairing/gallery and admission logic are unchanged from base.
+No credentials, user reports, real frames or gallery vectors are packaged.
+
+Scope boundary
+This release restores normal operation but DOES NOT implement event-triggered RTSP
+as admission evidence. Relative stream clocks do not prove capture age; tests also
+have not resolved the sparse face detections. Existing secure snapshot evidence
+path remains in place. Do not claim that this release fixes the eight-second
+production recognition delay. Measured wins apply to invalid diagnostic samples
+and redundant waits. The 2/4-thread benchmark is exploratory, not an automatic
+settings migration. Saved cpu_threads unchanged; documented optional value=4.
+No lower-than-three liveness sample control added. Do not lower existing safeguards.
+
+Merge
+Apply only the listed focused diff, keep restored startup semantics explicit,
+and update release/cache identifiers. Run full backend and frontend suites,
+then verify image byte parity and offline model/codec smoke. No dependency changes.
+See CHANGED-FILES.json, preservation.json, focused-changes.patch and validation logs.

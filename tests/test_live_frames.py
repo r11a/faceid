@@ -93,3 +93,29 @@ class LiveFrameTests(unittest.TestCase):
         self.assertIsNone(reader.frame())
         self.assertNotIn('private-stream', str(reader.report()))
         capture.release.assert_called_once()
+
+class StreamClockOriginTests(unittest.TestCase):
+    def test_negative_and_zero_stream_origins_are_valid_when_progressing(self):
+        for origin in (-100000,0,100000):
+            reader=LiveFrameReader('private-fixture')
+            self.assertFalse(reader.accept_position(origin,10,10))
+            self.assertTrue(reader.accept_position(origin+1000,11,10))
+            self.assertTrue(reader.accept_position(origin+1040,11.04,10))
+            self.assertFalse(reader.accept_position(origin+1040,11.08,10))
+            self.assertEqual(reader.report()['rejection_reason'],'timestamp_nonprogressing')
+    def test_growth_and_invalid_clock_remain_rejected(self):
+        reader=LiveFrameReader('private-fixture')
+        self.assertFalse(reader.accept_position(float('nan'),10,10))
+        self.assertFalse(reader.accept_position(-10000,10,10))
+        self.assertTrue(reader.accept_position(-9000,11,10))
+        self.assertFalse(reader.accept_position(-8960,13,10))
+        self.assertEqual(reader.report()['rejection_reason'],'buffering_growth')
+
+class DecoderTimestampTests(unittest.TestCase):
+    def test_native_pts_uses_fps_timebase_and_preserves_negative_origin(self):
+        import cv2
+        from app.live_frames import decoder_position_ms
+        if not hasattr(cv2,'CAP_PROP_PTS'):self.skipTest('Older OpenCV')
+        values={cv2.CAP_PROP_FPS:25,cv2.CAP_PROP_PTS:-50,cv2.CAP_PROP_POS_MSEC:0}
+        capture=Mock(get=lambda key:values[key])
+        self.assertEqual(decoder_position_ms(capture),-2000)

@@ -1,0 +1,37 @@
+Current release: 6.6.11-access1.test1. See DEPLOYMENT.txt and DEVELOPER-HANDOFF.txt.
+Automatic services restored; restream diagnostics optimized; normal admission evidence unchanged.
+
+HISTORICAL CHANGE NOTES
+FaceID 6.6.3-access1.1 — focused local maintenance release
+Base: supplied upstream FaceID 6.6.2. Date: 2026-10-30.
+
+Changes
+- Accept Access1 native relay_activated, blocked and expired_unconfirmed receipts.
+- Keep execution confirmation separate from physical door-open confirmation.
+- Retain safe backend reason codes and categorical transport/result errors.
+- An uncertain POST is still never replayed: existing bounded GET reconciliation
+  and deterministic request identity/deduplication remain unchanged.
+- Reject non-finite or wrong-shaped liveness model output as unavailable.
+- Bind secure-live liveness evidence to a sufficiently matched identity; reset
+  accumulated proof and identity votes on a subject change. Duplicate embeddings
+  cannot add live proof. Continue binding individually live samples during
+  recovery from an earlier failed sample. Ordinary and continuous monitoring
+  paths are unchanged. This does not add hardware depth/IR or certify spoof resistance.
+- Normal individually-live warmup is INFO; failed samples remain WARNING.
+- Explicit minimal add-on .dockerignore prevents inherited exclude-all rules
+  from hiding the deployment source. Version labels identify this local fork.
+
+Unchanged
+Model weights, score thresholds, required live-frame count, camera acquisition,
+freshness, TLS, queue bounds, Access1 authorization, timetables, APB, interlocks,
+relay pulse settings, gallery and pairing schemas. No firmware/integration/mobile
+update is needed. No live doors were operated during preparation.
+
+Known/deferred audit items
+Advisory mode is not a substitute for required liveness on an access camera.
+Continuous monitoring still needs the separate secure Frigate access path and
+its existing fast_recognition/full-image settings. UI readiness, attempt-budget
+validation, intercom diagnostic frame-source/deduplication, global boolean option
+encoding and the second-factor UI scope are not changed in this focused pass.
+Keep the currently working required-liveness camera configuration.
+Capture speed is not changed; no performance improvement is claimed.

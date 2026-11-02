@@ -39,7 +39,9 @@ class StartupConfigTests(unittest.TestCase):
                 self.assertIs(args[3].alerts, started[0])
                 return app
 
-            with patch.object(main_module, 'BASE', root), \
+            with patch('app.diagnostic_mode.DIAGNOSTIC_ONLY',False), \
+                 patch.object(main_module,'DIAGNOSTIC_ONLY',False), \
+                 patch.object(main_module, 'BASE', root), \
                  patch.object(main_module, 'FaceEngine', return_value=SimpleNamespace(faces=lambda image: [])), \
                  patch.object(main_module.EventProcessor, 'start', autospec=True, side_effect=verify_start), \
                  patch.object(main_module, 'build_app', side_effect=verify_build), \
@@ -58,11 +60,15 @@ class StartupConfigTests(unittest.TestCase):
             }),encoding='utf-8')
             with patch.object(main_module,'BASE',root), \
                  patch.object(main_module,'FaceEngine',return_value=SimpleNamespace(faces=lambda image:[])), \
-                 patch.object(main_module.EventProcessor,'start'), \
+                 patch.object(main_module.EventProcessor,'start') as start, \
+                 patch('app.access1.Access1Integration') as connector, \
                  patch.object(main_module,'start_auto_backup'), \
                  patch.object(main_module.uvicorn,'run') as serve:
                 main_module.main()
             self.assertTrue(serve.called)
+            start.assert_called_once()
+            connector.assert_called_once()
+            connector.return_value.start.assert_called_once()
             app=serve.call_args.args[0]
             self.assertTrue(any(route.path=='/api/faces/search' for route in app.routes))
 

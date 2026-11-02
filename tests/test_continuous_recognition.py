@@ -74,6 +74,14 @@ class ContinuousRecognitionTests(unittest.TestCase):
         self.service._sync_live_cameras()
         self.frigate.sync_live_cameras.assert_called_with([])
 
+    def test_stream_observation_never_reserves_snapshot_reader(self):
+        for source in ('frigate_restream', 'direct_rtsp'):
+            with self.subTest(source=source):
+                profile = {'observation_source': source, 'recognition_mode': 'continuous', 'high_resolution': True}
+                with patch.object(self.service, 'profiles', return_value={'door': profile}):
+                    self.service._sync_live_cameras()
+                self.frigate.sync_live_cameras.assert_called_with([])
+
     def face(self, who='alice', n=1, x=0):
         emb = np.array([1, n / 100, 0] if who == 'alice' else [0, n / 100, 1], dtype=np.float32)
         return SimpleNamespace(bbox=np.array([x, 0, x + 60, 80]), det_score=.99,

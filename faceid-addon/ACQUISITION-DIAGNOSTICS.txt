@@ -1,0 +1,170 @@
+FaceID 6.6.12-access1.stream3 — integrated observation release
+Status: ready for disconnected-relay rig validation after the packaged regression gate.
+Real-camera latency and acceptance remain UNMEASURED in this release.
+
+WHAT CHANGED
+Frigate person event -> event-specific person-cropped anchor -> successive live
+Frigate-restream or direct-camera frames -> uniquely associated face -> at least
+three distinct same-identity live confirmations -> existing Access1 policies/result.
+The anchor is association evidence only. It never counts as a live sample.
+The existing snapshot path remains the default. No Frigate or Access1 backend,
+recognition model, gallery, threshold, CPU setting or firmware changes are required.
+
+INSTALL
+1. Back up the current add-on and its data using Home Assistant. Keep the previous
+   6.6.11-access1.test1 operational package for rollback.
+2. Copy the COMPLETE source/faceid-addon directory into the existing local FaceID
+   add-on source directory, replacing source files. Do not delete or replace /data.
+   Do not create a second FaceID instance or unpair/reassign people or cameras.
+3. Refresh the local add-on repository and rebuild/update FaceID. Confirm the log
+   and UI show 6.6.12-access1.stream3. Hard-refresh the browser if necessary.
+4. Confirm the gallery, mappings, camera enable states and Access1 connection.
+   Existing camera profiles still use snapshots until you explicitly select a stream.
+
+ENABLE ENTRANCE
+Open FaceID through HA Ingress as a verified HA administrator.
+Cameras -> Enterance -> Observation source -> Frigate restream.
+Tick Trust local video network explicitly; save. Leave liveness/identity thresholds
+unchanged. Stream admission enforces >=3 samples even if a legacy setting is lower;
+any stricter existing requirement wins. Wait for prior source readers to retire.
+A fresh Frigate person event starts the observation. No continuous eventless unlock.
+Direct RTSP is an optional explicit alternative, not an automatic fallback. Enter a
+private IPv4 RTSP URL in the password field. rtsp:// on port 554 or 8554 is supported;
+DNS names, public/loopback/link-local addresses and other protocols/ports are rejected.
+Use URL percent encoding for reserved credential characters. A blank field retains
+the saved URL. To delete it, select another source and tick Clear saved RTSP.
+The stored URL is never returned by profile APIs. Source/trust/credential changes
+require verified HA admin access through Ingress; ordinary saved settings remain.
+
+TRUST AND SAFEGUARDS
+Local-network stream evidence measures bounded local delivery, not verified sensor
+capture time or authenticated camera video. Upstream fixed delay remains possible.
+HTTPS to Access1 authenticates that connector only. Snapshot Secure mode still has
+its existing Frigate HTTPS requirements; no global Secure override is needed here.
+Streams use local monotonic deadlines. Events expire after 30 seconds, never extended
+by updates; frames must be <=1 second old locally at inference start. Evidence expires
+10 seconds after its oldest retained frame. Relative buffering growth >750ms,
+invalid/nonprogressing timestamps, reconnects, ambiguous subjects and crossings reset
+or reject evidence. Clock divergence >2 seconds blocks submission. No threshold is lowered.
+Maximum two observation cameras and four event sessions per camera. Reader retirement
+counts toward capacity. Over four usable faces rejects the frame instead of selecting four.
+There is no automatic fallback. A timeout/configuration failure must be diagnosed.
+
+RETAINED TEST WINDOW
+Open Acquisition diagnostic / בדיקת זרם (the existing diagnostic entry).
+Operational timeline shows source/trust, trigger, anchor/association, samples,
+recognition and Access1 result. Private previews show anchor, live detector input and
+associated face (green rectangle). They are RAM-only, verified-admin-only, expire
+within three minutes, are bounded to four events, and never enter JSON exports.
+Opening/running diagnostics DOES NOT pause normal recognition or Access1. Operational
+sessions may operate the rig relay. Manual preview/packet/benchmark/decode runs do not
+submit access. The exported report distinguishes operational sessions from manual results.
+Diagnostic preview/benchmarks retain the previous single-person test procedure; the
+operational timeline exercises the real multi-person association and Access1 path.
+
+ONE COMMISSIONING ROUND — DO NOT LOWER THRESHOLDS TO PASS
+A. Record the version, source, CPU setting, camera resolution and room conditions.
+   Keep the existing CPU setting first. Four threads was the measured commissioning
+   option on this four-vCPU rig, not a mandatory migration or a speed guarantee.
+B. Show a timed visual reference in front of the camera and compare the received
+   preview with the reference to measure fixed upstream picture delay.
+C. Make 20 ordinary single-person approaches. Wait for each event to finish. Record
+   event ID, source, success/failure reason, event-to-relay time and duplicate/wrong-
+   person count. Export operational timelines and collect Access1/controller results.
+   Recognition completion or POST acceptance alone is not relay confirmation.
+D. Exercise two visible people, crossings/occlusion, leaving early, source reconnects,
+   duplicate event delivery and settings changes during an observation. Confirm no
+   wrong-person or duplicate activation. Inspect retained inputs when association fails.
+E. Repeat comparable observations with direct RTSP and then the snapshot baseline.
+   Do not compare different people/positions/lighting as if they were equivalent.
+Acceptance: >=19/20 ordinary successes; lower median AND p95 event-to-relay latency
+than the comparable snapshot baseline; zero wrong-person/duplicate activations in
+these prescribed tests. These gates are not promises or proof of general security.
+
+FAILURE REASONS
+local_network_trust_required: explicit camera trust is off.
+reader_unavailable_capacity_or_source_conflict: no configured stream, occupied source,
+  two observation readers already active, or a previous reader is still retiring.
+association_anchor_unavailable / anchor_face_ambiguous_or_low_quality: the triggering
+  person's crop did not provide exactly one usable face within two attempts.
+association_ambiguous / overlap_or_crossing / face_track_changed: subject binding is
+  not unique/stable. Evidence resets; a stronger gallery match does not override it.
+no_usable_face / overcrowded_frame: inspect the actual live input and face size.
+stream_not_ready / stream_generation_changed: decode/timestamp availability changed.
+identity_unconfirmed / liveness_*: existing recognition/liveness checks did not pass.
+evidence_expired / observation_expired: timing budget exhausted; no stale submission.
+clock_changed / camera_configuration_changed / camera_disabled / event_ended /
+transport_disconnected: current authorization prerequisites changed; observation stopped.
+Access1 policy denials (interlock, timetable, user permissions, etc.) remain authoritative.
+
+ROLLBACK
+Select Existing snapshots and save for the affected camera. Existing gallery,
+pairing/mappings and thresholds remain. Alternatively reinstall the previous complete
+operational package while retaining /data. Do not restore diagnostic-only releases
+unless you intentionally want their prior startup behavior. Full HA data backup remains
+the disaster-recovery option; normal rollback does not require deleting data.
+
+
+FaceID 6.6.12-access1.stream3 — מדריך התקנה ובדיקה
+מצב: גרסה משולבת המיועדת לאימות על מערכת הבדיקה. מהירות בשטח טרם הוכחה.
+
+מה השתנה
+אירוע אדם מ־Frigate פותח תצפית. תמונה חתוכה של האדם באירוע יוצרת עוגן שיוך.
+לאחר מכן נבדקות תמונות עוקבות מהזרם החי, ללא המתנה לתמונת אירוע חדשה בכל פעם.
+נדרשות לפחות שלוש תמונות שונות עם אותה זהות ואישור חיוּת. דרישה קיימת מחמירה
+יותר נשמרת. העוגן אינו נחשב דגימת חיוּת. Access1 ממשיך להחליט לפי כל הכללים הקיימים.
+
+התקנה
+1. בצעו גיבוי של התוסף והנתונים ב־Home Assistant. שמרו את החבילה התפעולית הקודמת.
+2. העתיקו את כל source/faceid-addon לתיקיית המקור של התוסף המקומי הקיים.
+   אין למחוק את /data, להתקין מופע נוסף, לבטל צימוד או למחוק שיוכים.
+3. רעננו את מאגר התוספים ובצעו עדכון/בנייה מחדש. ודאו שהגרסה היא
+   6.6.12-access1.stream3 ורעננו את הדפדפן.
+4. ודאו שהגלריה, השיוכים, המצלמות והחיבור ל־Access1 נשמרו.
+
+הפעלת הזרם
+פתחו את FaceID מסרגל הצד של HA כמשתמש מנהל מאומת.
+מצלמות -> Enterance -> מקור תצפית -> Frigate restream.
+סמנו במפורש אמון ברשת הווידאו המקומית ושמרו. ברירת המחדל למצלמות קיימות היא
+תמונות רגילות ללא אמון בזרם. אין שינוי אוטומטי בספי זיהוי/חיוּת או במספר תהליכוני CPU.
+ארבעה תהליכונים הם אפשרות שנמדדה במערכת ארבע הליבות הזאת, לא הבטחת ביצועים.
+אירוע אדם חדש מפעיל תצפית. אין פתיחה אוטומטית רק משום שפנים נראות ללא אירוע.
+
+RTSP ישיר
+בחרו Direct RTSP והזינו כתובת בשדה הסיסמה. נתמכים rtsp:// וכתובת IPv4 פרטית
+בפורט 554 או 8554. אין מעבר אוטומטי בין מקורות. השדה נשמר בשרת ואינו מוחזר
+לממשק. שדה ריק שומר כתובת קיימת. למחיקה: בחרו מקור אחר וסמנו מחיקת כתובת שמורה.
+שינויים במקור, באמון ובכתובת דורשים מנהל HA מאומת דרך Ingress.
+
+משמעות האמון
+נבדק זמן ההגעה המקומי של התמונות, לא זמן צילום מאומת במצלמה. עדיין תיתכן
+השהיה קבועה במצלמה או במעלה הזרם. הצפנת החיבור ל־Access1 אינה מאמתת את הווידאו.
+נשמרים שיוך חד־משמעי לאדם, חיוּת, זהות, מניעת דגימות כפולות וכל החלטות Access1.
+התצפית מוגבלת ל־30 שניות. תמונה חייבת להיות בת עד שנייה מקומית בתחילת העיבוד,
+והראיות חייבות להתאים לחלון של 10 שניות. אירוע חוזר אינו מאריך את החלון.
+חיבור מחדש, חותמות זמן לא תקינות, הצטברות השהיה, חפיפה בין פנים או החלפת זהות
+מאפסים/חוסמים ראיות. אין בחירת אדם אחר רק משום שקיבל ציון התאמה גבוה יותר.
+המגבלה היא שתי מצלמות תצפית וארבעה אירועים לכל מצלמה. אין בחירה שרירותית מתוך
+יותר מארבע פנים שמישות בתמונה.
+
+חלון הבדיקות נשאר
+ציר הזמן התפעולי מציג התחלה, עוגן, שיוך, דגימות, זיהוי ותוצאת Access1.
+התצוגה הפרטית מציגה את העוגן, תמונת הקלט ואת הפנים המשויכות במסגרת ירוקה.
+התמונות בזיכרון בלבד, למנהלים מאומתים, עד שלוש דקות, ואינן מיוצאות בדוח JSON.
+פתיחת החלון או בדיקה ידנית אינן עוצרות פעילות רגילה. תצפית תפעולית יכולה
+להפעיל את ממסר הבדיקה. בדיקות ידניות בחלון אינן שולחות בקשת גישה.
+
+בדיקת קבלה אחת
+השתמשו בממסר המנותק. תעדו גרסה, מקור, CPU ותנאי צילום. מדדו השהיית תמונה
+באמצעות שעון/סימן חזותי מתוזמן מול המצלמה. בצעו 20 גישות רגילות של אדם אחד,
+תעדו הצלחה וסיבה לכל כשל וזמן מאירוע ועד אישור ממסר. ייצאו דוחות ציר זמן.
+בדקו שני אנשים, חצייה/הסתרה, יציאה מוקדמת, חיבור מחדש ואירועים כפולים.
+חזרו בתנאים דומים עם RTSP ישיר ועם תמונות רגילות כבסיס להשוואה.
+יעד: לפחות 19 הצלחות מתוך 20, חציון ו־p95 נמוכים מהבסיס, ואפס הפעלות כפולות
+או של אדם שגוי בבדיקות האלה. אין להוריד ספים כדי לעמוד ביעד.
+אם אין פנים/שיוך, בדקו את הקלט השמור באותה גרסה במקום להחליף שוב גרסה.
+
+חזרה לגרסה הקודמת
+בחרו Existing snapshots ושמרו. לחלופין התקינו את החבילה התפעולית הקודמת
+בלי למחוק /data. אין צורך למחוק גלריה, צימוד או שיוכים.
+פירוט סיבות הכשל, גבולות האמון ורישום הבדיקות נמצא גם במדריך האנגלי ובמסמך המפתחים.
