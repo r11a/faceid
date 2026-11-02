@@ -369,6 +369,30 @@ class WebUIClipTests(unittest.TestCase):
                 client.get("/api/cameras/studio").json()["cameras"][0]["enabled"]
             )
 
+    def test_size_analysis_uses_detection_only_and_returns_matching_preview(self):
+        import base64
+        from contextlib import nullcontext
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = np.full((240, 320, 3), 128, dtype=np.uint8)
+            _, jpeg = cv2.imencode('.jpg', image)
+            engine = SimpleNamespace(detect_faces=Mock(return_value=[]),
+                faces=Mock(side_effect=AssertionError('size test must not recognize')),
+                background_work=nullcontext)
+            processor = SimpleNamespace(audit=None, cameras={'door'}, min_face_px=48,
+                min_face_quality=.35, camera_profiles=SimpleNamespace(all=lambda:{}, get=lambda c:{}),
+                frigate=SimpleNamespace(cameras=lambda:['door'],latest_frame_bytes=lambda c:jpeg.tobytes()))
+            client = TestClient(build_app({'faceid':{}}, engine, FakeGallery(), processor,
+                Path(tmp), Path(__file__).parents[1]/'static'))
+            response = client.get('/api/cameras/door/analyze?include_preview=true')
+            self.assertEqual(response.status_code,200)
+            result=response.json()
+            self.assertEqual(base64.b64decode(result['preview'].split(',')[1]),jpeg.tobytes())
+            self.assertEqual((result['width'],result['height']),(320,240))
+            engine.detect_faces.assert_called_once()
+            engine.faces.assert_not_called()
+            self.assertIn('no-store',response.headers['cache-control'])
+
     def test_liveness_capture_returns_exact_temporary_preview_and_guidance(self):
         with tempfile.TemporaryDirectory() as tmp:
             image = np.full((240, 320, 3), 128, dtype=np.uint8)

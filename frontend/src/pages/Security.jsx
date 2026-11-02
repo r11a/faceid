@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, Camera, Check, CircleDot, DoorOpen, Eye, EyeOff, ImageOff,
   KeyRound, LockKeyhole, Play, RefreshCw, Save, ScanFace, ShieldCheck, SlidersHorizontal,
@@ -46,19 +46,64 @@ function CameraSamplingStatus({ camera }) {
   </div>;
 }
 
-function LiveFrame({ camera, refreshKey = 0, analyze }) {
+export function LiveFrame({ camera, refreshKey = 0, controls = false }) {
   const [failed, setFailed] = useState(false);
-  const frameUrl = useMemo(() => assetUrl(`api/cameras/${encodeURIComponent(camera)}/frame?_=${Date.now()}-${refreshKey}`), [camera, refreshKey]);
-  useEffect(() => setFailed(false), [camera, refreshKey]);
-  return <div className="live-frame">{failed ? <div className="frame-error"><ImageOff /><b>אין תמונה זמינה</b><span>בדוק את חיבור Frigate ואת שם המצלמה</span></div> : <img src={frameUrl} decoding="async" onError={() => setFailed(true)} alt={`תמונה ממצלמת ${camera}`} />}{analyze?.faces?.map((face, index) => { const [x1, y1, x2, y2] = face.box; return <span className={`face-box ${face.usable ? "good" : "bad"}`} key={index} style={{ left: `${x1 / analyze.width * 100}%`, top: `${y1 / analyze.height * 100}%`, width: `${(x2 - x1) / analyze.width * 100}%`, height: `${(y2 - y1) / analyze.height * 100}%` }}><b>{Math.round(face.face_px)}px</b></span>; })}</div>;
+  const [tick, setTick] = useState(0);
+  const [measuring, setMeasuring] = useState(false);
+  const [analysis, setAnalysis] = useState(null);
+  const [error, setError] = useState(null);
+  const [ratio, setRatio] = useState(16 / 9);
+  const timer = useRef(null);
+  const wasMeasuring = useRef(false);
+  const frameUrl = useMemo(() => assetUrl(`api/cameras/${encodeURIComponent(camera)}/frame?_=${Date.now()}-${refreshKey}-${tick}`), [camera, refreshKey, tick]);
+  const hidden = () => typeof document !== "undefined" && document.hidden;
+  const queueFrame = (delay = 500) => {
+    clearTimeout(timer.current);
+    if (!controls || measuring) return;
+    timer.current = setTimeout(() => hidden() ? queueFrame() : setTick(value => value + 1), delay);
+  };
+  useEffect(() => {
+    if (wasMeasuring.current && !measuring) setTick(value => value + 1);
+    wasMeasuring.current = measuring;
+    setFailed(false); setAnalysis(null); setError(null); setRatio(16 / 9);
+    return () => clearTimeout(timer.current);
+  }, [camera, refreshKey, measuring]);
+  useEffect(() => {
+    if (!measuring) return;
+    let stopped = false, next;
+    const controller = new AbortController();
+    const sample = async () => {
+      if (hidden()) { next = setTimeout(sample, 500); return; }
+      const start = Date.now();
+      try {
+        const result = await api(`cameras/${encodeURIComponent(camera)}/analyze?include_preview=true`, { signal: controller.signal });
+        if (stopped) return;
+        setAnalysis({ ...result, elapsed: Date.now() - start }); setError(null);
+      } catch (failure) {
+        if (stopped) return;
+        setAnalysis(null); setError(failure.message);
+      }
+      if (!stopped) next = setTimeout(sample, 250);
+    };
+    sample();
+    return () => { stopped = true; clearTimeout(next); controller.abort(); };
+  }, [camera, refreshKey, measuring]);
+  const result = measuring ? analysis : null;
+  return <div className="camera-calibration">
+    {controls && <div className="calibration-toolbar"><button className={`button ${measuring ? "secondary" : "primary"}`} onClick={() => setMeasuring(value => !value)}><ScanFace />{measuring ? "עצירת מדידת פנים" : "מדידת פנים מתעדכנת"}</button><span role="status">{measuring ? error ? `הבדיקה נכשלה: ${error}` : result ? `גודל פנים · סף ${result.min_face_px}px · בדיקה ${result.elapsed}ms` : "מודד פנים…" : "תמונות מתעדכנות · הפעל מדידה להצגת גודל הפנים"}</span></div>}
+    <div className="live-frame" style={{ aspectRatio: result ? `${result.width} / ${result.height}` : ratio }}>
+      <img src={result?.preview || frameUrl} decoding="async" onLoad={event => { setFailed(false); if (!measuring) { const image = event.currentTarget; if (image?.naturalWidth) setRatio(image.naturalWidth / image.naturalHeight); queueFrame(); } }} onError={() => { setFailed(true); queueFrame(2000); }} alt={`תמונה ממצלמת ${camera}`} />
+      {failed && !result && <div className="frame-error"><ImageOff /><b>אין תמונה זמינה</b><span>מנסה לקבל תמונה חדשה</span></div>}
+      {result?.faces?.map((face, index) => { const [x1, y1, x2, y2] = face.box; return <span className={`face-box ${face.usable ? "good" : "bad"}`} key={index} style={{ left: `${x1 / result.width * 100}%`, top: `${y1 / result.height * 100}%`, width: `${(x2 - x1) / result.width * 100}%`, height: `${(y2 - y1) / result.height * 100}%` }}><b>{Math.round(face.face_px)} px</b></span>; })}
+    </div>
+    {result && <div className="analysis-strip" role="status"><strong>{result.width}×{result.height} · {result.faces?.length || 0} פנים</strong>{!result.faces?.length && <span>לא נמצאו פנים — הסתכל אל המצלמה</span>}{result.faces?.map((face, index) => <Badge key={index} tone={face.usable ? "success" : "warning"}>פנים {index + 1}: {Math.round(face.face_px)}px · הסף {result.min_face_px}px{face.rejection_reason ? ` · ${rejectionLabels[face.rejection_reason]}` : " · גודל ואיכות מתאימים"}</Badge>)}</div>}
+  </div>;
 }
 
 export function CamerasPage() {
   const studio = useResource("cameras/studio?days=7");
   const [selected, setSelected] = useState(null);
   const [refresh, setRefresh] = useState(0);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState(null);
   const toast = useToast();
   useEffect(() => { if (!selected && studio.data?.cameras?.length) setSelected(studio.data.cameras[0].camera); }, [studio.data, selected]);
   const current = studio.data?.cameras?.find((item) => item.camera === selected);
@@ -66,19 +111,13 @@ export function CamerasPage() {
     try { await api(`cameras/${encodeURIComponent(camera)}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) }); toast(enabled ? "המצלמה חוברה לזיהוי" : "המצלמה הוצאה מעיבוד FaceID"); studio.reload(); }
     catch (error) { toast(error.message, "error"); }
   };
-  const analyze = async () => {
-    setAnalyzing(true); setAnalysis(null);
-    try { setAnalysis(await api(`cameras/${encodeURIComponent(selected)}/analyze`)); setRefresh((value) => value + 1); }
-    catch (error) { toast(error.message, "error"); }
-    finally { setAnalyzing(false); }
-  };
   if (studio.loading) return <Loading text="טוען מצלמות מ־Frigate…" />;
   if (studio.error) return <ErrorState error={studio.error} retry={studio.reload} />;
   return <>
     <PageHeader eyebrow="מצלמות" title="מצלמות" description="תמונה חיה והגדרות זיהוי לכל מצלמה." />
     <div className="camera-workspace">
-      <Panel className="camera-list"><div className="panel-heading"><div><span className="eyebrow">מקורות</span><h2>{studio.data?.cameras?.length || 0} מצלמות</h2></div></div>{(studio.data?.cameras || []).map((camera) => <button className={selected === camera.camera ? "active" : ""} onClick={() => { setSelected(camera.camera); setAnalysis(null); }} key={camera.camera}><span className={`camera-state ${camera.enabled ? "on" : "off"}`}><Camera /></span><span><b>{camera.camera}</b><small>{modeLabels[camera.mode] || camera.mode} · מינימום {camera.min_face_px}px</small></span><Badge tone={camera.enabled ? "success" : "neutral"}>{camera.enabled ? "פעילה" : "מושבתת"}</Badge></button>)}</Panel>
-      {current ? <Panel className="camera-stage"><div className="panel-heading"><div><span className="eyebrow">תצוגה חיה</span><h2>{current.camera}</h2></div><div><button className="button secondary" onClick={() => setRefresh((value) => value + 1)}><RefreshCw />רענון</button><button className="button primary" disabled={analyzing} onClick={analyze}><ScanFace />{analyzing ? "בודק…" : "בדיקת פנים בתמונה"}</button></div></div><LiveFrame camera={current.camera} refreshKey={`${refresh}-${current.high_resolution}-${current.recognition_mode}`} analyze={analysis} />{analysis && <div className="analysis-strip"><strong>{analysis.width}×{analysis.height} · {analysis.faces?.length || 0} פנים נמצאו</strong>{analysis.faces?.map((face, index) => <Badge key={index} tone={face.usable ? "success" : "warning"}>פנים {index + 1}: {Math.round(face.face_px)}px · איכות {percent(face.score)}{face.rejection_reason ? ` · ${rejectionLabels[face.rejection_reason]}` : ""}</Badge>)}</div>}<CameraSamplingStatus camera={current} /><CameraSettings camera={current} onSaved={studio.reload} onToggle={toggle} /></Panel> : <Empty icon={Camera} title="אין מצלמות" text="FaceID לא קיבל כרגע רשימת מצלמות מ־Frigate." />}
+      <Panel className="camera-list"><div className="panel-heading"><div><span className="eyebrow">מקורות</span><h2>{studio.data?.cameras?.length || 0} מצלמות</h2></div></div>{(studio.data?.cameras || []).map((camera) => <button className={selected === camera.camera ? "active" : ""} onClick={() => { setSelected(camera.camera); }} key={camera.camera}><span className={`camera-state ${camera.enabled ? "on" : "off"}`}><Camera /></span><span><b>{camera.camera}</b><small>{modeLabels[camera.mode] || camera.mode} · מינימום {camera.min_face_px}px</small></span><Badge tone={camera.enabled ? "success" : "neutral"}>{camera.enabled ? "פעילה" : "מושבתת"}</Badge></button>)}</Panel>
+      {current ? <Panel className="camera-stage"><div className="panel-heading"><div><span className="eyebrow">תצוגה חיה</span><h2>{current.camera}</h2></div><div><button className="button secondary" onClick={() => setRefresh((value) => value + 1)}><RefreshCw />רענון</button></div></div><LiveFrame camera={current.camera} controls refreshKey={`${refresh}-${current.high_resolution}-${current.recognition_mode}`} /><CameraSamplingStatus camera={current} /><CameraSettings camera={current} onSaved={studio.reload} onToggle={toggle} /></Panel> : <Empty icon={Camera} title="אין מצלמות" text="FaceID לא קיבל כרגע רשימת מצלמות מ־Frigate." />}
     </div>
   </>;
 }
@@ -163,7 +202,7 @@ export function IntercomPage() {
   return <>
     <PageHeader eyebrow="כניסה" title="כניסה ואינטרקום" description="צילום עדכני ובדיקת זיהוי. הרשאות כניסה מנוהלות ב־Access1." />
     <Panel className="intercom-selector"><label>מצלמת אינטרקום<select value={camera} onChange={(e) => { setCamera(e.target.value); setResult(null); }}>{candidates.map((item) => <option value={item.camera} key={item.camera}>{item.camera}{item.mode === "intercom" ? " · מוגדרת כאינטרקום" : ""}</option>)}</select></label>{profile?.mode !== "intercom" && <button className="button secondary" onClick={markIntercom}><DoorOpen />הגדר מצלמה זו כאינטרקום</button>}<button className="button primary" disabled={!camera || testing} onClick={test}><ScanFace />{testing ? "מצלם ובודק מספר תמונות…" : "בדיקה חיה עכשיו"}</button></Panel>
-    {camera && <div className="intercom-grid"><Panel className="intercom-preview"><div className="panel-heading"><div><span className="eyebrow">צילום עדכני</span><h2>{camera}</h2></div></div>{result?.preview_url ? <div className="capture-preview"><img src={previewUrl} decoding="async" alt="צילום בדיקת אינטרקום" />{result.best && <span className={`face-box ${result.best.usable ? "good" : "bad"}`} style={{ left: `${result.best.box[0] / result.width * 100}%`, top: `${result.best.box[1] / result.height * 100}%`, width: `${(result.best.box[2] - result.best.box[0]) / result.width * 100}%`, height: `${(result.best.box[3] - result.best.box[1]) / result.height * 100}%` }}><b>{Math.round(result.best.face_px)}px</b></span>}</div> : <LiveFrame camera={camera} />}</Panel><Panel className="intercom-result"><div className="panel-heading"><div><span className="eyebrow">תוצאת בדיקה</span><h2>{result ? result.message : "מוכן לבדיקה"}</h2></div>{result && <Badge tone={result.state === "excellent" ? "success" : ["spoof", "no_face"].includes(result.state) ? "danger" : "warning"}>{result.state === "excellent" ? "מצוין" : result.state === "acceptable" ? "מתאים" : result.state === "spoof" ? "נחסם" : "אפשר לשפר"}</Badge>}</div>{result ? <><div className="metrics-grid compact"><Metric label="גודל פנים" value={result.best ? `${Math.round(result.best.face_px)}px` : "—"} note={`הסף: ${result.profile?.min_face_px || 0}px`} /><Metric label="התאמה" value={percent(result.best?.match_score)} tone="turquoise" /><Metric label="חיוּת" value={result.liveness?.confirmed ? "עברה" : result.liveness?.state === "spoof" ? "חשד לזיוף" : "לא אומתה"} tone={result.liveness?.confirmed ? "green" : "red"} /></div><div className="guidance"><h3>מה אפשר לשפר?</h3>{(result.guidance || []).map((item) => <div key={item}><Check />{item}</div>)}{!result.guidance?.length && <div><Check />התמונה ברורה ומתאימה לזיהוי</div>}</div><div className="safety-note"><LockKeyhole /><span><b>מדיניות פתיחה בטוחה</b>נדרש גורם שני בנוסף לפנים. חיוּת RGB מצמצמת זיופים אך אינה תחליף לחיישן עומק או IR.</span></div></> : <Empty icon={ScanFace} title="עמוד מול המצלמה" text="לחץ על “בדיקה חיה עכשיו”. המערכת תציג את התמונה, מסגרת הפנים, מספר הפיקסלים וציון ברור." />}</Panel></div>}
+    {camera && <div className="intercom-grid"><Panel className="intercom-preview"><div className="panel-heading"><div><span className="eyebrow">צילום עדכני</span><h2>{camera}</h2></div>{result?.preview_url && <button className="button secondary" onClick={() => setResult(null)}>חזרה לתמונה מתעדכנת</button>}</div>{result?.preview_url ? <div className="capture-preview" style={{aspectRatio: `${result.width} / ${result.height}`}}><img src={previewUrl} decoding="async" alt="צילום בדיקת אינטרקום" />{result.best && <span className={`face-box ${result.best.usable ? "good" : "bad"}`} style={{ left: `${result.best.box[0] / result.width * 100}%`, top: `${result.best.box[1] / result.height * 100}%`, width: `${(result.best.box[2] - result.best.box[0]) / result.width * 100}%`, height: `${(result.best.box[3] - result.best.box[1]) / result.height * 100}%` }}><b>{Math.round(result.best.face_px)}px</b></span>}</div> : <LiveFrame camera={camera} controls />}</Panel><Panel className="intercom-result"><div className="panel-heading"><div><span className="eyebrow">תוצאת בדיקה</span><h2>{result ? result.message : "מוכן לבדיקה"}</h2></div>{result && <Badge tone={result.state === "excellent" ? "success" : ["spoof", "no_face"].includes(result.state) ? "danger" : "warning"}>{result.state === "excellent" ? "מצוין" : result.state === "acceptable" ? "מתאים" : result.state === "spoof" ? "נחסם" : "אפשר לשפר"}</Badge>}</div>{result ? <><div className="metrics-grid compact"><Metric label="גודל פנים" value={result.best ? `${Math.round(result.best.face_px)}px` : "—"} note={`הסף: ${result.profile?.min_face_px || 0}px`} /><Metric label="התאמה" value={percent(result.best?.match_score)} tone="turquoise" /><Metric label="חיוּת" value={result.liveness?.confirmed ? "עברה" : result.liveness?.state === "spoof" ? "חשד לזיוף" : "לא אומתה"} tone={result.liveness?.confirmed ? "green" : "red"} /></div><div className="guidance"><h3>מה אפשר לשפר?</h3>{(result.guidance || []).map((item) => <div key={item}><Check />{item}</div>)}{!result.guidance?.length && <div><Check />התמונה ברורה ומתאימה לזיהוי</div>}</div><div className="safety-note"><LockKeyhole /><span><b>מדיניות פתיחה בטוחה</b>נדרש גורם שני בנוסף לפנים. חיוּת RGB מצמצמת זיופים אך אינה תחליף לחיישן עומק או IR.</span></div></> : <Empty icon={ScanFace} title="עמוד מול המצלמה" text="לחץ על “בדיקה חיה עכשיו”. המערכת תציג את התמונה, מסגרת הפנים, מספר הפיקסלים וציון ברור." />}</Panel></div>}
   </>;
 }
 

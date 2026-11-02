@@ -1,3 +1,8 @@
+## 6.7.1 — 2026-11-02
+- Add opt-in continuously refreshed face-size measurements for the selected camera, using detection only and the exact measured image.
+- Refresh selected-camera previews after each image completes; serialize requests, cancel obsolete results, pause hidden-page sampling and retry unavailable frames.
+- Fix dark unreadable pixel labels and align overlays with the source image aspect ratio. Keep full intercom capture as an explicit separate check.
+
 ## 6.7.0 — 2026-11-02
 - Publish the integrated stream3 handoff under a distinct version for Home Assistant update detection.
 
