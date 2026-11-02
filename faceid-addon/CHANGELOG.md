@@ -1,3 +1,6 @@
+## 6.7.0 — 2026-11-02
+- Publish the integrated stream3 handoff under a distinct version for Home Assistant update detection.
+
 ## 6.6.12 — 2026-11-02
 - Integrate the access1.stream3 developer handoff: bounded event-triggered stream observations, decoder clock validation, and final delivery proof checks.
 - Add administrator acquisition, preview, crop and timing diagnostics with redacted exports.
