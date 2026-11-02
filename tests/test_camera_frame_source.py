@@ -1,4 +1,5 @@
 import unittest
+from contextlib import nullcontext
 import tempfile
 import threading
 from pathlib import Path
@@ -26,7 +27,7 @@ class CameraFrameSourceTests(unittest.TestCase):
             processor = SimpleNamespace(frigate=frigate, cameras={'office'}, audit=None,
                 camera_profiles=SimpleNamespace(get=lambda camera: profile, all=lambda: {'office': profile}), min_face_px=48, min_face_quality=.35)
             gallery = SimpleNamespace()
-            app = build_app({'faceid': {'auth': {}}}, SimpleNamespace(faces=lambda image: []),
+            app = build_app({'faceid': {'auth': {}}}, SimpleNamespace(detect_faces=lambda image: [], background_work=nullcontext),
                             gallery, processor, Path(folder), Path(__file__).parents[1] / 'static')
             client = TestClient(app)
             preview = client.get('/api/cameras/office/frame')
