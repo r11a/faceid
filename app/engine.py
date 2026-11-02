@@ -65,6 +65,7 @@ class InferenceLock:
 
 
 class FaceEngine:
+    supports_embedding_timing = True
     def __init__(self, det_size: int = 640, providers=None, backend: str = "auto",
                  cpu_threads: int = 0, cpu_allow_spinning: bool = True):
         from insightface.app import FaceAnalysis
@@ -126,6 +127,41 @@ class FaceEngine:
         self._inference_ms = deque(maxlen=256)
         self._inference_calls = 0
         self._inference_failures = 0
+        self._embedding_wait_ms = deque(maxlen=256)
+        self._embedding_compute_ms = deque(maxlen=256)
+        self._embedding_failures = 0
+        self._embedding_calls = 0
+        self.embedding_warmup = {"state": "not_started", "elapsed_ms": None}
+        self._prepare_embedding()
+
+    def _prepare_embedding(self):
+        """One CPU inference before event processing; never creates face evidence."""
+        if self.providers != ["CPUExecutionProvider"]:
+            self.embedding_warmup = {"state": "skipped_accelerated", "elapsed_ms": None}
+            return
+        model = self.app.models.get("recognition")
+        size = getattr(model, "input_size", None)
+        if (not callable(getattr(model, "get_feat", None)) or
+                not isinstance(size, (list, tuple)) or len(size) != 2 or
+                any(type(value) is not int or not 1 <= value <= 512 for value in size)):
+            self.embedding_warmup = {"state": "unsupported", "elapsed_ms": None}
+            return
+        started = time.perf_counter()
+        state = "ready"
+        try:
+            with self._lock:
+                # Same installed model/preprocessing. This local synthetic array
+                # is not attached to any event, gallery, identity or liveness state.
+                output = np.asarray(model.get_feat(np.zeros((size[1], size[0], 3), dtype=np.uint8)))
+                if output.size == 0 or not np.all(np.isfinite(output)):
+                    raise ValueError("invalid warmup output")
+        except Exception:
+            state = "failed"
+            log.warning("embedding startup warmup failed; normal inference checks remain required")
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        self.embedding_warmup = {"state": state, "elapsed_ms": round(elapsed_ms, 3)}
+        log.info("embedding startup warmup state=%s elapsed_ms=%.1f", state, elapsed_ms)
+
     @staticmethod
     def providers_for_backend(backend: str, available: list[str]):
         backend = str(backend or "auto").lower()
@@ -173,7 +209,21 @@ class FaceEngine:
             "models": {task: {**model, "providers": list(model["providers"])}
                        for task, model in self.models.items()},
             "inference": inference,
+            "embedding": self._embedding_health(),
         }
+
+    def _embedding_health(self):
+        with self._metrics_lock:
+            waits = list(self._embedding_wait_ms)
+            computes = list(self._embedding_compute_ms)
+            result = {"calls": self._embedding_calls, "failures": self._embedding_failures,
+                      "samples": len(computes), "warmup": dict(self.embedding_warmup)}
+        for name, samples in (("scheduler_wait", waits), ("compute", computes)):
+            result[name] = {
+                "p50_ms": round(float(np.percentile(samples, 50)), 3) if samples else None,
+                "p95_ms": round(float(np.percentile(samples, 95)), 3) if samples else None,
+            }
+        return result
 
     def live_work(self):
         return self._lock.live_work()
@@ -181,6 +231,14 @@ class FaceEngine:
     def model_work(self):
         # Liveness shares the same scheduler as detection/embedding.
         return self._lock
+
+    def detect_frame_record(self, reader):
+        """Take latest input only after obtaining the existing inference scheduler."""
+        with self._lock:
+            record=reader.frame_record()
+            if record is None or not 0 <= time.monotonic()-record['arrived'] <= 1:
+                return None, []
+            return record,self._detect_faces(record['image'])
 
     def detect_faces(self, bgr: np.ndarray):
         return self.faces(bgr, recognize=False)
@@ -194,11 +252,36 @@ class FaceEngine:
                      kps=None if kpss is None else kpss[i])
                 for i in range(bboxes.shape[0])]
 
-    def embed_face(self, bgr: np.ndarray, face):
+    def embed_face(self, bgr: np.ndarray, face, *, timings=None):
+        if timings is not None:
+            timings.clear()
         if getattr(face, "embedding", None) is not None:
             return face
+        queued = time.perf_counter()
         with self._lock:
-            self.app.models["recognition"].get(bgr, face)
+            started = time.perf_counter()
+            wait = started - queued
+            if timings is not None:
+                timings["embedding_scheduler_wait"] = wait
+            # A concurrent caller may have populated this exact face object
+            # while we waited. Do not calculate the same embedding twice.
+            if getattr(face, "embedding", None) is not None:
+                return face
+            failed = False
+            try:
+                self.app.models["recognition"].get(bgr, face)
+            except Exception:
+                failed = True
+                raise
+            finally:
+                compute = time.perf_counter() - started
+                if timings is not None:
+                    timings["embedding_compute"] = compute
+                with self._metrics_lock:
+                    self._embedding_calls += 1
+                    self._embedding_failures += int(failed)
+                    self._embedding_wait_ms.append(wait * 1000)
+                    self._embedding_compute_ms.append(compute * 1000)
         return face
 
     def faces(self, bgr: np.ndarray, *, recognize: bool = True):

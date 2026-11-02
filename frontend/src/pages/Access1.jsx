@@ -127,10 +127,11 @@ export function Access1Page() {
       <Badge tone={connected?'success':'warning'}>
         {connected?tr('Connected','מחובר'):step==='review'?tr('Waiting for Access1 approval','ממתין לאישור Access1'):connection.loading?tr('Checking connection…','בודק חיבור…'):status.data.enabled?tr('Connection unavailable','החיבור אינו זמין'):tr('Setup','הגדרה')}
       </Badge>
-      {secure && status.data.camera_evidence_ready === false && <p>{tr(
+      {secure && status.data.camera_evidence_ready === false && !status.data.local_stream_cameras?.length && <p>{tr(
         "Access requests stay blocked until Frigate provides authenticated images over verified HTTPS, with confirmed liveness.",
         "בקשות גישה חסומות עד לקבלת תמונות מ־Frigate בחיבור HTTPS מאומת ומזוהה, עם חיוּת מאושרת."
       )}</p>}
+      {!!status.data.local_stream_cameras?.length && <p role="note">{tr('Local-network stream evidence: bounded local delivery, not verified camera capture time. Access1 TLS authenticates the connector only.','ראיות זרם ברשת מקומית: הגעה מקומית מוגבלת בזמן, לא זמן צילום מאומת. TLS של Access1 מאמת רק את המחבר.')}</p>}
       <p>{tr("Instance ID","מזהה התקנה")}</p>
       <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
         <code style={{overflowWrap:'anywhere'}}>{status.data.instance_id}</code>
@@ -162,12 +163,12 @@ export function Access1Page() {
       <h2>{tr('Connector settings','הגדרות מחבר')}</h2>
       <button type="button" role="switch" aria-label="Secure" aria-checked={secure} disabled={busy}
         className="button secondary" onClick={changeSecurity}>Secure: {secure?'ON':'OFF'}</button>
-      <p>{tr('Requires verified Frigate HTTPS for access submissions. This switch does not change either TLS connection or Frigate settings.',
-        'דורש HTTPS מאומת של Frigate לשליחת בקשות גישה. המתג אינו משנה את חיבורי TLS או את הגדרות Frigate.')}</p>
+      <p>{tr('Snapshot mode requires verified Frigate HTTPS for access submissions. This switch does not change either TLS connection or Frigate settings.',
+        'במצב תמונות נדרש HTTPS מאומת של Frigate לשליחת בקשות גישה. המתג אינו משנה את חיבורי TLS או את הגדרות Frigate.')}</p>
       {!secure&&<p role="note">{tr('Secure is OFF: Frigate certificate verification is not required by this connector. Only use camera evidence from a network you trust.',
         'Secure כבוי: המחבר אינו דורש אימות תעודת Frigate. השתמשו רק בנתוני מצלמה מרשת מהימנה.')}</p>}
       {securityError&&<p role="alert">{securityError}</p>}
-      <p>{tr('Camera transport requirements: ','דרישות חיבור מצלמה: ')}{status.data.camera_submission_ready?tr('Met — each event still needs freshness and liveness checks.','תקינות — כל אירוע עדיין דורש בדיקות עדכניות וחיוּת.'):tr('Not met. HTTPS and an authenticated Frigate account are still required.','לא תקינות. HTTPS וחשבון Frigate מאומת עדיין נדרשים.')}</p>
+      <p>{tr('Snapshot transport requirements: ','דרישות חיבור במצב תמונות: ')}{status.data.camera_submission_ready?tr('Met — each event still needs freshness and liveness checks.','תקינות — כל אירוע עדיין דורש בדיקות עדכניות וחיוּת.'):tr('Not met. HTTPS and an authenticated Frigate account are still required.','לא תקינות. HTTPS וחשבון Frigate מאומת עדיין נדרשים.')}</p>
       {status.data.last_submission&&<p>{tr('Last connector result: ','תוצאת מחבר אחרונה: ')}{status.data.last_submission.state} · {reasons[status.data.last_submission.reason]||status.data.last_submission.reason||status.data.last_submission.request_id}</p>}
     </Panel>
     <Panel><h2>{tr("Access1 results","תוצאות Access1")}</h2>{(status.data.attempts||[]).map(attempt=><div key={attempt.request_id} style={{padding:8}}>

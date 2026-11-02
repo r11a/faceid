@@ -7,6 +7,18 @@ from app.camera_profiles import CameraProfiles
 
 
 class CameraProfilesTests(unittest.TestCase):
+    def test_stream_profiles_report_and_save_event_mode(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'camera_profiles.json'
+            profiles = CameraProfiles(path)
+            for source in ('frigate_restream', 'direct_rtsp'):
+                path.write_text(json.dumps({'door': {'observation_source': source,
+                    'recognition_mode': 'continuous', 'direct_rtsp_url': 'rtsp://10.0.0.1/live'}}))
+                self.assertEqual(profiles.get('door')['recognition_mode'], 'event')
+                result = profiles.update('door', min_face_px=80, role='entry', recognition_mode='presence')
+                self.assertEqual(result['recognition_mode'], 'event')
+                self.assertEqual(profiles.all()['door']['recognition_mode'], 'event')
+
     def test_old_or_invalid_profiles_use_event_mode_and_safe_timing(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "camera_profiles.json"

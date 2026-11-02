@@ -1,3 +1,174 @@
+## 6.6.12 — 2026-11-02
+- Integrate the access1.stream3 developer handoff: bounded event-triggered stream observations, decoder clock validation, and final delivery proof checks.
+- Add administrator acquisition, preview, crop and timing diagnostics with redacted exports.
+- Fix RTSP observation conflicts with continuous snapshot readers; stream sources explicitly use event mode. Existing snapshot modes remain available.
+- Preserve installed CPU/model settings, identity and liveness thresholds, and existing latest-event popups.
+- Keep late Access1 receipts from replacing a newer attempt even when submissions share a clock tick.
+- Fix Linux startup script packaging and synchronize versioned frontend/Ingress assets.
+- Physical camera/Access1 commissioning is still required; no field latency guarantee.
+
+DEVELOPER HANDOFF — 6.6.12-access1.stream3
+Status: implementation available; operational camera acceptance remains pending.
+Do not present this as field-proven faster or a finished security certification.
+
+OBSERVED FIELD FAILURE
+Snapshots completed recognition + Access1 in about 11.2 s. Restream packet test
+showed 25 fps; operational reader churned generations, zero evidence samples.
+The report did not expose decoder clock values/reasons, so exact field cause
+cannot be conclusively attributed from that report alone.
+
+FOCUSED CORRECTIONS
+Shared decoder_position_ms uses native FFmpeg CAP_PROP_PTS in FPS time base when
+available; older builds retain POS_MSEC. Finite arbitrary/negative/zero timestamp
+origins are supported. Internal records normalize the origin, never arrival time.
+Repeated/backward/jumping timestamps, startup drain, local age and 750ms relative
+buffering growth still block evidence. Generation changes still clear history.
+Reader reports now expose categorical rejection counters and generation. Rejection
+logs are rate limited to once per five seconds; event lifecycle stages are logged.
+Observation-only readers drain without JPEG encoding. Existing regular JPEG consumers
+retain encoding. Production and manual decode diagnostics share timestamp extraction.
+No video-source fallback, liveness reduction, model or CPU setting change.
+
+MULTI-PERSON BEHAVIOR
+Anchor must contain exactly one usable face. Live candidates match that anchor and
+conservative tracks with mutual unique matching, .65 threshold/.08 margin. Detector
+order cannot select another person. Competing events cannot share one track;
+subject departure, crossings/overlap, ambiguous matching and identity changes reset
+evidence. More than four usable faces rejects the frame. No accumulated liveness
+transfers to a bystander. Synthetic regression tests are not field accuracy proof.
+
+PROCESSOR AND CORAL
+Measured embedding 1.35-1.49 seconds per face is CPU inference, not model queue wait.
+Detection was roughly .5 seconds. Multiple usable faces multiply embedding work;
+no fixed low latency is promised. Measure CPU quota, affinity, thread settings and
+actual provider on the stronger rig using retained benchmarks. Existing models run
+ONNX Runtime CPU; Coral USB Edge TPU needs compatible compiled TensorFlow Lite
+models and is not a drop-in accelerator. Model conversion/replacement is separate
+work requiring recognition/PAD validation; leave Coral/Frigate configuration intact.
+Sources: https://docs.opencv.org/4.13.0/d4/d15/group__videoio__flags__base.html
+https://gweb-coral-full.uc.r.appspot.com/docs/edgetpu/inference/
+
+NEXT ACCEPTANCE ON CAMERA RIG
+Install complete source/faceid-addon; preserve /data/gallery/pairing/mappings.
+Select restream + trust, recognition by event. Record startup/provider/CPU settings.
+First verify native PTS progresses, reader generation stabilizes and stream_ready
+appears. Then anchor, association, three samples, recognition and Access1 final
+result. If not, export operational report including reader rejection counters and
+logs; do not lower thresholds. Compare same scenes on direct RTSP and snapshots.
+Test two different enrolled people in both detection orders, bystander appearance,
+subject departure, overlap/crossings, duplicate/competing events, reconnect, and
+repeated approaches. Use 20 approaches per baseline/source and median/p95, success,
+wrong-person and duplicate counts. Zero wrong-person/duplicate activation required.
+No real camera/HA/Access1/relay endpoint was contacted during offline development.
+
+STARTUP CORRECTION — 6.6.12-access1.stream3
+The prior package contained CRLF line endings in faceid-addon/run.sh. Linux passed
+bashio plus a carriage return as the interpreter name, preventing startup.
+The script now uses LF. Docker also normalizes CRLF and checks bash syntax during
+build. A regression checks the source shebang, and an offline normal-entrypoint
+smoke runs s6 -> run.sh -> real bashio -> stubbed final application launch.
+Only the final Python application command is stubbed; no camera or Access1 runs.
+Recognition logic and model settings are unchanged. Version/cache markers updated.
+Install the COMPLETE source/faceid-addon over the existing local add-on source;
+refresh the repository and rebuild/update to 6.6.12-access1.stream3. Restart alone
+will not replace a previously built image. Preserve /data, pairing and mappings.
+Expected startup line: Starting FaceID..., followed by normal model-loading logs.
+The earlier image parity/model checks did not exercise the normal container startup
+chain. This missing test is now covered. Rig commissioning remains pending.
+
+## 6.6.12-access1.stream3 — 2026-10-31
+- Integrate event-anchored restream/direct RTSP observation with existing Access1 handling.
+- Preserve snapshot defaults and require explicit per-camera local-network trust.
+- Enforce same-subject minimum-three liveness evidence, bounded timing and cancellation.
+- Retain operational diagnostics, private input previews and credential-safe configuration.
+- Preserve models, thresholds, saved mappings, connector policies and dependency versions.
+- Rig commissioning pending; no field-speed or general security guarantee.
+
+## 6.6.11-access1.test1 — 2026-10-30
+- Restore operational startup according to saved settings (no forced setting changes).
+- Allow isolated administrator diagnostics alongside live recognition; never pause cameras.
+- Reject invalid PTS and stale decoded samples before expensive diagnostic inference.
+- Remove redundant diagnostic post-processing sleep; retain minimum cadence.
+- Export actual backend version rather than a cached page's release label.
+- Keep preview/startup/crop/direct-RTSP/CPU benchmarks and all access safeguards.
+- No RTSP evidence is promoted into production authorization; no liveness reduction.
+
+# 6.6.10-access1.diag5 — Startup preview observation
+
+- Inspect successive frames for12 seconds instead of accepting the first buffer.
+- Four-image private startup sequence; explicit low-detail/inconclusive warnings.
+- Image detail and timestamp issues reported separately; neither grants admission.
+- Preserve existing recognition, liveness, Access1 and diagnostic-only isolation.
+
+# 6.6.9-access1.diag4 — private preview, crop comparison and bounded benchmarks
+
+- Diagnostic-only runtime retained; no recognition workers or Access1 startup.
+- Private owner-scoped previews of camera and detector inputs; RAM-only expiry.
+- Same-frame pre-detection crop comparison; map face coordinates back to original
+  image before unchanged quality, liveness and identity checks. Preserve ambiguity.
+- Separate empty-frame search budget from 24 single-face sample budget; stop reasons.
+- Sequential temporary 2/4-thread CPU sessions with wall/CPU/memory/run limits and
+  numerical equivalence check. Installed settings and model sessions unchanged.
+- Preserve direct RTSP packet testing; refresh bilingual guide and stale UI copy.
+
+## 6.6.8-access1.diag3 — 2026-10-30
+
+- Diagnostic-only startup: automatic recognition and Access1 remain stopped; saved configuration unchanged.
+- Add latest-frame restream decoding, three-trial quality/liveness/identity timing and explicit rejection reasons.
+- Reuse installed models and policy helpers; retain all packet/direct RTSP diagnostics.
+- No production admission from diagnostic frames. Includes bilingual testing and rollback guide.
+
+## 6.6.7-access1.diag2 — 2026-10-30
+
+- Add bounded 30-second Frigate restream clock/buffering diagnostic.
+- Fix signed RTP timestamp calculation; separate SSRC changes, wrap-compatible progression, backwards changes and sequence anomalies.
+- Add relative buffering and sender clock evidence, compound RTCP feedback and camera-labelled reports.
+- Preserve Direct RTSP and Compare both. No production recognition, liveness or Access1 changes.
+
+## 6.6.6-access1.diag1 — 2026-10-30
+
+- Add administrator-only packet-timing comparison of Frigate restream and direct RTSP.
+- Sequential, bounded, low-priority diagnostics; ephemeral credentials and redacted reports.
+- Add Settings link and English/Hebrew test guide.
+- No recognition, liveness, Access1 authorization, defaults or data migration changes.
+
+# 6.6.3-access1.1 — Access1 results and liveness safeguards
+
+FaceID 6.6.3-access1.1 — focused local maintenance release
+Base: supplied upstream FaceID 6.6.2. Date: 2026-10-30.
+
+Changes
+- Accept Access1 native relay_activated, blocked and expired_unconfirmed receipts.
+- Keep execution confirmation separate from physical door-open confirmation.
+- Retain safe backend reason codes and categorical transport/result errors.
+- An uncertain POST is still never replayed: existing bounded GET reconciliation
+  and deterministic request identity/deduplication remain unchanged.
+- Reject non-finite or wrong-shaped liveness model output as unavailable.
+- Bind secure-live liveness evidence to a sufficiently matched identity; reset
+  accumulated proof and identity votes on a subject change. Duplicate embeddings
+  cannot add live proof. Continue binding individually live samples during
+  recovery from an earlier failed sample. Ordinary and continuous monitoring
+  paths are unchanged. This does not add hardware depth/IR or certify spoof resistance.
+- Normal individually-live warmup is INFO; failed samples remain WARNING.
+- Explicit minimal add-on .dockerignore prevents inherited exclude-all rules
+  from hiding the deployment source. Version labels identify this local fork.
+
+Unchanged
+Model weights, score thresholds, required live-frame count, camera acquisition,
+freshness, TLS, queue bounds, Access1 authorization, timetables, APB, interlocks,
+relay pulse settings, gallery and pairing schemas. No firmware/integration/mobile
+update is needed. No live doors were operated during preparation.
+
+Known/deferred audit items
+Advisory mode is not a substitute for required liveness on an access camera.
+Continuous monitoring still needs the separate secure Frigate access path and
+its existing fast_recognition/full-image settings. UI readiness, attempt-budget
+validation, intercom diagnostic frame-source/deduplication, global boolean option
+encoding and the second-factor UI scope are not changed in this focused pass.
+Keep the currently working required-liveness camera configuration.
+Capture speed is not changed; no performance improvement is claimed.
+
+
 # Changelog
 
 ## 6.6.2 — Persistent camera frames and immediate recognition popups

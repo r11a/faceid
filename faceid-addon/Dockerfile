@@ -24,6 +24,6 @@ RUN python3 -m venv venv \
 COPY app app
 COPY static static
 COPY run.sh /
-RUN chmod a+x /run.sh
+RUN sed -i 's/\r$//' /run.sh && bash -n /run.sh && chmod a+x /run.sh
 
 CMD ["/run.sh"]

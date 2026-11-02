@@ -21,7 +21,14 @@ class LivenessDetector:
     def __init__(
         self, *, model_path: str = "/opt/faceid/models/liveness.onnx",
         enabled: bool = True, threshold: float = 0.5, required_frames: int = 3,
+        cpu_threads: int = 0, cpu_allow_spinning: bool = True,
     ):
+        if type(cpu_threads) is not int or not 0 <= cpu_threads <= 16:
+            raise ValueError("cpu_threads must be an integer from 0 to 16")
+        if type(cpu_allow_spinning) is not bool:
+            raise ValueError("cpu_allow_spinning must be boolean")
+        self.cpu_threads = cpu_threads
+        self.cpu_allow_spinning = cpu_allow_spinning
         self.model_path = Path(model_path)
         self.enabled = bool(enabled)
         self.threshold = float(threshold)
@@ -42,10 +49,29 @@ class LivenessDetector:
                 "CUDAExecutionProvider", "OpenVINOExecutionProvider",
                 "CPUExecutionProvider",
             ) if name in available]
+            session_kwargs = {}
+            if providers == ["CPUExecutionProvider"] and (self.cpu_threads or not self.cpu_allow_spinning):
+                options = ort.SessionOptions()
+                if self.cpu_threads:
+                    options.intra_op_num_threads = self.cpu_threads
+                for key in ("session.intra_op.allow_spinning", "session.inter_op.allow_spinning"):
+                    options.add_session_config_entry(key, "1" if self.cpu_allow_spinning else "0")
+                session_kwargs["sess_options"] = options
             self._session = ort.InferenceSession(
-                str(self.model_path), providers=providers,
+                str(self.model_path), providers=providers, **session_kwargs,
             )
             return self._session
+
+    def prepare(self):
+        """Load once before MQTT starts; errors still fail closed in analyze()."""
+        if not self.enabled:
+            return False
+        try:
+            self._runtime()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)[:200]
+            return False
 
     @staticmethod
     def _crop(image: np.ndarray, bbox, expansion: float = 1.5):
@@ -101,7 +127,11 @@ class LivenessDetector:
             session = self._runtime()
             input_name = session.get_inputs()[0].name
             logits = session.run(None, {input_name: self._preprocess(crop)})[0][0]
-            logit_difference = float(logits[0] - logits[1])
+            if np.shape(logits) != (2,) or not np.isfinite(logits).all():
+                raise ValueError("invalid liveness model output")
+            logit_difference = float(logits[0]) - float(logits[1])
+            if not math.isfinite(logit_difference):
+                raise ValueError("invalid liveness model output")
             # Expose an intuitive 0..1 probability-like score while preserving
             # the upstream real-logit minus spoof-logit decision boundary.
             score = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, logit_difference))))
@@ -147,3 +177,13 @@ class LivenessDetector:
             "required_frames": self.required_frames, "last_error": self.last_error,
             "scope": "RGB print/screen attack reduction; not depth/IR certification",
         }
+
+
+def qualified_live_consensus(detector, history, required=3):
+    """Shared diagnostic/stream minimum; caller owns subject and frame uniqueness."""
+    required=max(3,int(required),int(detector.required_frames))
+    result=detector.consensus(history)
+    confirmed=len(history)>=required and all(item.get('live') is True for item in history[-required:])
+    result.update(confirmed=confirmed,required_frames=required,live_frames=len(history),
+                  state='live' if confirmed else 'pending')
+    return result

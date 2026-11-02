@@ -86,10 +86,11 @@ export function CamerasPage() {
 function CameraSettings({ camera, onSaved, onToggle }) {
   const [form, setForm] = useState({ ...camera });
   const toast = useToast();
-  const recognitionMode = form.recognition_mode || "event";
+  const streamObservation = (form.observation_source || "snapshots") !== "snapshots";
+  const recognitionMode = streamObservation ? "event" : (form.recognition_mode || "event");
   useEffect(() => setForm({ ...camera }), [camera]);
   const save = async () => {
-    try { await api(`cameras/${encodeURIComponent(camera.camera)}/profile`, { method: "POST", body: JSON.stringify({ ...form, min_face_px: Number(form.min_face_px), night_min_face_px: Number(form.night_min_face_px || form.min_face_px), burst_frames: Number(form.burst_frames || 3), recognition_mode: recognitionMode, recognition_interval_seconds: Number(form.recognition_interval_seconds ?? .5), recognition_rearm_seconds: Number(form.recognition_rearm_seconds ?? 2) }) }); toast("הגדרות המצלמה נשמרו"); onSaved(); }
+    try { await api(`cameras/${encodeURIComponent(camera.camera)}/profile`, { method: "POST", ...(form.observation_source ? {headers: {"X-Access1-Pairing":"1"}} : {}), body: JSON.stringify({ ...form, direct_rtsp_url: form.direct_rtsp_url || undefined, min_face_px: Number(form.min_face_px), night_min_face_px: Number(form.night_min_face_px || form.min_face_px), burst_frames: Number(form.burst_frames || 3), recognition_mode: recognitionMode, recognition_interval_seconds: Number(form.recognition_interval_seconds ?? .5), recognition_rearm_seconds: Number(form.recognition_rearm_seconds ?? 2) }) }); toast("הגדרות המצלמה נשמרו"); onSaved(); }
     catch (error) { toast(error.message, "error"); }
   };
   return <div className="camera-settings">
@@ -97,7 +98,20 @@ function CameraSettings({ camera, onSaved, onToggle }) {
       <div><b>זיהוי במצלמה</b><span>כיבוי מפסיק את הזיהוי האוטומטי במצלמה ב־FaceID</span></div>
       <button type="button" role="switch" aria-checked={Boolean(camera.enabled)} aria-label={`זיהוי במצלמה ${camera.camera}`} className={`switch ${camera.enabled ? "on" : ""}`} onClick={() => onToggle(camera.camera, !camera.enabled)}><i /></button>
     </div>
-    <label>מתי לזהות פנים<select aria-label="מתי לזהות פנים" value={recognitionMode} onChange={e => setForm({ ...form, recognition_mode: e.target.value })}>{Object.entries(recognitionModes).map(([value, item]) => <option value={value} key={value}>{item.label}</option>)}</select></label>
+    <label>מקור תצפית / Observation source<select aria-label="Observation source" value={form.observation_source || "snapshots"} onChange={e => setForm({ ...form, observation_source:e.target.value })}>
+      <option value="snapshots">תמונות קיימות / Existing snapshots</option><option value="frigate_restream">שידור Frigate / Frigate restream</option><option value="direct_rtsp">מצלמה ישירה / Direct RTSP</option>
+    </select></label>
+    {form.observation_source && form.observation_source !== "snapshots" && <>
+      <p>מקורות שידור פועלים לפי אירוע בלבד; סריקה תמידית וסריקה בנוכחות אדם זמינות במקור התמונות הקיימות. אירוע אדם ב־Frigate מתחיל תצפית. נדרשות לפחות 3 תמונות שונות עם זהות וחיוּת תואמות. אין מעבר אוטומטי למקור אחר.</p>
+      <label className="face-check"><input type="checkbox" aria-label="Trust local video network" checked={form.trust_local_video_network === true} onChange={e => setForm({...form,trust_local_video_network:e.target.checked})}/><span>אני סומך על רשת הווידאו המקומית / Trust local video network</span></label>
+      <p>ראיות זרם ברשת מקומית / Local-network stream evidence: נבדקת הגעה מקומית מוגבלת בזמן, לא זמן הצילום במצלמה. הצפנת Access1 אינה מאמתת את נתיב הווידאו.</p>
+    </>}
+    {form.observation_source === "direct_rtsp" && <>
+      <label>כתובת RTSP פרטית / Private RTSP address<input type="password" autoComplete="new-password" aria-label="Direct RTSP address" value={form.direct_rtsp_url || ""} placeholder={form.direct_rtsp_configured ? "נשמרה כתובת — השאר ריק לשמירה / Saved; leave empty to retain" : "rtsp://user:password@private-ip:554/path"} onChange={e => setForm({...form,direct_rtsp_url:e.target.value,clear_direct_rtsp:false})}/></label>
+      <p>הכתובת נשמרת בשרת בלבד. כדי למחוק אותה, בחרו מקור אחר וסמנו מחיקה.</p>
+    </>}
+    {form.direct_rtsp_configured && form.observation_source !== "direct_rtsp" && <label><input type="checkbox" aria-label="Clear saved RTSP address" checked={!!form.clear_direct_rtsp} onChange={e => setForm({...form,clear_direct_rtsp:e.target.checked,direct_rtsp_url:undefined})}/>מחיקת כתובת RTSP שמורה / Clear saved RTSP</label>}
+    <label>מתי לזהות פנים<select aria-label="מתי לזהות פנים" disabled={streamObservation} value={recognitionMode} onChange={e => setForm({ ...form, recognition_mode: e.target.value })}>{Object.entries(recognitionModes).map(([value, item]) => <option value={value} key={value}>{item.label}</option>)}</select></label>
     <p>{recognitionModes[recognitionMode]?.description}</p>
     {recognitionMode !== "event" && <>
       <p>הזיהוי החוזר מיועד לניטור ולהתראות על הופעות חדשות. פתיחת דלת ממשיכה לדרוש את אימות הגישה המאובטח הקיים.</p>

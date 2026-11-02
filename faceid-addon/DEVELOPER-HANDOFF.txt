@@ -1,0 +1,146 @@
+DEVELOPER HANDOFF — 6.6.12-access1.stream3
+Status: implementation available; operational camera acceptance remains pending.
+Do not present this as field-proven faster or a finished security certification.
+
+OBSERVED FIELD FAILURE
+Snapshots completed recognition + Access1 in about 11.2 s. Restream packet test
+showed 25 fps; operational reader churned generations, zero evidence samples.
+The report did not expose decoder clock values/reasons, so exact field cause
+cannot be conclusively attributed from that report alone.
+
+FOCUSED CORRECTIONS
+Shared decoder_position_ms uses native FFmpeg CAP_PROP_PTS in FPS time base when
+available; older builds retain POS_MSEC. Finite arbitrary/negative/zero timestamp
+origins are supported. Internal records normalize the origin, never arrival time.
+Repeated/backward/jumping timestamps, startup drain, local age and 750ms relative
+buffering growth still block evidence. Generation changes still clear history.
+Reader reports now expose categorical rejection counters and generation. Rejection
+logs are rate limited to once per five seconds; event lifecycle stages are logged.
+Observation-only readers drain without JPEG encoding. Existing regular JPEG consumers
+retain encoding. Production and manual decode diagnostics share timestamp extraction.
+No video-source fallback, liveness reduction, model or CPU setting change.
+
+MULTI-PERSON BEHAVIOR
+Anchor must contain exactly one usable face. Live candidates match that anchor and
+conservative tracks with mutual unique matching, .65 threshold/.08 margin. Detector
+order cannot select another person. Competing events cannot share one track;
+subject departure, crossings/overlap, ambiguous matching and identity changes reset
+evidence. More than four usable faces rejects the frame. No accumulated liveness
+transfers to a bystander. Synthetic regression tests are not field accuracy proof.
+
+PROCESSOR AND CORAL
+Measured embedding 1.35-1.49 seconds per face is CPU inference, not model queue wait.
+Detection was roughly .5 seconds. Multiple usable faces multiply embedding work;
+no fixed low latency is promised. Measure CPU quota, affinity, thread settings and
+actual provider on the stronger rig using retained benchmarks. Existing models run
+ONNX Runtime CPU; Coral USB Edge TPU needs compatible compiled TensorFlow Lite
+models and is not a drop-in accelerator. Model conversion/replacement is separate
+work requiring recognition/PAD validation; leave Coral/Frigate configuration intact.
+Sources: https://docs.opencv.org/4.13.0/d4/d15/group__videoio__flags__base.html
+https://gweb-coral-full.uc.r.appspot.com/docs/edgetpu/inference/
+
+NEXT ACCEPTANCE ON CAMERA RIG
+Install complete source/faceid-addon; preserve /data/gallery/pairing/mappings.
+Select restream + trust, recognition by event. Record startup/provider/CPU settings.
+First verify native PTS progresses, reader generation stabilizes and stream_ready
+appears. Then anchor, association, three samples, recognition and Access1 final
+result. If not, export operational report including reader rejection counters and
+logs; do not lower thresholds. Compare same scenes on direct RTSP and snapshots.
+Test two different enrolled people in both detection orders, bystander appearance,
+subject departure, overlap/crossings, duplicate/competing events, reconnect, and
+repeated approaches. Use 20 approaches per baseline/source and median/p95, success,
+wrong-person and duplicate counts. Zero wrong-person/duplicate activation required.
+No real camera/HA/Access1/relay endpoint was contacted during offline development.
+
+STARTUP CORRECTION — 6.6.12-access1.stream3
+The prior package contained CRLF line endings in faceid-addon/run.sh. Linux passed
+bashio plus a carriage return as the interpreter name, preventing startup.
+The script now uses LF. Docker also normalizes CRLF and checks bash syntax during
+build. A regression checks the source shebang, and an offline normal-entrypoint
+smoke runs s6 -> run.sh -> real bashio -> stubbed final application launch.
+Only the final Python application command is stubbed; no camera or Access1 runs.
+Recognition logic and model settings are unchanged. Version/cache markers updated.
+Install the COMPLETE source/faceid-addon over the existing local add-on source;
+refresh the repository and rebuild/update to 6.6.12-access1.stream3. Restart alone
+will not replace a previously built image. Preserve /data, pairing and mappings.
+Expected startup line: Starting FaceID..., followed by normal model-loading logs.
+The earlier image parity/model checks did not exercise the normal container startup
+chain. This missing test is now covered. Rig commissioning remains pending.
+
+DEVELOPER HANDOFF — 6.6.12-access1.stream3
+Base: complete 6.6.11-access1.test1 restored-operation source.
+Scope: production Frigate-triggered local-stream observations integrated with the
+existing identity/liveness and Access1 connector, plus retained diagnostics.
+Status: code/regression package; physical commissioning is mandatory before claiming
+better latency or completion of the real-camera acceptance gate.
+
+OWNERSHIP / INSERTION POINTS
+camera_profiles.py: default snapshot migration, explicit trust, validated private RTSP
+storage, omit-preserves/explicit-clear semantics, masked all/get APIs, internal revision.
+webui.py / Security.jsx: existing camera profile UI/API extended, verified Ingress admin
+for source/trust/credential writes, sanitized profile validation errors.
+live_frames.py: existing reader/pool extended with latest decoded records, sequence,
+connection generation, arrival monotonic and PTS; existing JPEG interface retained.
+Observation leases survive regular sync; incompatible source does not replace a leased
+reader. Two active-or-retiring observation readers, existing global reader cap retained.
+Native OpenCV/FFmpeg verbosity suppressed because failures may print private URLs;
+Python categorical status remains. Startup low-detail decoded images do not authorize.
+engine.py: scheduler-aware latest-frame acquisition occurs after acquiring the existing
+inference lock so queued work cannot silently process an aged input. Existing models
+and scheduler remain. Other model calls keep the original serialization.
+stream_observation.py: bounded event/session coordinator; concurrent reader startup and
+anchor acquisition; active person-crop lookup before/after fetch; max two anchor attempts;
+mutual unique cosine/margin assignment using existing FaceTracker thresholds and motion;
+reject >4 usable faces, overlap/crossing reset, no inheritance by replacement tracks;
+per-camera serialized work; monotonic expiry and immutable internal delivery proof.
+mqtt_listener.py: configured stream events dispatch to the coordinator; snapshot branch
+unchanged for legacy profiles. Stream evidence reuses _process_face rather than a second
+recognition/authorization implementation. Required identity/PAD state is isolated by
+session and track. Retained snapshot work is barred after source selection changes.
+liveness.py/decode_diagnostics.py: shared minimum-three qualifying-live consensus helper;
+manual diagnostics retain local state and do not call the Access1 path.
+access1.py: bounded_local_stream is a distinct internal evidence source. Final proof,
+clock/mapping/enable checks occur again immediately before POST. Wire schema unchanged.
+recognized_at is recognition wall time; expires_at is remaining monotonic evidence
+lifetime converted at submission and capped at recognized_at+10. No blind POST retries.
+acquisition_diagnostics.py + diagnostic HTML: actual operational timeline and private
+RAM-only input preview; authenticated admin, no-store, four events, three-minute lifetime.
+Normal runtime remains active. Exports omit URL credentials, vectors and preview bytes.
+Access1 UI labels local-network evidence separately from authenticated snapshot transport.
+
+INVARIANTS
+Do not change .65 association cosine, .08 alternative margin, identity/ignore/quality
+thresholds or PAD threshold to improve benchmark results. Anchor never contributes PAD.
+No event deadline extension on repeated updates/reconnect. Oldest evidence deadline is
+not refreshed by processing/delivery. No source fallback. No metadata-authentication
+claim for RTSP arrival time. No relay logic/backend policy change. No motion liveness.
+Three live samples are a floor; existing stricter settings win. No per-camera control
+allows fewer samples. Direct credentials never become profile read/export fields.
+
+REVIEW / REGRESSION
+See focused-changes.patch and CHANGED-FILES.json (hashes relative to base). TEST-RESULTS
+records actual complete backend/frontend and offline image/codec checks. Mocks validate
+admission contracts; synthetic codec/model smoke validates installed runtimes. Neither
+measures field recognition accuracy, capture age, RF/network jitter or physical relay time.
+Use the included commissioning worksheet for the 20-approach comparative gate.
+
+KNOWN LIMITS / DECISIONS
+Explicit LAN trust accepts unverified upstream capture age and camera/video integrity.
+An event-specific person crop depends on Frigate's subject tracking; anchor ambiguity
+fails closed. Conservative crossings/duplicate checks can lower throughput in crowds.
+More than two cameras/four pending sessions are rejected, not queued indefinitely.
+Source conflict/reader retirement is an explicit failure rather than silent decoder reuse.
+RTSP selected destinations intentionally restrict to literal RFC1918 IPv4, port 554/8554.
+Aarch64 is declared by existing manifest but only amd64 image/codec is verified here.
+The retained manual single-person diagnostic benchmark is not an authorization simulation;
+the operational timeline shows the actual event-association-to-Access1 route.
+Existing runtime threads shut down with the add-on process; observation readers are
+released when their last observation/regular consumer no longer needs them.
+Do not remove diagnostic timing until commissioning identifies the remaining bottleneck.
+
+ROLLBACK / MAIN-TREE PORT
+Keep gallery, mapping, pairing and /data unchanged. Select snapshots to revert acquisition.
+Port the focused patch over the stated baseline and run the full included tests. Preserve
+source/add-on app+static mirrors byte-for-byte, rebuild frontend, update all version and
+Ingress cache markers together. Do not copy stale historical diagnostic-only startup flags.
+No dependency upgrades are part of this change.

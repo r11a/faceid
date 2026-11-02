@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
+from app import VERSION
 from app.camera_profiles import CameraProfiles
 from app.guest_access import GuestAccess
 from app.site_intelligence import SiteIntelligence
@@ -74,7 +75,7 @@ class GuestAndSiteTests(unittest.TestCase):
         html = (root / "static" / "index.html").read_text(encoding="utf-8")
         source = (root / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
         advanced = (root / "frontend" / "src" / "pages" / "Advanced.jsx").read_text(encoding="utf-8")
-        self.assertIn("faceid-6.6.2.js", html)
+        self.assertIn(f"faceid-{VERSION}.js", html)
         self.assertIn('guests: { title: "אורחים"', source)
         self.assertIn('"routes", "מסלולים ומפה"', advanced)
         self.assertIn("visits?days=30", advanced)

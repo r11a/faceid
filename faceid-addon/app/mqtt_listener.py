@@ -24,10 +24,14 @@ from .engine import FaceEngine, crop_face
 from .hires import upgrade_face
 from .decision import DecisionAccumulator, DecisionPolicy
 from .quality import measure_face_quality
+from .liveness import qualified_live_consensus
 from .clip_analyzer import ClipAnalyzer
 from .presence import RecognitionSessionTracker
 from .continuous_recognition import ContinuousRecognition
+from .stream_observation import StreamObservations, SOURCE as STREAM_SOURCE
 from .media_errors import ClipNotReady
+
+from .timing import stage as timing_stage, frame_wait as timing_frame_wait
 
 log = logging.getLogger("faceid.mqtt")
 
@@ -61,6 +65,7 @@ class EventProcessor:
         self.recent = deque(maxlen=100)  # Ringpuffer für die UI
         self.client: mqtt.Client | None = None
         f = cfg["faceid"]
+        self.timing_diagnostics = f.get("timing_diagnostics", False) is True
         self.match_thr = float(f.get("match_threshold", 0.5))
         self.unknown_thr = float(f.get("unknown_threshold", 0.35))
         self.match_margin = float(f.get("match_margin", 0.08))
@@ -103,6 +108,7 @@ class EventProcessor:
         self._person_presence_state: dict[str, bool] = {}
         self._update_policy()
         self.continuous = ContinuousRecognition(self)
+        self.stream_observations = StreamObservations(self)
         self.clip_analyzer = ClipAnalyzer(
             engine, frigate,
             max_frames=int(f.get("clip_max_frames", 24)),
@@ -164,6 +170,7 @@ class EventProcessor:
         self.client = c
         c.on_connect = self._guard_callback(self._on_connect)
         c.on_message = self._guard_callback(self._on_message)
+        c.on_disconnect = self._guard_callback(lambda *args: self.stream_observations.set_online(False))
         c.connect_async(m["host"], int(m.get("port", 1883)), keepalive=60)
         c.loop_start()
         self._check_frigate()
@@ -301,9 +308,12 @@ class EventProcessor:
         return {"connected": bool(self.client and self.client.is_connected())}
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
+        observer = getattr(self, "stream_observations", None)
         if getattr(reason_code, "is_failure", reason_code != 0):
+            if observer is not None:observer.set_online(False)
             log.warning("MQTT connection rejected (%s)", reason_code)
             return
+        if observer is not None:observer.set_online(True)
         log.info("MQTT connected (%s), subscribing to %s/events", reason_code, self.frigate_topic)
         client.subscribe(f"{self.frigate_topic}/events")
         client.subscribe(f"{self.frigate_topic}/+/person")
@@ -318,6 +328,18 @@ class EventProcessor:
 
     def _on_message(self, client, userdata, msg):
         received_monotonic = time.perf_counter()
+        if msg.topic == self.frigate_topic + '/available':
+            self.stream_observations.online=msg.payload.decode(errors='replace') == 'online'
+            if not self.stream_observations.online:self.stream_observations.cancel_all('frigate_offline')
+        if msg.topic == self.frigate_topic + '/events':
+            try:
+                stream_payload=json.loads(msg.payload)
+                stream_after=stream_payload.get('after') or {}
+                if self.stream_observations.configured(stream_after.get('camera')):
+                    self.stream_observations.event(stream_after,stream_payload.get('type'),getattr(msg,'retain',False))
+                    return
+            except (ValueError,TypeError,AttributeError):
+                return
         if self.continuous.mqtt(msg.topic, msg.payload):
             return
         try:
@@ -406,6 +428,7 @@ class EventProcessor:
         while True:
             time.sleep(.25)
             try:
+                self.stream_observations.tick()
                 self._schedule_live_jobs()
                 self.continuous.tick()
             except Exception:
@@ -439,6 +462,17 @@ class EventProcessor:
                         self.camera_profiles and self.camera_profiles.get(st["camera"]).get("fast_recognition")))
                     or now - st["last_try"] < self.recognition_interval(st["camera"])):
                 continue
+            if self._live_access_camera(st):
+                # Avoid queue/audit churn for work the execution-time gate would
+                # reject anyway. Keep that final gate: state may change after this.
+                timestamp = st.get("live_snapshot_ts")
+                if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                        or timestamp < st["start_time"] or not 0 <= now - timestamp < 10):
+                    timing_frame_wait(self, eid, st, "capture_timestamp_missing_or_stale")
+                    continue
+                if timestamp <= st.get("live_snapshot_consumed_ts", 0):
+                    timing_frame_wait(self, eid, st, "unchanged_capture_timestamp")
+                    continue
             with self._jobs_lock:
                 if (eid, "snapshot") in self._queued_jobs or (eid, "clip") in self._queued_jobs:
                     continue
@@ -482,6 +516,9 @@ class EventProcessor:
                     deferred = True
                     return
             self.record_timing(f"{kind}_queue_wait", started - item.get("queued_at", started))
+            if getattr(self, "timing_diagnostics", False) is True:
+                log.info("timing event=%s stage=%s_queue_wait elapsed_ms=%.1f", eid, kind,
+                         (started - item.get("queued_at", started)) * 1000)
             if self.audit:
                 self.audit.mark_job_running(eid, kind)
             state = self.events.get(eid)
@@ -551,7 +588,7 @@ class EventProcessor:
 
     def _process_clip(self, eid: str):
         st = self.events.get(eid)
-        if st is None or st["done"]:
+        if st is None or st["done"] or st.get("stream_observation"):
             return
         st["clip_queued"] = False
         reference = (
@@ -634,9 +671,11 @@ class EventProcessor:
                 return
             st["live_timestamp_warned"] = False
             if timestamp <= st.get("live_snapshot_consumed_ts", 0):
+                timing_frame_wait(self, eid, st, "unchanged_capture_timestamp")
                 return
             st["live_fetches"] = st.get("live_fetches", 0) + 1
-            img = self.frigate.live_event_frame(eid)
+            with timing_stage(self, eid, "live_image_fetch"):
+                img = self.frigate.live_event_frame(eid)
             if img is None:
                 self.record_timing("snapshot_fetch", time.perf_counter() - fetch_started)
                 return
@@ -687,15 +726,17 @@ class EventProcessor:
             return
         fingerprint = hashlib.sha256(img.tobytes()).hexdigest()
         if fingerprint == st.get("snapshot_fingerprint") or (live_access and fingerprint in st.get("live_fingerprints", ())):
+            timing_frame_wait(self, eid, st, "duplicate_image")
             return
         st["candidate_fingerprint"] = fingerprint
         st["candidate_live"] = live_access
         st["attempts"] += 1
         st["context_frame"] = img
         # Live access selects by ROI/quality before computing any embeddings.
-        found = (self.engine.detect_faces(img)
-                 if live_access and hasattr(self.engine, "detect_faces")
-                 else self.engine.faces(img))
+        with timing_stage(self, eid, "face_detection"):
+            found = (self.engine.detect_faces(img)
+                     if live_access and hasattr(self.engine, "detect_faces")
+                     else self.engine.faces(img))
         if source == "live_camera" and any(
             other_eid != eid and other.get("camera") == st["camera"]
             and not other.get("ended") and not other.get("end_time")
@@ -775,11 +816,15 @@ class EventProcessor:
         pending_live_identity = False
         liveness_service = getattr(self, "liveness", None)
         profile = self.camera_profiles.get(st["camera"]) if self.camera_profiles else {}
-        liveness_mode = profile.get("liveness_mode", "advisory")
+        if source == "secure_live_snapshot" and profile.get("observation_source", "snapshots") != "snapshots":
+            return
+        liveness_mode = "required" if source == STREAM_SOURCE else profile.get("liveness_mode", "advisory")
         if liveness_service is not None and liveness_mode != "off":
             scheduled = self.engine.model_work() if hasattr(self.engine, "model_work") else nullcontext()
-            with scheduled:
-                liveness_frame = liveness_service.analyze(img, face)
+            with timing_stage(self, eid, "liveness_with_queue"):
+                with scheduled:
+                    with timing_stage(self, eid, "liveness_inference"):
+                        liveness_frame = liveness_service.analyze(img, face)
             st["liveness_history"].append(liveness_frame)
             st["liveness"] = liveness_service.consensus(st["liveness_history"])
             st["liveness"]["mode"] = liveness_mode
@@ -797,8 +842,9 @@ class EventProcessor:
                         source=source,
                     )
                     self.audit.save_evidence(eid, crop_face(img, face.bbox))
-                log.warning(
-                    "event %s (%s): identity blocked by required liveness (%s, %s/%s live frames)",
+                progress = state == "pending" and liveness_frame.get("live") is True
+                (log.info if progress else log.warning)(
+                    "event %s (%s): required liveness check (%s, %s/%s live frames)",
                     eid, st["camera"], state, st["liveness"]["live_frames"],
                     st["liveness"]["required_frames"],
                 )
@@ -807,22 +853,43 @@ class EventProcessor:
                 # existing liveness and identity policies have passed.
                 timestamp = st.get("access1_evidence_ts")
                 pending_live_identity = (
-                    source == "secure_live_snapshot"
+                    source in ("secure_live_snapshot", STREAM_SOURCE)
                     and liveness_frame.get("live") is True
-                    and state == "pending"
+                    # A previous failed sample must not prevent binding this
+                    # individually live sample to its subject during recovery.
                     and not st.get("ended") and not st.get("end_time")
-                    and type(timestamp) in (int, float)
+                    and (source == STREAM_SOURCE or (type(timestamp) in (int, float)
                     and math.isfinite(timestamp)
-                    and 0 <= time.time() - timestamp < 10
+                    and 0 <= time.time() - timestamp < 10))
                 )
                 if not pending_live_identity:
+                    if source == STREAM_SOURCE:
+                        st['liveness_history']=[];st['liveness_subject']=None;st['liveness_keys']=set()
+                        st['decision']=DecisionAccumulator(self.policy);st['stream_samples']=0
+                        st['stream_reason']='liveness_'+state
+                        st.pop('stream_deadline',None)
                     return
             if st["liveness"].get("confirmed"):
                 st["liveness_blocked"] = False
+        if source == STREAM_SOURCE and liveness_service is None:
+            st['stream_reason']='liveness_unavailable';st['stream_samples']=0
+            return
         if source == "secure_live_snapshot" and hasattr(self.engine, "embed_face"):
-            self.engine.embed_face(img, face)
+            with timing_stage(self, eid, "face_embedding"):
+                if getattr(self.engine, "supports_embedding_timing", False) is True:
+                    timings = {}
+                    try:
+                        self.engine.embed_face(img, face, timings=timings)
+                    finally:
+                        for stage, seconds in timings.items():
+                            self.record_timing(stage, seconds)
+                            if getattr(self, "timing_diagnostics", False) is True:
+                                log.info("timing event=%s stage=%s elapsed_ms=%.1f", eid, stage, seconds * 1000)
+                else:
+                    self.engine.embed_face(img, face)
         emb = face.normed_embedding
-        candidates = self.gallery.match_candidates(emb, limit=3)
+        with timing_stage(self, eid, "gallery_match"):
+            candidates = self.gallery.match_candidates(emb, limit=3)
         guest_access = getattr(self, "guest_access", None)
         if guest_access is not None:
             guest_candidates = guest_access.candidates(
@@ -843,6 +910,44 @@ class EventProcessor:
         if guard is not None and not guard():
             return
         observation_key = hashlib.sha256(emb.astype("float32").tobytes()).hexdigest()
+        if source in ("secure_live_snapshot", STREAM_SOURCE) and liveness_service is not None and liveness_mode != "off":
+            # Bind admission proof to the recognized subject, not the event's
+            # changing best-quality face. Ordinary/continuous recognition stays
+            # on its existing path; no extra model inference is introduced.
+            subject = slug if (slug and math.isfinite(float(score))
+                               and score >= self.match_thr
+                               and score - runner_up_score >= self.match_margin) else None
+            previous = st.get("liveness_subject")
+            if subject is None or subject != previous:
+                st["liveness_history"] = [liveness_frame] if subject else []
+                st["liveness_subject"] = subject
+                st["liveness_keys"] = set()
+                if previous is not None:
+                    st["decision"] = DecisionAccumulator(self.policy)
+            keys = st.setdefault("liveness_keys", set())
+            if subject and observation_key in keys:
+                # analyze() appended this frame before the identity was known.
+                st["liveness_history"].pop()
+            elif subject:
+                keys.add(observation_key)
+            st["liveness"] = liveness_service.consensus(st["liveness_history"])
+            st["liveness"]["mode"] = liveness_mode
+            if source == STREAM_SOURCE:
+                required=st.get('stream_required',3)
+                history=st['liveness_history']
+                if not subject or liveness_frame.get('live') is not True:
+                    history.clear();st['decision']=DecisionAccumulator(self.policy)
+                    st.pop('stream_deadline',None)
+                st['stream_samples']=len(history)
+                st['stream_reason']='same_subject_live' if subject and history else 'identity_unconfirmed'
+                st['liveness'].update(qualified_live_consensus(liveness_service,history,required))
+
+            if self.audit:self.audit.update_liveness(eid, st["liveness"])
+            if liveness_mode == "required" and not st["liveness"]["confirmed"]:
+                st["liveness_blocked"] = True
+                pending_live_identity = True
+            elif st["liveness"]["confirmed"]:
+                st["liveness_blocked"] = False
         decision = st["decision"].add(
             key=observation_key,
             slug=slug,
@@ -863,10 +968,16 @@ class EventProcessor:
                 evidence[slug] = {"rank": evidence_rank, "crop": crop_face(img, face.bbox).copy()}
         if pending_live_identity:
             return
+        if source == STREAM_SOURCE and guard is not None and not guard():
+            return
         if decision.status == "recognized":
+            if source == STREAM_SOURCE:st['access1_evidence_ts']=time.time()
             st["confirmed_monotonic"] = time.perf_counter()
             if st.get("mqtt_received_monotonic") is not None:
                 self.record_timing("mqtt_to_recognition", st["confirmed_monotonic"] - st["mqtt_received_monotonic"])
+                if getattr(self, "timing_diagnostics", False) is True:
+                    log.info("timing event=%s stage=mqtt_to_recognition elapsed_ms=%.1f", eid,
+                             (st["confirmed_monotonic"] - st["mqtt_received_monotonic"]) * 1000)
         if getattr(self, "face_search", None) is not None:
             # Bound transient samples; keep JPEG/SQL work out of consensus warmup.
             st.setdefault("pending_face_samples", deque(maxlen=8)).append((emb.copy(), crop_face(img, face.bbox).copy()))
@@ -935,6 +1046,7 @@ class EventProcessor:
                     "score": decision.score, "occurred_at": st.get("start_time"),
                     "queued_at": time.time(),
                     "evidence_source": source,
+                    "stream_proof": st.get("stream_proof") if source == STREAM_SOURCE else None,
                     "evidence_ts": st.get("access1_evidence_ts"),
                     "event_ended": bool(st.get("end_time")),
                     "liveness_confirmed": bool((st.get("liveness") or {}).get("confirmed")),
@@ -1028,6 +1140,7 @@ class EventProcessor:
                     continue
                 if self.camera_profiles and self.camera_profiles.get(cam).get("recognition_mode", "event") != "event":
                     continue
+                if self.stream_observations.configured(cam):continue
                 self._polled.append(eid)
                 self._ensure_discovery(cam)
                 # Nur abgeschlossene Ereignisse — laufende meldet MQTT ohnehin.

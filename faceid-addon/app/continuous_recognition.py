@@ -100,6 +100,8 @@ class ContinuousRecognition:
     def eligible(self, camera, profile):
         if not self.processor.camera_enabled(camera):
             return False
+        if profile.get("observation_source", "snapshots") != "snapshots":
+            return False
         mode = profile.get("recognition_mode", "event")
         with self.lock:
             if not self.online:
@@ -152,7 +154,8 @@ class ContinuousRecognition:
             cameras = [camera for camera, profile in self.profiles().items()
                        if self.online and self.processor.camera_enabled(camera)
                        and profile.get("recognition_mode", "event") != "event"
-                       and profile.get("high_resolution")]
+                       and profile.get("high_resolution")
+                       and profile.get("observation_source", "snapshots") == "snapshots"]
             self.processor.frigate.sync_live_cameras(cameras)
         finally:
             with self.lock:

@@ -1,0 +1,73 @@
+FaceID 6.6.11-access1.test1 — restored operation + retained diagnostics
+2026-10-30
+
+ENGLISH
+What is restored
+Automatic MQTT/continuous/presence recognition, the optional Access1 connector,
+and background gallery indexing start through the original startup paths. Saved
+camera enable switches, connector enable settings, mappings and pairing remain
+unchanged. A previously disabled setting is not forcibly enabled.
+Opening the diagnostic page, or running a test, does not pause any camera.
+Normal recognition may submit an event and activate a configured test relay.
+Diagnostic samples/results themselves never call the Access1/event pipeline.
+
+Installation
+1. Back up FaceID settings and gallery using your existing backup workflow.
+2. Replace the local add-on folder with this package's complete source/faceid-addon.
+   Do not replace /data or remove pairing/mappings. Do not merge selected files.
+3. Refresh the local add-on repository and rebuild/update FaceID. Restart it.
+4. Confirm add-on version 6.6.11-access1.test1. Refresh the browser/ingress page.
+5. Startup should show normal recognition/MQTT startup and should not show the
+   diagnostic-only startup warning. Connector startup follows its saved settings.
+6. Keep liveness required and existing thresholds/counts. No new lower-count field
+   is added in this pass. Existing configured liveness policy remains unchanged.
+
+Test window
+Settings -> Acquisition diagnostic. The full-frame Decode + face/liveness timing
+mode uses one decoder and a latest-frame slot; it discards invalid timestamps and
+locally stale samples before inference. Crop comparison remains optional and adds
+extra processing; do not use its total as a production opening-time prediction.
+Preview, startup sequence, Frigate clock check, direct RTSP packet checks and
+bounded 2/4-thread comparison remain available. Preview images expire in memory.
+Tests are administrator-only, one at a time, with existing deadlines/cooldown.
+Normal model work takes priority over diagnostics. Under active recognition a
+benchmark can be slower and diagnostics can finish without enough valid samples.
+No diagnostic result is admission evidence, even if its identity/liveness passes.
+
+CPU setting
+Report 9 measured isolated embedding medians: 2 threads 1322 ms, 4 threads 1044 ms.
+On this four-vCPU rig, try cpu_threads=4 through existing settings and restart.
+Verify the startup line says threads=4 and compare normal operation under load.
+The package does not silently overwrite the saved value (last report was 2).
+Four threads is not a promise of two-second opening and may contend with Frigate.
+
+What has NOT changed
+Production MQTT event association, snapshot capture timestamp validation, Access1
+result handling, identity/gallery decisions, liveness threshold and subject binding,
+relay policy, pairing, mappings and gallery storage are unchanged.
+Restream PTS/arrival times still do not prove absolute capture freshness. This release
+DOES NOT switch the production access-evidence source to RTSP. It restores the
+existing trusted snapshot path; the improved restream observer remains diagnostic.
+A future event-triggered RTSP admission path needs resolved capture freshness and
+person/event association. No arrival-time substitution or bypass is introduced.
+The test found no crop-only detection gain; no production crop was enabled.
+
+What to send after testing
+Downloaded diagnostic JSON (now includes actual server build), FaceID timing logs
+for the same normal recognition event, and Access1's decision/result for that event.
+Distinguish normal-recognition events from the diagnostic JSON; they are separate.
+
+עברית
+גרסה זו מחזירה את הזיהוי האוטומטי ואת מחבר Access1 לפי ההגדרות השמורות.
+פתיחת חלון האבחון או הפעלת בדיקה אינה עוצרת מצלמות. זיהוי רגיל יכול לשלוח
+אירוע ולהפעיל ממסר בבמת הבדיקה. תוצאות האבחון עצמן אינן שולחות אישור גישה.
+יש להחליף את תיקיית התוסף בשלמותה, לעדכן ולהפעיל מחדש. אין למחוק נתונים,
+צימוד או מיפויים. יש לוודא שהגרסה היא 6.6.11-access1.test1 ולרענן את הדפדפן.
+חלון האבחון, התצוגה המקדימה, השוואת החיתוך ובדיקת RTSP ישירה נשמרו.
+בדיקות מתבצעות ברקע; לזיהוי הרגיל ניתנת עדיפות בחישובי המודלים.
+המספר המזערי בבדיקת האבחון נשאר שלוש דגימות; לא נוסף שדה שמפחית אותו.
+מדידת המעבדים הראתה שיפור בארבעה תהליכוני חישוב. אפשר לבחור cpu_threads=4
+בהגדרה הקיימת ולהפעיל מחדש. החבילה אינה משנה הגדרה שמורה ללא בחירה.
+מסלול אישור הגישה הרגיל ממשיך להשתמש בתמונות ובבדיקות הזמן הקיימות.
+חותמת RTSP אינה מוכיחה את זמן צילום התמונה; לא נוסף מעקף לבדיקת הטריות.
+יש לשלוח את דוח האבחון ואת יומני אירוע הזיהוי הרגיל בנפרד.

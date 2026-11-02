@@ -1,4 +1,5 @@
 """Optional Access1 module: identity catalogue and submission, no access policy."""
+import re
 import ipaddress
 import json
 import logging
@@ -35,6 +36,7 @@ class Access1Integration:
         self.security_path=Path(data_dir)/'access1-security.json'
         self.secure=True
         self.last_submission=None
+        self._result_queue=queue.Queue(maxsize=50)
         self._security_changed=threading.Event()
         self._connection_check_lock=threading.Lock()
         self._connection_check_cache=None
@@ -118,14 +120,23 @@ class Access1Integration:
             self._security_worker_started=True
             threading.Thread(target=self._security_worker,daemon=True,name='access1-secure-status').start()
         self._security_changed.set()
+        if not getattr(self,'_result_worker_started',False):
+            self._result_worker_started=True
+            threading.Thread(target=self._result_worker,daemon=True,name='access1-results').start()
         if not getattr(self,'_worker_started',False):
             threading.Thread(target=self._worker,daemon=True,name='access1-identities').start()
             self._worker_started=True
 
     def status(self):
+        profiles=getattr(self.processor,'camera_profiles',None)
+        values=profiles.all() if profiles else {}
+        stream_cameras=[{'camera':name,'source':p.get('observation_source'),'trusted':p.get('trust_local_video_network') is True}
+                        for name,p in (values.items() if isinstance(values,dict) else ())
+                        if p.get('observation_source','snapshots')!='snapshots']
         return {'instance_id':self.config['instance_id'],'state':self.state,
                 'enabled':self.transport is not None,'directory_running':bool(self.server and self.server.started),
                 'camera_evidence_ready':self.camera_evidence_ready(),
+                'local_stream_cameras':stream_cameras,
                 'secure':self.secure,
                 'camera_submission_ready':self.camera_evidence_ready(strict=self.secure),
                 'last_submission':self.last_submission,
@@ -230,6 +241,7 @@ class Access1Integration:
         try:
             # Freeze identity at recognition time; a reused name must not retarget queued work.
             event=dict(event)
+            event['_queued_monotonic']=time.perf_counter()
             with self._lock:
                 event['person_id']=self.person_id(event.get('slug'))
                 event['camera_id']=self.config['cameras'].get(event.get('camera'))
@@ -240,44 +252,88 @@ class Access1Integration:
     def _worker(self):
         while True:
             event=self._queue.get()
-            try:self.present(event)
+            try:
+                self._timing(event,'submission_queue',event.get('_queued_monotonic',time.perf_counter()))
+                self.present(event,defer=True)
             except Exception:log.warning('Access1 identity processing unavailable; no automatic replay')
             finally:self._queue.task_done()
 
-    def present(self,event):
+    def present(self,event,*,defer=False):
+        event=dict(event)
+        with self._lock:
+            self._submission_sequence=getattr(self,'_submission_sequence',0)+1
+            event['_submission_order']=self._submission_sequence
         try:
-            result=self._present(event)
+            result=self._present(event,defer=defer)
         except Exception:
-            self.last_submission={'state':'blocked','reason':'processing_failed','ts':time.time()}
+            with self._lock:
+                if event['_submission_order']>=getattr(self,'_last_submission_order',0):
+                    self._last_submission_order=event['_submission_order']
+                    self.last_submission={'state':'blocked','reason':'processing_failed','ts':time.time()}
             raise
-        evidence_ts=event.get('evidence_ts')
-        evidence_age=(round(time.time()-evidence_ts,3)
-                      if isinstance(evidence_ts,(int,float)) and math.isfinite(evidence_ts) else None)
-        self.last_submission={**result,'ts':time.time(),'face_event_id':event.get('event_id'),
-                              'evidence_source':event.get('evidence_source'),'evidence_age_seconds':evidence_age,
-                              'event_ended':bool(event.get('event_ended')),
-                              'liveness_confirmed':event.get('liveness_confirmed') is True}
-        log.info('Access1 submission event=%s state=%s reason=%s source=%s age_seconds=%s ended=%s live=%s',
-                 event.get('event_id'),result.get('state'),result.get('reason',''),
-                 event.get('evidence_source'),evidence_age,bool(event.get('event_ended')),
-                 event.get('liveness_confirmed') is True)
-        return result
+        return self._record_submission(event,result)
 
-    def _present(self,event):
-        if not self.camera_evidence_ready(strict=self.secure):
-            return {'state':'blocked','reason':'camera_transport_untrusted'}
-        evidence_ts=event.get('evidence_ts')
-        fresh=(isinstance(evidence_ts,(int,float)) and math.isfinite(evidence_ts)
-               and 0<=time.time()-evidence_ts<10 and event.get('evidence_source')=='secure_live_snapshot'
-               and not event.get('event_ended'))
-        if not self.transport or not fresh or event.get('liveness_confirmed') is not True or not event.get('event_id'):
-            if not self.transport:reason='connector_disabled'
-            elif not event.get('event_id'):reason='event_id_missing'
-            elif event.get('evidence_source')!='secure_live_snapshot':reason='evidence_not_live'
-            elif event.get('event_ended'):reason='event_already_ended'
-            elif not fresh:reason='evidence_expired_or_missing'
-            else:reason='liveness_unconfirmed'
-            return {'state':'blocked','reason':reason}
+    def _record_submission(self,event,result):
+        manager=getattr(self.processor,'stream_observations',None)
+        if manager is not None and event.get('evidence_source')=='bounded_local_stream':
+            manager.receipt(event,result)
+        with self._lock:
+            # A quick result may finish before the submitter records pending.
+            # Never replace a terminal receipt with that late pending display.
+            if result.get('state') == 'pending':
+                with self.audit._connection() as con:
+                    row=con.execute('SELECT state FROM access1_attempts WHERE request_id=?',
+                                    (result.get('request_id'),)).fetchone()
+                if row and row[0] != 'pending':return result
+            evidence_ts=event.get('evidence_ts')
+            evidence_age=(round(time.time()-evidence_ts,3)
+                          if isinstance(evidence_ts,(int,float)) and math.isfinite(evidence_ts) else None)
+            if event.get('_submission_order',0)>=getattr(self,'_last_submission_order',0):
+                self._last_submission_order=event.get('_submission_order',0)
+                self.last_submission={**result,'ts':time.time(),'face_event_id':event.get('event_id'),
+                                  'evidence_source':event.get('evidence_source'),'evidence_age_seconds':None if event.get('evidence_source')=='bounded_local_stream' else evidence_age,
+                                  'evidence_trust':'local_network' if event.get('evidence_source')=='bounded_local_stream' else 'snapshot',
+                                  'event_ended':bool(event.get('event_ended')),
+                                  'liveness_confirmed':event.get('liveness_confirmed') is True}
+            log.info('Access1 submission event=%s state=%s reason=%s source=%s %s=%s ended=%s live=%s',
+                     event.get('event_id'),result.get('state'),result.get('reason',''),
+                     event.get('evidence_source'),'recognition_age_seconds' if event.get('evidence_source')=='bounded_local_stream' else 'age_seconds',evidence_age,bool(event.get('event_ended')),
+                     event.get('liveness_confirmed') is True)
+            return result
+
+    def _present(self,event,*,defer=False):
+        stream = event.get('evidence_source') == 'bounded_local_stream'
+        if stream:
+            manager=getattr(self.processor,'stream_observations',None)
+            remaining,reason=manager.evidence(event) if manager else (None,'stream_observer_unavailable')
+            if remaining is None:return {'state':'blocked','reason':reason}
+            evidence_ts=event.get('evidence_ts')
+            if (not self.transport or not event.get('event_id') or event.get('liveness_confirmed') is not True
+                    or type(evidence_ts) not in (int,float) or not math.isfinite(evidence_ts)):
+                return {'state':'blocked','reason':'stream_evidence_invalid'}
+            expires_at=min(time.time()+remaining,evidence_ts+10)
+            if expires_at<=max(time.time(),evidence_ts):return {'state':'blocked','reason':'evidence_expired'}
+            manager.submitting(event)
+        else:
+            profiles=getattr(self.processor,'camera_profiles',None)
+            profile=profiles.get(event.get('camera')) if profiles else {}
+            if isinstance(profile,dict) and profile.get('observation_source','snapshots')!='snapshots':
+                return {'state':'blocked','reason':'camera_source_changed'}
+            if not self.camera_evidence_ready(strict=self.secure):
+                return {'state':'blocked','reason':'camera_transport_untrusted'}
+            evidence_ts=event.get('evidence_ts')
+            fresh=(isinstance(evidence_ts,(int,float)) and math.isfinite(evidence_ts)
+                   and 0<=time.time()-evidence_ts<10 and event.get('evidence_source')=='secure_live_snapshot'
+                   and not event.get('event_ended'))
+            if not self.transport or not fresh or event.get('liveness_confirmed') is not True or not event.get('event_id'):
+                if not self.transport:reason='connector_disabled'
+                elif not event.get('event_id'):reason='event_id_missing'
+                elif event.get('evidence_source')!='secure_live_snapshot':reason='evidence_not_live'
+                elif event.get('event_ended'):reason='event_already_ended'
+                elif not fresh:reason='evidence_expired_or_missing'
+                else:reason='liveness_unconfirmed'
+                return {'state':'blocked','reason':reason}
+            expires_at=evidence_ts+10
         with self._lock:
             camera_id=self.config['cameras'].get(event.get('camera'))
             if not self.processor.camera_enabled(event.get('camera')):
@@ -288,7 +344,7 @@ class Access1Integration:
             request_id=str(uuid5(UUID(self.config['instance_id']),json.dumps([event['event_id'],person_id,camera_id])))
         stamp=lambda value:datetime.fromtimestamp(value,timezone.utc).isoformat()
         payload={'schema_version':'1.0','instance_id':self.config['instance_id'],'event_id':request_id,
-            'person_id':person_id,'camera_id':camera_id,'recognized_at':stamp(evidence_ts),'expires_at':stamp(evidence_ts+10),
+            'person_id':person_id,'camera_id':camera_id,'recognized_at':stamp(evidence_ts),'expires_at':stamp(expires_at),
             'recognition':{'score':event.get('score'),'metric':'face_embedding_similarity'},
             'liveness':{'status':'passed','method':'rgb_passive','score':event.get('liveness_score'),
                         'confirmed_frames':event.get('liveness_frames',0)}}
@@ -297,18 +353,115 @@ class Access1Integration:
                 (request_id,event['event_id'],time.time(),'pending',json.dumps(payload),None))
             except sqlite3.IntegrityError:return {'state':'duplicate','request_id':request_id}
         result=None
-        try:result=self.transport.call('POST',request_id,payload)
-        except Exception:pass
-        deadline=min(evidence_ts+10,time.time()+8)
-        while time.time()<deadline and (result is None or result.get('status') in ('pending','dispatched')):
-            time.sleep(.3)
-            try:result=self.transport.call('GET',request_id)
-            except Exception:break
+        failure_reason=None
+        transport=self.transport
+        started=time.perf_counter()
+        if stream:
+            remaining,reason=manager.evidence(event)
+            with self._lock:
+                unchanged=(self.config['cameras'].get(event.get('camera'))==camera_id and self.person_id(event.get('slug'))==person_id)
+            if remaining is None or not unchanged or time.time()>=expires_at:
+                reason=reason if remaining is None else 'mapping_or_expiry_changed'
+                with self.audit._connection() as con:
+                    con.execute('UPDATE access1_attempts SET state=?,result=? WHERE request_id=?',('blocked',json.dumps({'reason':reason}),request_id))
+                return {'state':'blocked','reason':reason,'request_id':request_id}
+        try:result=transport.call('POST',request_id,payload)
+        except Exception as exc:failure_reason=self._result_failure(exc)
+        self._timing(event,'access1_post',started)
+        job={'event':event,'request_id':request_id,'result':result,
+             'failure_reason':failure_reason,'transport':transport,
+             'deadline':min(expires_at,time.time()+8),
+             'monotonic_deadline':time.monotonic()+max(0,min(expires_at-time.time(),8)),
+             'started':started}
+        if defer and self._pending(result):
+            try:
+                self._result_queue.put_nowait(job)
+                return {'state':'pending','request_id':request_id,'reason':'access1_result_pending'}
+            except queue.Full:
+                job['failure_reason']='access1_result_queue_full'
+                return self._finish_result(job)
+        while True:
+            summary=self._poll_result(job)
+            if summary is not None:return summary
+
+    @staticmethod
+    def _pending(result):
+        return result is None or result.get('status') in ('pending','dispatched')
+
+    def _timing(self,event,stage,started):
+        seconds=max(0,time.perf_counter()-started)
+        recorder=getattr(self.processor,'record_timing',None)
+        if callable(recorder):recorder(stage,seconds)
+        if getattr(self.processor,'timing_diagnostics',False) is True:
+            log.info('timing event=%s stage=%s elapsed_ms=%.1f',event.get('event_id'),stage,seconds*1000)
+
+    def _poll_result(self,job):
+        if not self._pending(job['result']):return self._finish_result(job)
+        # Reconciliation is GET-only and bound to the original connector.
+        # Re-pairing must never send an old request to a new destination.
+        if self.transport is not job['transport']:
+            job.update(result=None,failure_reason='access1_connector_changed')
+            return self._finish_result(job)
+        remaining=min(job['deadline']-time.time(),job['monotonic_deadline']-time.monotonic())
+        if remaining<=0:return self._finish_result(job)
+        time.sleep(min(.3,remaining))
+        if time.time()>=job['deadline'] or time.monotonic()>=job['monotonic_deadline']:
+            return self._finish_result(job)
+        started=time.perf_counter()
+        try:job['result']=job['transport'].call('GET',job['request_id'])
+        except Exception as exc:
+            job['failure_reason']=self._result_failure(exc)
+            return self._finish_result(job)
+        finally:self._timing(job['event'],'access1_get',started)
+        return None if self._pending(job['result']) else self._finish_result(job)
+
+    def _result_worker(self):
+        while True:self._result_once()
+
+    def _result_once(self):
+        job=self._result_queue.get()
+        try:
+            result=self._poll_result(job)
+            if result is None:
+                try:self._result_queue.put_nowait(job)
+                except queue.Full:
+                    job['failure_reason']='access1_result_queue_full'
+                    result=self._finish_result(job)
+            if result is not None:self._record_submission(job['event'],result)
+        except Exception:
+            log.warning('Access1 result tracking unavailable; no automatic replay')
+            job.update(result=None,failure_reason='access1_result_tracking_failed')
+            try:self._record_submission(job['event'],self._finish_result(job))
+            except Exception:log.warning('Access1 result could not be persisted; access remains unconfirmed')
+        finally:self._result_queue.task_done()
+
+    def _finish_result(self,job):
+        result,request_id,failure_reason=job['result'],job['request_id'],job['failure_reason']
+        self._timing(job['event'],'access1_result_total',job['started'])
         state=result.get('status') if result else 'unconfirmed'
         if state in ('pending','dispatched'):state='unconfirmed'
-        with self.audit._connection() as con:
-            con.execute('UPDATE access1_attempts SET state=?,result=? WHERE request_id=?',(state,json.dumps(result),request_id))
-        return {'state':state,'request_id':request_id}
+        with self._lock:
+            with self.audit._connection() as con:
+                con.execute('UPDATE access1_attempts SET state=?,result=? WHERE request_id=?',(state,json.dumps(result),request_id))
+        summary={'state':state,'request_id':request_id}
+        if result:
+            reason=result.get('reason')
+            if isinstance(reason,str) and re.fullmatch(r'[A-Za-z0-9_:-]{1,120}',reason):
+                summary['reason']=reason
+            for key in ('execution_confirmed','door_open_confirmed'):
+                if type(result.get(key)) is bool:summary[key]=result[key]
+        if state=='unconfirmed':
+            summary.setdefault('reason',failure_reason or 'access1_result_pending')
+        return summary
+
+    @staticmethod
+    def _result_failure(exc):
+        # Categorize locally; never log exception text containing credentials/body.
+        message=str(exc)
+        if re.fullmatch(r'access1_http_[0-9]{3}',message):return message
+        if message=='access1_response_oversized':return message
+        if isinstance(exc,ValueError):return 'access1_result_invalid'
+        return 'access1_transport_unavailable'
 
     def recent(self):
         with self.audit._connection() as con:

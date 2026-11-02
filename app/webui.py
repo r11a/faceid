@@ -29,6 +29,7 @@ from .face_search import register_face_routes
 from .access1 import register_access1_routes
 from .realtime import register_realtime_routes
 from .alerting import register_alert_routes
+from .acquisition_diagnostics import register_acquisition_routes
 from pathlib import Path as _P
 
 log = logging.getLogger("faceid.web")
@@ -53,6 +54,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     register_access1_routes(app, processor, gallery, data_dir)
     register_realtime_routes(app, processor)
     register_alert_routes(app, processor, gallery)
+    register_acquisition_routes(app, processor, static_dir)
     capture_previews: dict[str, tuple[float, bytes]] = {}
     capture_preview_lock = threading.Lock()
 
@@ -1412,6 +1414,10 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         }
 
     class CameraProfileBody(BaseModel):
+        observation_source: str | None = None
+        trust_local_video_network: bool | None = None
+        direct_rtsp_url: str | None = None
+        clear_direct_rtsp: bool = False
         min_face_px: int
         enabled: bool | None = None
         role: str = "observation"
@@ -1593,14 +1599,31 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
             })
         return {"window_days": max(1, min(days, 90)), "cameras": cameras}
 
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.exception_handlers import request_validation_exception_handler
+    @app.exception_handler(RequestValidationError)
+    async def private_profile_validation(request, exc):
+        if request.url.path.startswith('/api/cameras/') and request.url.path.endswith('/profile'):
+            return JSONResponse(status_code=422,content={'detail':'Invalid camera settings'})
+        return await request_validation_exception_handler(request,exc)
+
     @app.post("/api/cameras/{camera}/profile")
-    def save_camera_profile(camera: str, body: CameraProfileBody):
+    async def save_camera_profile(camera: str, body: CameraProfileBody, request: Request):
         profiles = getattr(processor, "camera_profiles", None)
         if profiles is None:
             raise HTTPException(503, "Camera profiles are unavailable")
+        existing = profiles.get(camera)
+        if ((body.observation_source is not None and body.observation_source != existing.get('observation_source','snapshots'))
+                or (body.trust_local_video_network is not None and body.trust_local_video_network != existing.get('trust_local_video_network',False))
+                or body.direct_rtsp_url is not None or body.clear_direct_rtsp):
+            from .access1_admin import require_pairing_admin
+            await require_pairing_admin(request)
         try:
             return {"ok": True, "profile": profiles.update(
                 camera, min_face_px=body.min_face_px, role=body.role,
+                observation_source=body.observation_source,
+                trust_local_video_network=body.trust_local_video_network,
+                direct_rtsp_url=body.direct_rtsp_url, clear_direct_rtsp=body.clear_direct_rtsp,
                 mode=body.mode, night_min_face_px=body.night_min_face_px,
                 burst_frames=body.burst_frames,
                 high_resolution=body.high_resolution,

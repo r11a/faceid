@@ -105,3 +105,47 @@ describe("camera controls", () => {
     expect(resource.reload).toHaveBeenCalledOnce();
   });
 });
+
+describe("stream observation settings", () => {
+  it("makes stream sources event-only while retaining snapshot mode choices", async () => {
+    resource.data.cameras[0].recognition_mode = "continuous";
+    await mount();
+    await act(() => renderer.root.findByProps({"aria-label":"Observation source"}).props.onChange({target:{value:"frigate_restream"}}));
+    let mode = renderer.root.findByProps({"aria-label":"מתי לזהות פנים"});
+    expect(mode.props.disabled).toBe(true);
+    expect(mode.props.value).toBe("event");
+    await act(async () => renderer.root.findAllByType("button").find(node => text(node) === "שמירת הגדרות").props.onClick());
+    expect(JSON.parse(api.mock.calls[0][1].body).recognition_mode).toBe("event");
+    await act(() => renderer.root.findByProps({"aria-label":"Observation source"}).props.onChange({target:{value:"snapshots"}}));
+    mode = renderer.root.findByProps({"aria-label":"מתי לזהות פנים"});
+    expect(mode.props.disabled).toBe(false);
+    expect(mode.props.value).toBe("continuous");
+  });
+  it("defaults to snapshots and requires explicit trust", async () => {
+    await mount();
+    const source=renderer.root.findByProps({"aria-label":"Observation source"});
+    expect(source.props.value).toBe("snapshots");
+    await act(() => source.props.onChange({target:{value:"frigate_restream"}}));
+    expect(renderer.root.findByProps({"aria-label":"Trust local video network"}).props.checked).toBe(false);
+    expect(api).not.toHaveBeenCalled();
+  });
+  it("retains a saved direct secret when the masked input is empty", async () => {
+    Object.assign(resource.data.cameras[0],{observation_source:"direct_rtsp",trust_local_video_network:true,direct_rtsp_configured:true});
+    await mount();
+    expect(renderer.root.findByProps({"aria-label":"Direct RTSP address"}).props.value).toBe("");
+    const save=renderer.root.findAllByType("button").find(node=>text(node)==="שמירת הגדרות");
+    await act(async()=>save.props.onClick());
+    const body=JSON.parse(api.mock.calls[0][1].body);
+    expect(body.direct_rtsp_url).toBeUndefined();expect(body.clear_direct_rtsp).toBeUndefined();
+    expect(api.mock.calls[0][1].headers["X-Access1-Pairing"]).toBe("1");
+  });
+  it("shows explicit clear only after changing away from direct source", async () => {
+    Object.assign(resource.data.cameras[0],{observation_source:"direct_rtsp",direct_rtsp_configured:true});
+    await mount();
+    expect(renderer.root.findAllByProps({"aria-label":"Clear saved RTSP address"})).toHaveLength(0);
+    await act(()=>renderer.root.findByProps({"aria-label":"Observation source"}).props.onChange({target:{value:"snapshots"}}));
+    await act(()=>renderer.root.findByProps({"aria-label":"Clear saved RTSP address"}).props.onChange({target:{checked:true}}));
+    await act(async()=>renderer.root.findAllByType("button").find(node=>text(node)==="שמירת הגדרות").props.onClick());
+    expect(JSON.parse(api.mock.calls[0][1].body).clear_direct_rtsp).toBe(true);
+  });
+});
