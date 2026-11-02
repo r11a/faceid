@@ -1,7 +1,7 @@
 import React from "react";
 import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CamerasPage } from "./Security.jsx";
+import { CamerasPage, LiveFrame } from "./Security.jsx";
 
 const { api, resource } = vi.hoisted(() => ({ api: vi.fn(), resource: {} }));
 vi.mock("../api.js", () => ({ api, assetUrl: path => path }));
@@ -147,5 +147,54 @@ describe("stream observation settings", () => {
     await act(()=>renderer.root.findByProps({"aria-label":"Clear saved RTSP address"}).props.onChange({target:{checked:true}}));
     await act(async()=>renderer.root.findAllByType("button").find(node=>text(node)==="שמירת הגדרות").props.onClick());
     expect(JSON.parse(api.mock.calls[0][1].body).clear_direct_rtsp).toBe(true);
+  });
+});
+
+
+describe("live size calibration", () => {
+  afterEach(() => vi.useRealTimers());
+  it("serializes measurement and ignores a response after changing camera", async () => {
+    vi.useFakeTimers();
+    let finish;
+    api.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    await act(() => { renderer = create(<LiveFrame camera="door" controls />); });
+    await act(() => renderer.root.findByType("button").props.onClick());
+    expect(api).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(api).toHaveBeenCalledTimes(1);
+    const oldFinish = finish;
+    const signal = api.mock.calls[0][1].signal;
+    await act(() => renderer.update(<LiveFrame camera="yard" controls />));
+    expect(signal.aborted).toBe(true);
+    await act(async () => oldFinish({ preview:"old-image",width:320,height:240,faces:[],min_face_px:48 }));
+    expect(renderer.root.findByType("img").props.src).not.toBe("old-image");
+    await act(async () => finish({ preview:"data:image/jpeg;base64,NEW",width:640,height:480,
+      faces:[{box:[10,20,110,120],face_px:100,usable:true}],min_face_px:80 }));
+    expect(renderer.root.findByType("img").props.src).toBe("data:image/jpeg;base64,NEW");
+    expect(text(renderer.toJSON())).toContain("100 px");
+    await act(() => renderer.root.findByType("button").props.onClick());
+    const count = api.mock.calls.length;
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(api).toHaveBeenCalledTimes(count);
+  });
+  it("resumes preview after stopping before the first measurement completes", async () => {
+    api.mockImplementation(() => new Promise(() => {}));
+    await act(() => { renderer = create(<LiveFrame camera="door" controls />); });
+    const first = renderer.root.findByType("img").props.src;
+    await act(() => renderer.root.findByType("button").props.onClick());
+    await act(() => renderer.root.findByType("button").props.onClick());
+    expect(api.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(renderer.root.findByType("img").props.src).not.toBe(first);
+  });
+  it("requests the next preview only after image completion", async () => {
+    vi.useFakeTimers();
+    await act(() => { renderer = create(<LiveFrame camera="door" controls />); });
+    const first = renderer.root.findByType("img").props.src;
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(renderer.root.findByType("img").props.src).toBe(first);
+    await act(() => renderer.root.findByType("img").props.onLoad({currentTarget:{naturalWidth:640,naturalHeight:480}}));
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(renderer.root.findByType("img").props.src).not.toBe(first);
+    expect(api).not.toHaveBeenCalled();
   });
 });

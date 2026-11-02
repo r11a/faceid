@@ -1672,7 +1672,7 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         )
 
     @app.get("/api/cameras/{camera}/analyze")
-    def analyze_camera_frame(camera: str):
+    def analyze_camera_frame(camera: str, include_preview: bool = False):
         if camera not in _camera_names():
             raise HTTPException(404, "Unknown camera")
         profile = processor.camera_profiles.get(camera)
@@ -1685,7 +1685,9 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
         faces = []
         hour = time.localtime().tm_hour
         minimum = profile.get("night_min_face_px" if hour >= 19 or hour < 6 else "min_face_px", processor.min_face_px)
-        for face in engine.faces(image):
+        with engine.background_work():
+            detected = engine.detect_faces(image)
+        for face in detected:
             quality = measure_face_quality(
                 image, face, min_face_px=minimum,
                 min_quality=processor.min_face_quality,
@@ -1697,10 +1699,13 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                     "small_face" if quality.face_px < minimum else
                     "weak_detection" if quality.detection < .55 else "low_quality"),
             })
-        return {
+        result = {
             "camera": camera, "width": int(image.shape[1]),
             "height": int(image.shape[0]), "profile": profile, "faces": faces, "min_face_px": minimum,
         }
+        if include_preview:
+            result["preview"] = "data:image/jpeg;base64," + base64.b64encode(content).decode("ascii")
+        return JSONResponse(result, headers={"Cache-Control": "no-store, max-age=0"})
 
     @app.get("/api/intercom")
     def intercom_overview():
