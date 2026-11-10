@@ -107,14 +107,20 @@ export function FaceExplorer({ source: initialSource, title, onEnroll, onReferen
   }, [state.data]);
   const coverage = index.data?.events_total != null ? index.data : state.data?.index;
   const similarityMode = !source.person || filters.similar;
-  const rebuild = async () => {
-    try { await api(`faces/index${coverage?.remote_available ? "?remote=true&limit=500" : ""}`, { method: "POST" }); indexWasRunning.current = true; toast("השלמת חיפוש בהיסטוריה החלה"); index.reload(); }
+  const rebuild = async (force = false) => {
+    const params = new URLSearchParams(coverage?.remote_available ? "remote=true&limit=500" : "");
+    const options = { method: "POST" };
+    if (force === true) {
+      params.set("force", "true");
+      options.headers = { "X-Access1-Pairing": "1" };
+    }
+    try { await api(`faces/index${params.size ? "?" + params : ""}`, options); indexWasRunning.current = true; toast("השלמת חיפוש בהיסטוריה החלה"); index.reload(); }
     catch (error) { toast(error.message, "error"); }
   };
   return <div className="face-explorer">
     {!compact && <div className="panel-heading"><div><span className="eyebrow">מכל המצלמות</span><h2>{title || "הופעות הפנים שנבחרו"}</h2>{source.person && !filters.similar && <p>אירועים שזוהו או אושרו כאדם זה</p>}</div></div>}
     {similarityMode && <div className="face-search-context"><span>פנים דומות · זהות לא מאומתת</span>{initialSource.person && <button className="text-button" onClick={() => { setSource(initialSource); setFilters(current => ({ ...current, similar: false })); setOffset(0); }}>כל אירועי האדם</button>}</div>}
-    {similarityMode && coverage && (coverage.events_missing > 0 || coverage.running) && <div className="face-search-coverage" role="status"><div><b>{coverage.running ? "משלים חיפוש בהיסטוריה…" : "החיפוש בהיסטוריה חלקי"}</b><span>{coverage.running ? `${coverage.processed || 0} / ${coverage.total || 0} נבדקו` : `${coverage.events_indexed || 0} מתוך ${coverage.events_total} אירועים זמינים לחיפוש פנים`}</span>{coverage.unavailable > 0 && <small>{coverage.unavailable} תמונות אינן זמינות</small>}{coverage.no_faces > 0 && <small>{coverage.no_faces} תמונות ללא פנים לחיפוש</small>}</div>{!coverage.running && <button className="button secondary" onClick={rebuild}><Search />השלם חיפוש בהיסטוריה</button>}</div>}
+    {similarityMode && coverage && (coverage.events_missing > 0 || coverage.running) && <div className="face-search-coverage" role="status"><div><b>{coverage.running ? (coverage.waiting_for_idle ? "ממתין לזמן שקט ללא זיהוי פעיל…" : "משלים חיפוש בהיסטוריה…") : "החיפוש בהיסטוריה חלקי"}</b><span>{coverage.running ? `${coverage.processed || 0} / ${coverage.total || 0} נבדקו` : `${coverage.events_indexed || 0} מתוך ${coverage.events_total} אירועים זמינים לחיפוש פנים`}</span>{coverage.unavailable > 0 && <small>{coverage.unavailable} תמונות אינן זמינות</small>}{coverage.no_faces > 0 && <small>{coverage.no_faces} תמונות ללא פנים לחיפוש</small>}</div>{!coverage.running && <button className="button secondary" onClick={rebuild}><Search />השלם חיפוש בהיסטוריה</button>}</div>}
     {source.person && (referenceMode || (people.data?.users || []).some(person => person.slug === source.person && !person.count)) && <p className="inline-alert">כדי להפעיל זיהוי, בחר תמונות ייחוס מהאירועים שכבר שויכו לאדם. תמונה איכותית אחת מספיקה להתחלה; כמה זוויות משפרות את הזיהוי.</p>}
     <div className="face-explorer-controls"><details className="face-filter-disclosure"><summary aria-label="סינון הופעות" title="סינון"><SlidersHorizontal /></summary>
     <div className="face-filters face-filters-compact">
@@ -134,7 +140,7 @@ export function FaceExplorer({ source: initialSource, title, onEnroll, onReferen
       {view === "timeline" && state.data.total > 50 && <div className="face-timeline-load-more"><span>{state.data.events.length} מתוך {state.data.total} אירועים</span>{state.data.events.length < state.data.total && <button className="button secondary" aria-label="טען עוד אירועים" disabled={state.loading} onClick={() => state.error ? setRetry(v => v + 1) : setOffset(offset + 50)}>{state.loading ? "טוען…" : "טען עוד אירועים"}</button>}</div>}
       {view !== "timeline" && state.data.total > 50 && <div className="face-pagination"><button className="button secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset-50))}>הקודמים</button><span>{offset+1}–{Math.min(offset+50,state.data.total)} מתוך {state.data.total}</span><button className="button secondary" disabled={offset+50 >= state.data.total} onClick={() => setOffset(offset+50)}>הבאים</button></div>}
     </>}
-    <details className="face-history-note"><summary>חסרים אירועים ישנים?</summary><p>אירועים מזוהים נשמרים לפי מדיניות ההיסטוריה. חיפוש דומה זמין לאירועים שנאספו מאז 6.1 ולתמונות היסטוריות שעדיין קיימות. תמונות שכבר נמחקו אינן ניתנות לשחזור.</p>{index.data?.running ? <Loading text={`סורק היסטוריה: ${index.data.processed} מתוך ${index.data.total}`} /> : <button className="button secondary" onClick={rebuild}>סרוק תמונות היסטוריות זמינות</button>}{index.data?.error && <p role="alert">{index.data.error}</p>}<button className="text-button" onClick={() => { setOffset(0); setRetry(v => v+1); }}>רענן תוצאות</button></details>
+    <details className="face-history-note"><summary>חסרים אירועים ישנים?</summary><p>אירועים מזוהים נשמרים לפי מדיניות ההיסטוריה. חיפוש דומה זמין לאירועים שנאספו מאז 6.1 ולתמונות היסטוריות שעדיין קיימות. תמונות שכבר נמחקו אינן ניתנות לשחזור.</p>{index.data?.running ? <Loading text={index.data.waiting_for_idle ? "ממתין לזמן שקט; זיהוי חי מקבל קדימות" : `סורק היסטוריה: ${index.data.processed} מתוך ${index.data.total}`} /> : <button className="button secondary" onClick={rebuild}>סרוק תמונות היסטוריות זמינות</button>}{!index.data?.running && <button className="button secondary" onClick={() => rebuild(true)}>סרוק מחדש גם תמונות ללא פנים · מנהל בלבד</button>}{index.data?.error && <p role="alert">{index.data.error}</p>}<button className="text-button" onClick={() => { setOffset(0); setRetry(v => v+1); }}>רענן תוצאות</button></details>
     {event && <Evidence event={event} people={people.data?.users || []} onClose={() => setEvent(null)} onSimilar={nextSource => { setSource(nextSource); setOffset(0); setSamples(null); setView("timeline"); }} />}
     {referenceEvent && <HistoryReferenceChooser event={referenceEvent} person={source.person} onClose={() => setReferenceEvent(null)} onAdded={result => { people.reload(); onReferencesChanged?.(result); }} />}
   </div>;

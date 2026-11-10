@@ -6,7 +6,7 @@ const html=readFileSync(new URL('../public/acquisition-diagnostics.html',import.
 const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 async function fixture(responses){
   const elements={};
-  for(const id of ['form','camera','source','directFields','direct','start','status','results','download','left','top','right','bottom','scene','previewPanel','fullInput','cropInput','regionFields','modeInfo','previewState','startupPanel','startupInput','operational','operationPreview']){
+  for(const [,id] of html.matchAll(/\bid="([^"]+)"/g)){
     elements[id]={replaceChildren(){this.options=[]},value:'',options:[],listeners:{},addEventListener(name,fn){this.listeners[name]=fn},append(o){this.options.push(o)},
       removeAttribute(name){delete this[name]},getContext(){return {drawImage(){},strokeRect(){}}},
       getBoundingClientRect(){return {left:0,top:0,width:100,height:100}},setPointerCapture(){}};

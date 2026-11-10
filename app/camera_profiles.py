@@ -11,6 +11,25 @@ LIVENESS_MODES = {"off", "advisory", "required"}
 RECOGNITION_MODES = {"event", "presence", "continuous"}
 
 
+def profile_capture_fields(profile):
+    """Credential-free configuration facts for passive diagnostic comparison."""
+    profile = profile if isinstance(profile, dict) else {}
+    source = profile.get('observation_source', 'snapshots')
+    mode = profile.get('recognition_mode', 'event')
+    fields = {
+        'source': source if source in ('snapshots', 'frigate_restream', 'direct_rtsp') else 'invalid',
+        'trust': profile.get('trust_local_video_network') is True,
+        'enabled': bool(profile.get('enabled', True)),
+        'recognition_mode': mode if isinstance(mode, str) and mode in RECOGNITION_MODES else 'invalid',
+        'fast_recognition': bool(profile.get('fast_recognition', False)),
+        'high_resolution': bool(profile.get('high_resolution', False)),
+        'direct_rtsp_configured': bool(profile.get('direct_rtsp_configured', False)),
+    }
+    fields['profile_revision'] = hashlib.sha256(
+        json.dumps(fields, sort_keys=True).encode()).hexdigest()[:16]
+    return fields
+
+
 def _stored_seconds(value, default: float, minimum: float, maximum: float) -> float:
     try:
         seconds = float(value)
@@ -25,13 +44,27 @@ class CameraProfiles:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.default_min_face_px = int(default_min_face_px)
         self._lock = threading.RLock()
+        self._last_read_status = {'status': 'not_read', 'fallback_used': False}
 
     def _read(self) -> dict:
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
-            return value if isinstance(value, dict) else {}
-        except (OSError, json.JSONDecodeError):
+            valid = isinstance(value, dict)
+            self._last_read_status = {'status': 'ok' if valid else 'invalid_shape',
+                                      'fallback_used': not valid}
+            return value if valid else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            self._last_read_status = {
+                'status': ('missing' if isinstance(exc, FileNotFoundError)
+                           else 'invalid_json' if isinstance(exc, json.JSONDecodeError)
+                           else 'unreadable'), 'fallback_used': True,
+            }
             return {}
+
+    def read_status(self):
+        """Last existing read's outcome; no extra I/O or change to fallback policy."""
+        with self._lock:
+            return dict(self._last_read_status)
 
     def all(self) -> dict:
         with self._lock:

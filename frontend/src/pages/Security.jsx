@@ -78,6 +78,7 @@ export function LiveFrame({ camera, refreshKey = 0, controls = false }) {
       try {
         const result = await api(`cameras/${encodeURIComponent(camera)}/analyze?include_preview=true`, { signal: controller.signal });
         if (stopped) return;
+        if (!result?.preview?.startsWith("data:image/jpeg;base64,")) throw new Error("תמונת המדידה אינה זמינה — לא מוצגות מסגרות על תמונה אחרת");
         setAnalysis({ ...result, elapsed: Date.now() - start }); setError(null);
       } catch (failure) {
         if (stopped) return;
@@ -89,7 +90,9 @@ export function LiveFrame({ camera, refreshKey = 0, controls = false }) {
     return () => { stopped = true; clearTimeout(next); controller.abort(); };
   }, [camera, refreshKey, measuring]);
   const result = measuring ? analysis : null;
+  const sourceLabel = { snapshots: "תמונת תצוגה של מקור התמונות", frigate_restream: "זרם Frigate המוגדר לזיהוי", direct_rtsp: "RTSP ישיר המוגדר לזיהוי" }[result?.source];
   return <div className="camera-calibration">
+    {controls && <div className="muted">{sourceLabel || "מקור הכיול: מקור הזיהוי השמור למצלמה"} · מדידה בלבד, ללא בקשת גישה</div>}
     {controls && <div className="calibration-toolbar"><button className={`button ${measuring ? "secondary" : "primary"}`} onClick={() => setMeasuring(value => !value)}><ScanFace />{measuring ? "עצירת מדידת פנים" : "מדידת פנים מתעדכנת"}</button><span role="status">{measuring ? error ? `הבדיקה נכשלה: ${error}` : result ? `גודל פנים · סף ${result.min_face_px}px · בדיקה ${result.elapsed}ms` : "מודד פנים…" : "תמונות מתעדכנות · הפעל מדידה להצגת גודל הפנים"}</span></div>}
     <div className="live-frame" style={{ aspectRatio: result ? `${result.width} / ${result.height}` : ratio }}>
       <img src={result?.preview || frameUrl} decoding="async" onLoad={event => { setFailed(false); if (!measuring) { const image = event.currentTarget; if (image?.naturalWidth) setRatio(image.naturalWidth / image.naturalHeight); queueFrame(); } }} onError={() => { setFailed(true); queueFrame(2000); }} alt={`תמונה ממצלמת ${camera}`} />
@@ -117,7 +120,7 @@ export function CamerasPage() {
     <PageHeader eyebrow="מצלמות" title="מצלמות" description="תמונה חיה והגדרות זיהוי לכל מצלמה." />
     <div className="camera-workspace">
       <Panel className="camera-list"><div className="panel-heading"><div><span className="eyebrow">מקורות</span><h2>{studio.data?.cameras?.length || 0} מצלמות</h2></div></div>{(studio.data?.cameras || []).map((camera) => <button className={selected === camera.camera ? "active" : ""} onClick={() => { setSelected(camera.camera); }} key={camera.camera}><span className={`camera-state ${camera.enabled ? "on" : "off"}`}><Camera /></span><span><b>{camera.camera}</b><small>{modeLabels[camera.mode] || camera.mode} · מינימום {camera.min_face_px}px</small></span><Badge tone={camera.enabled ? "success" : "neutral"}>{camera.enabled ? "פעילה" : "מושבתת"}</Badge></button>)}</Panel>
-      {current ? <Panel className="camera-stage"><div className="panel-heading"><div><span className="eyebrow">תצוגה חיה</span><h2>{current.camera}</h2></div><div><button className="button secondary" onClick={() => setRefresh((value) => value + 1)}><RefreshCw />רענון</button></div></div><LiveFrame camera={current.camera} controls refreshKey={`${refresh}-${current.high_resolution}-${current.recognition_mode}`} /><CameraSamplingStatus camera={current} /><CameraSettings camera={current} onSaved={studio.reload} onToggle={toggle} /></Panel> : <Empty icon={Camera} title="אין מצלמות" text="FaceID לא קיבל כרגע רשימת מצלמות מ־Frigate." />}
+      {current ? <Panel className="camera-stage"><div className="panel-heading"><div><span className="eyebrow">תצוגה חיה</span><h2>{current.camera}</h2></div><div><button className="button secondary" onClick={() => setRefresh((value) => value + 1)}><RefreshCw />רענון</button></div></div><LiveFrame camera={current.camera} controls refreshKey={`${refresh}-${current.high_resolution}-${current.recognition_mode}-${current.observation_source}`} /><CameraSamplingStatus camera={current} /><CameraSettings camera={current} onSaved={studio.reload} onToggle={toggle} /></Panel> : <Empty icon={Camera} title="אין מצלמות" text="FaceID לא קיבל כרגע רשימת מצלמות מ־Frigate." />}
     </div>
   </>;
 }

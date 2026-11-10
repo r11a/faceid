@@ -153,9 +153,9 @@ class ContinuousRecognition:
             # a person. Re-read profiles when this bounded job actually runs.
             cameras = [camera for camera, profile in self.profiles().items()
                        if self.online and self.processor.camera_enabled(camera)
+                       and profile.get("observation_source", "snapshots") == "snapshots"
                        and profile.get("recognition_mode", "event") != "event"
-                       and profile.get("high_resolution")
-                       and profile.get("observation_source", "snapshots") == "snapshots"]
+                       and profile.get("high_resolution")]
             self.processor.frigate.sync_live_cameras(cameras)
         finally:
             with self.lock:

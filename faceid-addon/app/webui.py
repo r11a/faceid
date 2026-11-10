@@ -30,6 +30,9 @@ from .access1 import register_access1_routes
 from .realtime import register_realtime_routes
 from .alerting import register_alert_routes
 from .acquisition_diagnostics import register_acquisition_routes
+from .recognition_capture import emit as recognition_capture_emit, active as recognition_capture_active
+from .camera_profiles import profile_capture_fields
+from .camera_calibration import CameraCalibration, CalibrationUnavailable
 from pathlib import Path as _P
 
 log = logging.getLogger("faceid.web")
@@ -50,6 +53,7 @@ class RenameBody(BaseModel):
 
 def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path) -> FastAPI:
     app = FastAPI(title="FaceID")
+    camera_calibration = CameraCalibration(processor, engine)
     register_face_routes(app, processor, gallery, engine)
     register_access1_routes(app, processor, gallery, data_dir)
     register_realtime_routes(app, processor)
@@ -1604,22 +1608,38 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     @app.exception_handler(RequestValidationError)
     async def private_profile_validation(request, exc):
         if request.url.path.startswith('/api/cameras/') and request.url.path.endswith('/profile'):
+            recognition_capture_emit(processor, None, request.path_params.get('camera'),
+                                     'profile_save_failed', http_status=422, reason='invalid_camera_settings')
             return JSONResponse(status_code=422,content={'detail':'Invalid camera settings'})
         return await request_validation_exception_handler(request,exc)
 
     @app.post("/api/cameras/{camera}/profile")
     async def save_camera_profile(camera: str, body: CameraProfileBody, request: Request):
+        recognition_capture_emit(processor, None, camera, 'profile_save_requested',
+            requested_source=body.observation_source, requested_trust=body.trust_local_video_network)
         profiles = getattr(processor, "camera_profiles", None)
         if profiles is None:
+            recognition_capture_emit(processor, None, camera, 'profile_save_failed',
+                                     http_status=503, reason='profiles_unavailable')
             raise HTTPException(503, "Camera profiles are unavailable")
-        existing = profiles.get(camera)
+        try:
+            existing = profiles.get(camera)
+        except Exception:
+            recognition_capture_emit(processor, None, camera, 'profile_save_failed',
+                                     http_status=500, reason='profile_read_failed')
+            raise
         if ((body.observation_source is not None and body.observation_source != existing.get('observation_source','snapshots'))
                 or (body.trust_local_video_network is not None and body.trust_local_video_network != existing.get('trust_local_video_network',False))
                 or body.direct_rtsp_url is not None or body.clear_direct_rtsp):
             from .access1_admin import require_pairing_admin
-            await require_pairing_admin(request)
+            try:
+                await require_pairing_admin(request)
+            except HTTPException as exc:
+                recognition_capture_emit(processor, None, camera, 'profile_save_failed',
+                                         http_status=exc.status_code, reason='profile_admin_required')
+                raise
         try:
-            return {"ok": True, "profile": profiles.update(
+            profile = profiles.update(
                 camera, min_face_px=body.min_face_px, role=body.role,
                 observation_source=body.observation_source,
                 trust_local_video_network=body.trust_local_video_network,
@@ -1636,9 +1656,35 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                 liveness_mode=body.liveness_mode,
                 roi=body.roi,
                 enabled=body.enabled,
-            )}
+            )
         except ValueError as exc:
+            recognition_capture_emit(processor, None, camera, 'profile_save_failed',
+                                     http_status=400, reason='profile_validation_failed')
             raise HTTPException(400, str(exc)) from exc
+        except Exception:
+            recognition_capture_emit(processor, None, camera, 'profile_save_failed',
+                                     http_status=500, reason='profile_persistence_failed')
+            raise
+        if recognition_capture_active(processor, camera):
+            # Passive readback is isolated: failed diagnostics must not turn an
+            # otherwise successful save into a new error or retry the mutation.
+            try:
+                safe = profile_capture_fields(profile)
+                persisted = profiles.get(camera)
+                persisted_safe = profile_capture_fields(persisted)
+                status = profiles.read_status() if hasattr(profiles, 'read_status') else {}
+                recognition_capture_emit(processor, None, camera, 'profile_save_result', http_status=200,
+                    saved_source=safe['source'], saved_trust=safe['trust'],
+                    requested_source=body.observation_source, requested_trust=body.trust_local_video_network,
+                    persisted_source=persisted_safe['source'], persisted_trust=persisted_safe['trust'],
+                    source_matches_request=body.observation_source is None or persisted_safe['source'] == body.observation_source,
+                    trust_matches_request=body.trust_local_video_network is None or persisted_safe['trust'] == body.trust_local_video_network,
+                    profile_read_status=status.get('status', 'unknown'), profile_fallback_used=status.get('fallback_used', False),
+                    profile_revision=persisted_safe['profile_revision'])
+            except Exception:
+                recognition_capture_emit(processor, None, camera, 'profile_save_result', http_status=200,
+                                         reason='profile_readback_unavailable')
+        return {"ok": True, "profile": profile}
 
     class CameraEnabledBody(BaseModel):
         enabled: bool
@@ -1663,9 +1709,10 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     def camera_frame(camera: str):
         if camera not in _camera_names():
             raise HTTPException(404, "Unknown camera")
-        content = camera_frame_bytes(processor.frigate, camera, processor.camera_profiles.get(camera))
-        if not content:
-            raise HTTPException(404, "Frigate did not return a current frame")
+        try:
+            content = camera_calibration.frame(camera)
+        except CalibrationUnavailable as exc:
+            raise HTTPException(404 if str(exc) == 'snapshot_unavailable' else 503, str(exc), headers={"Cache-Control":"no-store", "Retry-After":"2"}) from None
         return Response(
             content=content, media_type="image/jpeg",
             headers={"Cache-Control": "no-store, max-age=0"},
@@ -1675,37 +1722,11 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
     def analyze_camera_frame(camera: str, include_preview: bool = False):
         if camera not in _camera_names():
             raise HTTPException(404, "Unknown camera")
-        profile = processor.camera_profiles.get(camera)
-        content = camera_frame_bytes(processor.frigate, camera, profile)
-        if not content:
-            raise HTTPException(404, "Frigate did not return a current frame")
-        image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            raise HTTPException(404, "Frigate did not return a readable frame")
-        faces = []
-        hour = time.localtime().tm_hour
-        minimum = profile.get("night_min_face_px" if hour >= 19 or hour < 6 else "min_face_px", processor.min_face_px)
-        with engine.background_work():
-            detected = engine.detect_faces(image)
-        for face in detected:
-            quality = measure_face_quality(
-                image, face, min_face_px=minimum,
-                min_quality=processor.min_face_quality,
-            )
-            faces.append({
-                "box": [round(float(value), 1) for value in face.bbox],
-                **quality.to_dict(),
-                "rejection_reason": None if quality.usable else (
-                    "small_face" if quality.face_px < minimum else
-                    "weak_detection" if quality.detection < .55 else "low_quality"),
-            })
-        result = {
-            "camera": camera, "width": int(image.shape[1]),
-            "height": int(image.shape[0]), "profile": profile, "faces": faces, "min_face_px": minimum,
-        }
-        if include_preview:
-            result["preview"] = "data:image/jpeg;base64," + base64.b64encode(content).decode("ascii")
-        return JSONResponse(result, headers={"Cache-Control": "no-store, max-age=0"})
+        try:
+            result = camera_calibration.analyze(camera, include_preview)
+        except CalibrationUnavailable as exc:
+            raise HTTPException(404 if str(exc) == 'snapshot_unavailable' else 503, str(exc), headers={"Cache-Control":"no-store", "Retry-After":"2"}) from None
+        return JSONResponse(result, headers={"Cache-Control":"no-store, max-age=0"})
 
     @app.get("/api/intercom")
     def intercom_overview():

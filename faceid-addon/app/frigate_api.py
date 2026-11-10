@@ -59,6 +59,18 @@ def sighting_recording_path(metadata: dict | None) -> str | None:
         return None
 
 
+# Allow the event database to catch up without extending the evidence lifetime.
+ANCHOR_RETRY_SECONDS = 2.0
+TRANSIENT_ANCHOR = frozenset({'metadata_not_ready', 'crop_not_ready', 'transport_unavailable'})
+
+
+def fetch_anchor(frigate, event_id, camera):
+    if hasattr(type(frigate), 'association_frame_result'):
+        return frigate.association_frame_result(event_id, camera)
+    image = frigate.association_frame(event_id, camera)
+    return image, 'ready' if image is not None else 'crop_not_ready'
+
+
 class FrigateAPI:
     supports_live_frames = True
 
@@ -159,34 +171,64 @@ class FrigateAPI:
             return None
 
     def association_frame(self, event_id, camera):
-        """Person-cropped active-event anchor only; never live admission evidence."""
-        response=None
+        return self.association_frame_result(event_id, camera)[0]
+
+    def association_frame_result(self, event_id, camera):
+        """Return only an active, event-bound crop and a credential-free reason."""
+        path = "/api/events/" + quote(event_id, safe='')
+        def check_event():
+            response = self.request('GET', path, timeout=2.0)
+            try:
+                if response.status_code == 404:
+                    return None, 'metadata_not_ready'
+                if response.status_code != 200:
+                    return None, 'metadata_http_' + str(response.status_code)
+                value = response.json()
+                if not isinstance(value, dict):
+                    return None, 'metadata_invalid'
+                if value.get('camera') != camera or value.get('label') != 'person':
+                    return None, 'subject_mismatch'
+                if value.get('end_time'):
+                    return None, 'event_ended'
+                return value, 'ready'
+            finally:
+                response.close()
+
         try:
-            def active():
-                metadata=None
-                try:
-                    metadata=self.request('GET',f"/api/events/{quote(event_id,safe='')}",timeout=2.0)
-                    value=metadata.json() if metadata.status_code==200 else None
-                    return value if isinstance(value,dict) else None
-                finally:
-                    if metadata is not None:metadata.close()
-            before=active()
-            if not before or before.get('camera')!=camera or before.get('end_time') or before.get('label')!='person':
-                return None
-            response=self.request('GET',f"/api/events/{quote(event_id,safe='')}/snapshot.jpg",
+            before, reason = check_event()
+            if before is None:
+                return None, reason
+            response = self.request('GET', path+'/snapshot.jpg',
                 params={'crop':1,'timestamp':0,'bbox':0,'quality':100},
                 headers={'Cache-Control':'no-cache, no-store'},timeout=2.0)
-            if response.status_code!=200 or not response.content or len(response.content)>20_000_000:
-                return None
-            image=cv2.imdecode(np.frombuffer(response.content,np.uint8),cv2.IMREAD_COLOR)
-            after=active()
-            if not after or after.get('camera')!=camera or after.get('end_time') or after.get('label')!='person':
-                return None
-            return image
-        except (requests.RequestException,ValueError,cv2.error):
-            return None
-        finally:
-            if response is not None:response.close()
+            try:
+                if response.status_code == 404:
+                    return None, 'crop_not_ready'
+                if response.status_code != 200:
+                    return None, 'crop_http_' + str(response.status_code)
+                cache = {x.strip().lower() for x in response.headers.get('Cache-Control','').split(',')}
+                if 'no-store' not in cache or response.headers.get('Age','0') != '0':
+                    return None, 'crop_not_active'
+                try:
+                    stamp = float(response.headers.get('X-Frame-Time',''))
+                    valid_stamp = math.isfinite(stamp) and stamp > 0 and stamp >= float(before.get('start_time') or 0)
+                except (TypeError, ValueError):
+                    valid_stamp = False
+                if not valid_stamp:
+                    return None, 'crop_timestamp_invalid'
+                if not response.content or len(response.content)>20_000_000:
+                    return None, 'crop_size_invalid'
+                image = cv2.imdecode(np.frombuffer(response.content,np.uint8),cv2.IMREAD_COLOR)
+            finally:
+                response.close()
+            if image is None:
+                return None, 'crop_decode_failed'
+            after, reason = check_event()
+            return (image, 'ready') if after is not None else (None, reason)
+        except requests.RequestException:
+            return None, 'transport_unavailable'
+        except (ValueError, cv2.error):
+            return None, 'invalid_anchor_response'
 
     def live_event_frame(self, event_id: str) -> np.ndarray | None:
         """Read an active event's full detect frame, never an archived snapshot.

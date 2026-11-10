@@ -1,4 +1,5 @@
 """Offline admission-contract tests; no camera/network/relay is contacted."""
+from concurrent.futures import Future
 import json
 from pathlib import Path
 import tempfile
@@ -43,6 +44,16 @@ class StreamTests(unittest.TestCase):
         self.integration.transport.call.return_value={'status':'relay_activated','reason':'output_on','execution_confirmed':True}
         self.p.access1=self.integration
         self.m=self.p.stream_observations
+        # Drive the bounded anchor worker deterministically between synthetic frames.
+        self.addCleanup(self.m.anchor_executor.shutdown, wait=True)
+        def submit_anchor(fn, session):
+            result = Future()
+            try:
+                result.set_result(fn(session))
+            except Exception as exc:
+                result.set_exception(exc)
+            return result
+        self.m.anchor_executor.submit = submit_anchor
         self.m._quality=lambda *args:SimpleNamespace(usable=True,score=.9,to_dict=lambda:{'score':.9,'sharpness':100})
         self.addCleanup(self.m.executor.shutdown,wait=True)
 
@@ -58,7 +69,7 @@ class StreamTests(unittest.TestCase):
     def frame(self,n,faces=None):
         self.faces=faces if faces is not None else [self.face(n)]
         self.reader.record={'sequence':n,'generation':self.reader.generation,'arrived':time.monotonic(),
-                            'pts_ms':1000+n*250,'image':np.full((100,100,3),n,np.uint8)}
+                            'pts_ms':1000+n*250,'image':np.full((100,1200,3),n,np.uint8)}
         self.m._step('front')
 
     def confirmed(self):
@@ -242,7 +253,9 @@ class StreamTests(unittest.TestCase):
     def test_preview_private_and_excluded_from_report(self):
         s=self.trigger();self.frame(1)
         self.assertIsInstance(self.m.preview(s['eid'],'anchor'),bytes)
-        self.assertNotIn('image',json.dumps(self.m.report()))
+        report = json.dumps(self.m.report())
+        self.assertNotIn('"image":', report)
+        self.assertNotIn('data:image/', report)
         self.m.previews[s['eid']]['updated']-=181
         self.assertIsNone(self.m.preview(s['eid'],'anchor'))
 

@@ -1,0 +1,37 @@
+FaceID 6.7.2 — verification record, 2026-11-09
+Status: READY FOR RIG VALIDATION; field recognition/latency acceptance pending.
+
+Backend: 710 discovered/run, 709 passed, 1 skipped, 0 failures/errors.
+Full suite repeated against the newly built 6.7.2 runtime: same result.
+The skipped test requires the optional complete buffalo_l detector/embedding
+fixture (FACEID_ENGINE_MODEL_ROOT), absent here. It was not counted as passed.
+Frontend: 125 passed across 14 test files; production Vite build passed.
+
+Real amd64 Home Assistant add-on image built from source/faceid-addon/Dockerfile.
+Image identity is recorded in image-identity.txt. ARM image not validated.
+App/static/run.sh installed in image match packaged source bytes.
+Packaged imports, release assets, shell syntax and certificate creation/reuse pass.
+Normal s6/bashio startup reaches app.main using an inert replacement entry module.
+Operational startup flag remains enabled; no actual operational worker was run.
+
+Real ONNX recognition and bundled liveness models executed on synthetic input.
+Synthetic H.265 decoder produced 13 frames. The production reader delivered three
+distinct records within one generation and stopped cleanly. Native decoder error
+redaction passed. These are runtime/codec smoke checks, not accuracy benchmarks.
+Model/codec/startup/regression containers had network disabled. Image build used
+package repositories/cache for dependencies; no live service testing was done.
+
+Coverage includes configured-source calibration, exact-frame overlays, credentials,
+no fallback/submission, profile/generation changes, bounded background admission,
+lease sharing/expiry/capacity, source migration, Access1 latest-result ordering,
+and the existing association/liveness/expiry/duplicate/cancellation suites.
+
+Source inputs are preserved; preservation.json records raw hash verification.
+Critical production recognition modules, models and dependency definitions remain
+unchanged from our local base. Complete review deltas are supplied for both bases.
+
+No camera, broker, Home Assistant, Access1 endpoint or relay was exercised.
+Calibration is not access evidence. Normal automatic access remains enabled per
+saved configuration while diagnostics are open. Real event -> association -> live
+samples -> recognition -> Access1 result must be confirmed on the rig. No claim
+of reduced field latency, 19/20 success, or complete real-world security is made.

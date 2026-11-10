@@ -20,6 +20,8 @@ class InferenceLock:
         self._busy = False
         self._live_waiters = 0
         self._live_reservations = 0
+        self._busy_live = False
+        self._last_live_activity = time.monotonic()
         self._local = threading.local()
 
     def __enter__(self):
@@ -27,10 +29,16 @@ class InferenceLock:
         with self._condition:
             if not background:
                 self._live_waiters += 1
+                self._last_live_activity = time.monotonic()
                 self._condition.notify_all()
             try:
-                self._condition.wait_for(lambda: not self._busy and (not background or (self._live_waiters == 0 and self._live_reservations == 0)))
+                deadline = getattr(self._local, "deadline", None) if background else None
+                timeout = max(0, deadline-time.monotonic()) if deadline is not None else None
+                admitted = self._condition.wait_for(lambda: not self._busy and (not background or (self._live_waiters == 0 and self._live_reservations == 0)), timeout=timeout)
+                if not admitted:
+                    raise TimeoutError("background_inference_busy")
                 self._busy = True
+                self._busy_live = not background
             finally:
                 if not background:
                     self._live_waiters -= 1
@@ -38,6 +46,9 @@ class InferenceLock:
 
     def __exit__(self, *args):
         with self._condition:
+            if self._busy_live:
+                self._last_live_activity = time.monotonic()
+            self._busy_live = False
             self._busy = False
             self._condition.notify_all()
 
@@ -47,21 +58,32 @@ class InferenceLock:
         # This does not hold the inference mutex during HTTP or audit I/O.
         with self._condition:
             self._live_reservations += 1
+            self._last_live_activity = time.monotonic()
         try:
             yield
         finally:
             with self._condition:
                 self._live_reservations -= 1
+                self._last_live_activity = time.monotonic()
                 self._condition.notify_all()
 
+    def live_activity(self):
+        """Foreground demand only; background indexing cannot keep itself busy."""
+        with self._condition:
+            return {"active": bool(self._busy_live or self._live_waiters or self._live_reservations),
+                    "last_activity_monotonic": self._last_live_activity}
+
     @contextmanager
-    def background_work(self):
+    def background_work(self, *, timeout=None):
         previous = getattr(self._local, "background", False)
+        previous_deadline = getattr(self._local, "deadline", None)
         self._local.background = True
+        self._local.deadline = time.monotonic()+timeout if timeout is not None else previous_deadline
         try:
             yield
         finally:
             self._local.background = previous
+            self._local.deadline = previous_deadline
 
 
 class FaceEngine:
@@ -131,6 +153,13 @@ class FaceEngine:
         self._embedding_compute_ms = deque(maxlen=256)
         self._embedding_failures = 0
         self._embedding_calls = 0
+        self._detection_wait_ms = deque(maxlen=256)
+        self._detection_compute_ms = deque(maxlen=256)
+        self._detection_calls = 0
+        self._detection_failures = 0
+        self._stream_frame_requests = 0
+        self._stream_frame_unavailable = 0
+        self._stream_frame_rejected = 0
         self.embedding_warmup = {"state": "not_started", "elapsed_ms": None}
         self._prepare_embedding()
 
@@ -210,7 +239,24 @@ class FaceEngine:
                        for task, model in self.models.items()},
             "inference": inference,
             "embedding": self._embedding_health(),
+            "stream_detection": self._detection_health(),
         }
+
+    def _detection_health(self):
+        with self._metrics_lock:
+            waits = list(self._detection_wait_ms)
+            computes = list(self._detection_compute_ms)
+            result = {"calls": self._detection_calls, "failures": self._detection_failures,
+                      "frame_requests": self._stream_frame_requests,
+                      "unavailable_frames": self._stream_frame_unavailable,
+                      "rejected_frames": self._stream_frame_rejected,
+                      "samples": len(computes)}
+        for name, samples in (("scheduler_wait", waits), ("compute", computes)):
+            result[name] = {
+                "p50_ms": round(float(np.percentile(samples, 50)), 3) if samples else None,
+                "p95_ms": round(float(np.percentile(samples, 95)), 3) if samples else None,
+            }
+        return result
 
     def _embedding_health(self):
         with self._metrics_lock:
@@ -228,17 +274,54 @@ class FaceEngine:
     def live_work(self):
         return self._lock.live_work()
 
+    def live_activity(self):
+        return self._lock.live_activity()
+
     def model_work(self):
         # Liveness shares the same scheduler as detection/embedding.
         return self._lock
 
-    def detect_frame_record(self, reader):
-        """Take latest input only after obtaining the existing inference scheduler."""
+    def detect_frame_record(self, reader, *, admit=None):
+        """Admit latest distinct input after scheduling, before costly detection.
+
+        Local arrival age applies when processing starts, not after inference.
+        The caller still validates generation, event and evidence expiry before
+        accepting/submitting results. Rejection never masquerades as no face.
+        """
+        queued = time.perf_counter()
         with self._lock:
-            record=reader.frame_record()
-            if record is None or not 0 <= time.monotonic()-record['arrived'] <= 1:
+            scheduled = time.perf_counter()
+            record = reader.frame_record()
+            with self._metrics_lock:
+                self._stream_frame_requests += 1
+            started = time.monotonic()
+            if record is None or not 0 <= started-record['arrived'] <= 1:
+                with self._metrics_lock:
+                    self._stream_frame_unavailable += 1
                 return None, []
-            return record,self._detect_faces(record['image'])
+            record['processing_started_monotonic'] = started
+            record['processing_age_ms'] = (started-record['arrived'])*1000
+            record['detection_scheduler_wait_ms'] = (scheduled-queued)*1000
+            if admit is not None and not admit(record):
+                record['processing_rejected'] = 'duplicate_frame'
+                with self._metrics_lock:
+                    self._stream_frame_rejected += 1
+                return record, []
+            compute_started = time.perf_counter()
+            failed = False
+            try:
+                return record, self._detect_faces(record['image'])
+            except Exception:
+                failed = True
+                raise
+            finally:
+                compute_ms = (time.perf_counter()-compute_started)*1000
+                record['detection_compute_ms'] = compute_ms
+                with self._metrics_lock:
+                    self._detection_calls += 1
+                    self._detection_failures += int(failed)
+                    self._detection_wait_ms.append((scheduled-queued)*1000)
+                    self._detection_compute_ms.append(compute_ms)
 
     def detect_faces(self, bgr: np.ndarray):
         return self.faces(bgr, recognize=False)
@@ -301,8 +384,8 @@ class FaceEngine:
                     self._inference_failures += int(failed)
                     self._inference_ms.append(elapsed_ms)
 
-    def background_work(self):
-        return self._lock.background_work()
+    def background_work(self, *, timeout=None):
+        return self._lock.background_work(timeout=timeout)
 
     @staticmethod
     def best_face(faces, min_px: int = 48, min_det: float = 0.55):
