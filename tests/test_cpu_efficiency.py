@@ -137,9 +137,10 @@ class CpuEfficiencyTests(unittest.TestCase):
         p.engine.faces.assert_not_called()
         p.engine.embed_face.assert_not_called()
 
-    def test_live_pipeline_keeps_quality_selection_before_identity(self):
+    def test_secure_snapshot_never_uses_quality_as_identity_when_anchor_is_missing(self):
         p, st = sampling.LiveSamplingTests().processor()
         p.frigate.live_event_frame.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
+        p.frigate.association_frame = Mock(return_value=None)
         faces = [SimpleNamespace(bbox=np.array([0, 0, 80, 80]), det_score=.99),
                  SimpleNamespace(bbox=np.array([10, 10, 70, 70]), det_score=.98)]
         p.engine.detect_faces = Mock(return_value=faces)
@@ -150,8 +151,8 @@ class CpuEfficiencyTests(unittest.TestCase):
             p._process('e')
         p.engine.faces.assert_not_called()
         p.engine.embed_face.assert_not_called()
-        self.assertIs(p._process_face.call_args.args[3], faces[1])
-        self.assertEqual(p._process_face.call_args.kwargs['source'], 'secure_live_snapshot')
+        p.frigate.association_frame.assert_called_once()
+        p._process_face.assert_not_called()
 
 
 if __name__ == '__main__':
