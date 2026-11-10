@@ -212,10 +212,11 @@ def main():
     processor.migration = migration
     processor.vision_advisor = vision_advisor
     processor.runtime_health = RuntimeHealth(data_dir, processor)
-    from .face_search import FaceSearch
-    processor.face_search = FaceSearch(audit, gallery, engine)
+    from .face_search import FaceSearch, recognition_active
+    processor.face_search = FaceSearch(audit, gallery, engine,
+                                       live_activity=lambda: recognition_active(processor))
     if not DIAGNOSTIC_ONLY:
-        processor.face_search.start_index()
+        processor.face_search.start_index(automatic=True)
     from .access1 import Access1Integration
     processor.access1 = None
     def start_connector():

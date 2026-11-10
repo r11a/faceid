@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit, unquote
 
 from fastapi import HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .access1_admin import require_pairing_admin
 from . import VERSION
@@ -149,6 +149,87 @@ def register_acquisition_routes(app, processor, static_dir):
             names.update(discovery['names'])
         return sorted(names)
 
+    def capture_status(owner):
+        capture = getattr(processor, 'recognition_capture', None)
+        if capture is None:
+            return {'state':'idle', 'recording':False}
+        try:
+            return capture.status(owner)
+        except HTTPException as error:
+            if error.status_code == 403:
+                return {'state':'busy', 'recording':False, 'reason':'capture_owned_by_another_administrator'}
+        except Exception:
+            pass
+        return {'state':'unavailable', 'recording':False, 'reason':'capture_status_unavailable'}
+
+    def capture_service():
+        capture = getattr(processor, 'recognition_capture', None)
+        if capture is None:
+            raise HTTPException(503, 'Recognition capture unavailable')
+        return capture
+
+    @app.get('/api/recognition-capture')
+    @app.get('/api/recognition-capture/report')
+    async def recognition_capture_report(request: Request):
+        owner = await require_pairing_admin(request)
+        try:
+            result = capture_service().report(owner)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, 'Recognition capture unavailable') from None
+        return JSONResponse(result, headers={'Cache-Control':'private, no-store', 'Pragma':'no-cache'})
+
+    @app.post('/api/recognition-capture')
+    async def recognition_capture_control(request: Request):
+        owner = await require_pairing_admin(request)
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 4096:
+                raise HTTPException(400, 'Invalid recognition capture request')
+        try:
+            body = json.loads(raw)
+            if not isinstance(body, dict):
+                raise ValueError()
+            action = body.get('action')
+            if action == 'stop':
+                if set(body) != {'action'}:
+                    raise ValueError()
+            elif action == 'start':
+                if set(body) - {'action','camera','expected_source','duration_seconds'}:
+                    raise ValueError()
+                camera, expected_source = body.get('camera'), body.get('expected_source')
+                duration_seconds = body.get('duration_seconds', 300)
+                if (not isinstance(camera, str) or camera not in await asyncio.to_thread(cameras)
+                        or not isinstance(expected_source, str) or expected_source not in {'snapshots','frigate_restream','direct_rtsp'}
+                        or type(duration_seconds) is not int or not 1 <= duration_seconds <= 600):
+                    raise ValueError()
+            else:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise HTTPException(400, 'Invalid recognition capture request') from None
+        try:
+            if action == 'stop':
+                return capture_service().stop(owner)
+            return capture_service().start(owner, camera, expected_source, duration_seconds)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, 'Recognition capture unavailable') from None
+
+    @app.get('/api/recognition-capture/preview/{event_id}/{kind}')
+    async def recognition_capture_preview(request: Request, event_id: str, kind: str):
+        owner = await require_pairing_admin(request)
+        try:
+            content = capture_service().get_preview(owner, event_id, kind)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, 'Recognition capture preview unavailable') from None
+        return Response(content, media_type='image/jpeg', headers={'Cache-Control':'private, no-store',
+            'Pragma':'no-cache', 'X-Content-Type-Options':'nosniff', 'Cross-Origin-Resource-Policy':'same-origin'})
+
     @app.get('/acquisition-diagnostics')
     async def diagnostic_page(request: Request):
         await require_pairing_admin(request)
@@ -158,9 +239,13 @@ def register_acquisition_routes(app, processor, static_dir):
     @app.get('/api/acquisition-diagnostics')
     async def diagnostic_status(request: Request):
         owner = await require_pairing_admin(request)
+        manager=getattr(processor,'stream_observations',None)
+        if manager and hasattr(manager,'request_preview'):
+            manager.request_preview(request.query_params.get('preview_event',''))
         return {**diagnostic.status(owner), 'build': VERSION, 'cameras': await asyncio.to_thread(cameras),
                 'preview':previews.status(owner),
                 'operational_sessions':processor.stream_observations.report() if hasattr(processor,'stream_observations') else {},
+                'recognition_capture':capture_status(owner),
                 'diagnostic_only_runtime':getattr(processor,'diagnostic_only',False) is True}
 
     @app.get('/api/acquisition-diagnostics/preview/{kind}')

@@ -1,3 +1,75 @@
+# FaceID 6.7.2
+
+Merged operational candidate; ready for rig validation. Calibration follows the
+saved camera recognition source. Existing subject association, liveness and
+Access1 safeguards remain. No field speed or success-rate claim is made.
+
+[English installation and test guide](INSTALL-AND-COMMISSION-EN.txt) ·
+[מדריך התקנה ובדיקה](INSTALL-AND-COMMISSION-HE.txt) ·
+[Developer handoff](DEVELOPER-HANDOFF.txt) · [Tests](TEST-RESULTS.txt)
+
+Manual calibration never submits access. Normal automatic recognition can still
+submit access while diagnostics are open, according to the saved settings.
+
+## Historical technical notes (superseded by the guides above where different)
+
+# FaceID 6.6.16-access1.early1
+
+Detect fresh live face candidates during the event anchor fetch, retry and reference-face processing. Only a current, uniquely associated candidate can enter normal liveness confirmation.
+
+[English guide](INSTALL-TEST-EN.txt) | [עברית](INSTALL-TEST-HE.txt)
+
+# FaceID 6.6.15-access1.anchor1
+
+Retry temporary anchor failures within the existing event deadline and report MQTT subscription acknowledgement and selected-camera event delivery in the passive capture.
+
+[English test guide](INSTALL-TEST-EN.txt) · [מדריך בדיקה](INSTALL-TEST-HE.txt)
+
+# FaceID 6.6.14-access1.capture1 — full recognition test capture
+
+This operational test build adds a bounded, passive recording of ordinary
+recognition: saved camera source, actual event routing, image/association/model
+timings, confirmation progress, process resources and the existing Access1 result.
+The recorder does not change settings, generate events or operate outputs.
+Normal recognition and Access1 remain active according to saved settings.
+
+Open **Acquisition diagnostic / בדיקת זרם**, then use the new top section
+**Record full recognition test / הקלטת בדיקת זיהוי מלאה**. Start recording,
+make ordinary approaches on the disconnected test rig, stop and download the
+full report. Manual benchmarks are a separate workflow. No speed improvement
+or field accuracy is claimed by this instrumentation release.
+
+[Short English test guide](SHORT-TEST-GUIDE-EN.txt) ·
+[מדריך בדיקה קצר בעברית](SHORT-TEST-GUIDE-HE.txt) ·
+[Installation and rollback](INSTALL-AND-ROLLBACK.txt) ·
+[Developer handoff](DEVELOPER-HANDOFF.txt)
+
+הגרסה מתעדת את המסלול הפעיל בלי לשנות ספי זיהוי, חיות או הרשאות.
+הזיהוי האוטומטי ממשיך ויכול להפעיל יציאות. ההקלטה עצמה אינה יוצרת
+בקשת גישה. יש לבצע התקרבות רק במערכת הבדיקה המנותקת מדלת.
+
+## Earlier release documentation
+
+# FaceID 6.6.13-access1.resource1 — resources and subject association
+
+Ready for rig validation. Existing automatic recognition and Access1 remain
+operational according to saved settings. No field speed claim is made.
+
+- Bounded idle history indexing with retryable failures and no-face caching.
+- Source-aware readers, demand-driven previews and pre-detection duplicate checks.
+- Bounded asynchronous stream anchors; independent two-person confirmation.
+- Secure snapshots now require event-to-face association instead of selecting a bystander.
+- Existing liveness thresholds, source trust and Access1 authorization remain enforced.
+
+[English installation and rollback](INSTALL-AND-COMMISSION-EN.txt) ·
+[התקנה ובדיקות בעברית](INSTALL-AND-COMMISSION-HE.txt) ·
+[Developer handoff](DEVELOPER-HANDOFF.txt)
+
+בגרסה זו צומצמה עבודת רקע מיותרת ושופר שיוך האדם לאירוע. נדרש אימות על
+מערכת הבדיקה; לא הונמכו ספי חיות או זיהוי. הזיהוי ו-Access1 נשארים פעילים.
+
+## Earlier release documentation
+
 # FaceID 6.6.12-access1.stream3 — integrated local-stream observation
 
 Frigate-triggered observation now supports the existing Frigate restream or an explicitly

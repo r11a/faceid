@@ -1,3 +1,11 @@
+## 6.7.2 — 2026-11-09
+- Merge the stream3-derived 6.7.1 calibration/UI and Access1 result-ordering fixes into 6.6.16-access1.early1.
+- Camera calibration and preview follow the configured source, reuse bounded shared readers and never submit access.
+- Keep live subject association, three-sample liveness safeguards, early anchor work, scheduler/resource limits and full capture diagnostics.
+- Bound calibration admission; yield to live recognition and expire unused preview leases. No source fallback.
+- Align all release labels, Ingress and rebuilt assets. Keep installed gallery, mappings, pairing and CPU/security settings.
+- Offline regression and image verification are documented separately. Real-camera latency and final Access1 acceptance remain rig-validation gates.
+
 ## 6.7.1 — 2026-11-02
 - Add opt-in continuously refreshed face-size measurements for the selected camera, using detection only and the exact measured image.
 - Refresh selected-camera previews after each image completes; serialize requests, cancel obsolete results, pause hidden-page sampling and retry unavailable frames.

@@ -24,12 +24,18 @@ from .engine import FaceEngine, crop_face
 from .hires import upgrade_face
 from .decision import DecisionAccumulator, DecisionPolicy
 from .quality import measure_face_quality
+from .face_tracks import FaceTracker
+from .subject_association import single_anchor, mutual_assignments, overlapping_indices
 from .liveness import qualified_live_consensus
 from .clip_analyzer import ClipAnalyzer
 from .presence import RecognitionSessionTracker
+from .frigate_api import fetch_anchor, TRANSIENT_ANCHOR, ANCHOR_RETRY_SECONDS
+from .mqtt_diagnostics import MQTTDiagnostics, record_mqtt
 from .continuous_recognition import ContinuousRecognition
 from .stream_observation import StreamObservations, SOURCE as STREAM_SOURCE
 from .media_errors import ClipNotReady
+from .recognition_capture import RecognitionCapture, emit as capture_emit, preview as capture_preview, active as capture_active
+from .camera_profiles import profile_capture_fields
 
 from .timing import stage as timing_stage, frame_wait as timing_frame_wait
 
@@ -62,6 +68,8 @@ class EventProcessor:
         self._timing_lock = threading.Lock()
         self._timings = {}
         self.events: dict[str, dict] = {}  # event_id -> Zustand
+        self.mqtt_diagnostics = MQTTDiagnostics()
+        self.recognition_capture = RecognitionCapture(self)
         self.recent = deque(maxlen=100)  # Ringpuffer für die UI
         self.client: mqtt.Client | None = None
         f = cfg["faceid"]
@@ -170,7 +178,8 @@ class EventProcessor:
         self.client = c
         c.on_connect = self._guard_callback(self._on_connect)
         c.on_message = self._guard_callback(self._on_message)
-        c.on_disconnect = self._guard_callback(lambda *args: self.stream_observations.set_online(False))
+        c.on_disconnect = self._guard_callback(self._on_disconnect)
+        c.on_subscribe = self._guard_callback(self._on_subscribe)
         c.connect_async(m["host"], int(m.get("port", 1883)), keepalive=60)
         c.loop_start()
         self._check_frigate()
@@ -307,15 +316,25 @@ class EventProcessor:
         """Broker connection state; this does not claim HA has registered entities."""
         return {"connected": bool(self.client and self.client.is_connected())}
 
+    def _on_disconnect(self, *args):
+        record_mqtt(self, 'connection', 'disconnected')
+        self.stream_observations.set_online(False)
+
+    def _on_subscribe(self, client, userdata, mid, reason_codes, properties):
+        record_mqtt(self, 'acknowledge', mid, reason_codes)
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         observer = getattr(self, "stream_observations", None)
         if getattr(reason_code, "is_failure", reason_code != 0):
             if observer is not None:observer.set_online(False)
+            record_mqtt(self, 'connection', 'connection_rejected')
             log.warning("MQTT connection rejected (%s)", reason_code)
             return
         if observer is not None:observer.set_online(True)
         log.info("MQTT connected (%s), subscribing to %s/events", reason_code, self.frigate_topic)
-        client.subscribe(f"{self.frigate_topic}/events")
+        record_mqtt(self, 'connection', 'connecting_subscription')
+        result = client.subscribe(f"{self.frigate_topic}/events")
+        record_mqtt(self, 'subscribed', result)
         client.subscribe(f"{self.frigate_topic}/+/person")
         client.subscribe(f"{self.frigate_topic}/available")
         self.continuous.reconnect()
@@ -326,18 +345,63 @@ class EventProcessor:
         if alerts is not None:
             alerts.publish_discovery(client)
 
+    def _capture_profile(self, camera, profile=None):
+        """Diagnostic-only read; an unavailable capture cannot change routing."""
+        if not capture_active(self, camera):
+            return {}
+        try:
+            profiles = self.camera_profiles
+            profile = profiles.get(camera) if profile is None and profiles else profile
+            fields = profile_capture_fields(profile)
+            status = profiles.read_status() if profiles and hasattr(profiles, 'read_status') else {}
+            fields.update(profile_read_status=status.get('status', 'unknown'),
+                          profile_fallback_used=status.get('fallback_used', False))
+            return fields
+        except Exception:
+            return {'reason': 'profile_capture_unavailable'}
+
+    def _capture_incoming(self, after, kind, retained):
+        if not isinstance(after, dict) or not capture_active(self, after.get('camera')):
+            return
+        try:
+            camera, eid = after.get('camera'), after.get('id')
+            snapshot = after.get('snapshot')
+            capture_emit(self, eid, camera, 'frigate_event_received',
+                **self._capture_profile(camera), event_type=kind,
+                label=after.get('label'), retained=bool(retained),
+                false_positive=bool(after.get('false_positive')),
+                old_handled=eid in self._handled,
+                event_ended=bool(after.get('end_time') or kind == 'end'),
+                event_start_time=after.get('start_time'), has_snapshot=bool(after.get('has_snapshot')),
+                capture_timestamp=snapshot.get('frame_time') if isinstance(snapshot, dict) else None)
+        except Exception:
+            pass
+
     def _on_message(self, client, userdata, msg):
         received_monotonic = time.perf_counter()
+        record_mqtt(self, 'message', msg.topic == self.frigate_topic + '/events')
         if msg.topic == self.frigate_topic + '/available':
             self.stream_observations.online=msg.payload.decode(errors='replace') == 'online'
             if not self.stream_observations.online:self.stream_observations.cancel_all('frigate_offline')
         if msg.topic == self.frigate_topic + '/events':
             try:
-                stream_payload=json.loads(msg.payload)
-                stream_after=stream_payload.get('after') or {}
+                try:
+                    stream_payload=json.loads(msg.payload)
+                    stream_after=stream_payload.get('after') or {}
+                except (ValueError,TypeError,AttributeError):
+                    record_mqtt(self, 'parsed', None)
+                    return
+                record_mqtt(self, 'parsed', stream_after)
+                self._capture_incoming(stream_after, stream_payload.get('type'), getattr(msg,'retain',False))
                 if self.stream_observations.configured(stream_after.get('camera')):
+                    capture_emit(self, stream_after.get('id'), stream_after.get('camera'),
+                                 'event_dispatch', reason='configured_stream_observer',
+                                 dispatch_source=self._capture_profile(stream_after.get('camera')).get('source'))
                     self.stream_observations.event(stream_after,stream_payload.get('type'),getattr(msg,'retain',False))
                     return
+                capture_emit(self, stream_after.get('id'), stream_after.get('camera'),
+                             'event_dispatch', reason='snapshot_or_continuous_path',
+                             source='snapshots', dispatch_source='snapshots')
             except (ValueError,TypeError,AttributeError):
                 return
         if self.continuous.mqtt(msg.topic, msg.payload):
@@ -369,18 +433,23 @@ class EventProcessor:
         etype = payload.get("type")
         self.continuous.observe_event(after, etype)
         if after.get("label") != "person":
+            capture_emit(self, after.get('id'), after.get('camera'), 'event_skipped', reason='label_not_person')
             return
         cam = after.get("camera", "")
         if not self.camera_enabled(cam):
+            capture_emit(self, after.get('id'), cam, 'event_skipped', reason='camera_disabled')
             return
         eid = after.get("id")
         if not eid:
+            capture_emit(self, None, cam, 'event_skipped', reason='event_id_missing')
             return
         profile = self.camera_profiles.get(cam) if self.camera_profiles else {}
         continuous_mode = profile.get("recognition_mode", "event") != "event"
         if continuous_mode and not self._live_access_camera({"camera": cam}):
+            capture_emit(self, eid, cam, 'event_skipped', reason='continuous_without_snapshot_access')
             return
         if eid not in self.events and self.audit and self.audit.was_finalized(eid):
+            capture_emit(self, eid, cam, 'event_skipped', reason='event_already_finalized')
             return
         if eid not in self._handled:
             self._handled.append(eid)
@@ -394,6 +463,7 @@ class EventProcessor:
             self.events[eid] = st
         st["access_only"] = continuous_mode
         if cam != st["camera"]:
+            capture_emit(self, eid, cam, 'event_skipped', reason='event_camera_mismatch')
             return
         if etype in ("new", "update"):
             st["live_updated_at"] = time.time()
@@ -412,11 +482,19 @@ class EventProcessor:
             if self.audit:
                 self.audit.mark_ended(eid, st["end_time"])
         if st["done"] or st["attempts"] >= self.max_attempts:
+            capture_emit(self, eid, cam, 'event_skipped',
+                         reason='event_completed' if st['done'] else 'attempt_limit', attempts=st['attempts'])
             return
         if after.get("has_snapshot") and time.time() - st["last_try"] >= self.recognition_interval(cam):
             st["last_try"] = time.time()
             if not self._enqueue_job(eid, "snapshot"):
+                capture_emit(self, eid, cam, 'snapshot_skipped', reason='queue_rejected')
                 log.warning("queue full, skipping event %s", eid)
+            else:
+                capture_emit(self, eid, cam, 'snapshot_queued', queue_depth=self.queue.qsize())
+        else:
+            capture_emit(self, eid, cam, 'snapshot_skipped',
+                         reason='snapshot_not_available' if not after.get('has_snapshot') else 'sampling_interval')
 
     # ---------- Verarbeitung ----------
 
@@ -440,6 +518,26 @@ class EventProcessor:
         return bool(profile.get("fast_recognition") and profile.get("high_resolution")
                     and connector is not None and connector.transport is not None)
 
+    def _capture_snapshot_skip(self, eid, st, now):
+        if not capture_active(self, st.get('camera')):
+            return
+        try:
+            updated = st.get('live_updated_at')
+            reason = ('mqtt_update_missing' if updated is None else
+                      'mqtt_update_stale' if not 0 <= now - updated < 10 else
+                      'observation_window_expired' if not 0 <= now - st['created'] < 30 else
+                      'event_completed' if st['done'] else
+                      'event_ended' if st['ended'] or st.get('end_time') else
+                      'recovered_or_polled_event' if st.get('recovered') or st.get('polled') else
+                      'attempt_limit' if st['attempts'] >= self.max_attempts else
+                      'fetch_limit' if st.get('live_fetches', 0) >= 12 else
+                      'camera_disabled' if not self.camera_enabled(st['camera']) else
+                      'sampling_interval_or_camera_not_eligible')
+            capture_emit(self, eid, st['camera'], 'snapshot_skipped', reason=reason,
+                         attempts=st['attempts'], **self._capture_profile(st['camera']))
+        except Exception:
+            pass
+
     def _schedule_live_jobs(self, now=None):
         now = time.time() if now is None else now
         for eid, st in list(self.events.items()):
@@ -461,6 +559,7 @@ class EventProcessor:
                     or not (self._live_access_camera(st) or (
                         self.camera_profiles and self.camera_profiles.get(st["camera"]).get("fast_recognition")))
                     or now - st["last_try"] < self.recognition_interval(st["camera"])):
+                self._capture_snapshot_skip(eid, st, now)
                 continue
             if self._live_access_camera(st):
                 # Avoid queue/audit churn for work the execution-time gate would
@@ -470,14 +569,16 @@ class EventProcessor:
                         or timestamp < st["start_time"] or not 0 <= now - timestamp < 10):
                     timing_frame_wait(self, eid, st, "capture_timestamp_missing_or_stale")
                     continue
-                if timestamp <= st.get("live_snapshot_consumed_ts", 0):
+                if timestamp <= st.get("live_snapshot_consumed_ts", 0) and not self._anchor_retry_due(st):
                     timing_frame_wait(self, eid, st, "unchanged_capture_timestamp")
                     continue
             with self._jobs_lock:
                 if (eid, "snapshot") in self._queued_jobs or (eid, "clip") in self._queued_jobs:
+                    capture_emit(self, eid, st['camera'], 'snapshot_skipped', reason='event_job_already_pending')
                     continue
                 if self._enqueue_job_locked(eid, "snapshot"):
                     st["last_try"] = now
+                    capture_emit(self, eid, st['camera'], 'snapshot_queued', queue_depth=self.queue.qsize())
 
     def record_timing(self, stage, seconds):
         with self._timing_lock:
@@ -516,6 +617,8 @@ class EventProcessor:
                     deferred = True
                     return
             self.record_timing(f"{kind}_queue_wait", started - item.get("queued_at", started))
+            capture_emit(self, eid, (state or {}).get('camera'), f'{kind}_queue_wait',
+                         queue_wait_ms=max(0, started - item.get('queued_at', started)) * 1000)
             if getattr(self, "timing_diagnostics", False) is True:
                 log.info("timing event=%s stage=%s_queue_wait elapsed_ms=%.1f", eid, kind,
                          (started - item.get("queued_at", started)) * 1000)
@@ -544,6 +647,7 @@ class EventProcessor:
             if self.audit:
                 self.audit.complete_job(eid, kind)
         except ClipNotReady as e:
+            capture_emit(self, eid, (state or {}).get('camera'), 'clip_unavailable', reason='clip_not_ready')
             state = self.events.get(eid)
             retries = int((state or {}).get("clip_not_ready_retries", 0)) + 1
             if state is not None:
@@ -573,6 +677,7 @@ class EventProcessor:
                     self.clip_retry_seconds,
                 )
         except Exception as e:
+            capture_emit(self, eid, (state or {}).get('camera'), 'processing_failed', reason='processing_exception')
             if self.audit:
                 self.audit.retry_job(eid, kind, str(e))
             log.exception("error while handling event %s (%s)", eid, kind)
@@ -580,6 +685,8 @@ class EventProcessor:
             if locked:
                 event_lock.release()
             self.record_timing(kind, time.perf_counter() - started)
+            capture_emit(self, eid, (state or {}).get('camera'), kind + '_processing',
+                         duration_ms=max(0, time.perf_counter() - started) * 1000)
             with self._jobs_lock:
                 if not deferred:
                     self._queued_jobs.discard((eid, kind))
@@ -591,6 +698,8 @@ class EventProcessor:
         if st is None or st["done"] or st.get("stream_observation"):
             return
         st["clip_queued"] = False
+        capture_emit(self, eid, st['camera'], 'archive_fallback', source='clip',
+                     event_ended=bool(st.get('end_time') or st.get('ended')), reason='clip_analysis_started')
         reference = (
             st["best_unknown"]["emb"] if st.get("best_unknown") is not None else None
         )
@@ -605,6 +714,7 @@ class EventProcessor:
             roi=profile.get("roi") if profile and profile.get("mode") == "intercom" else None,
         )
         st["clip_analyzed"] = True
+        capture_emit(self, eid, st['camera'], 'clip_analysis_complete', source='clip', candidate_count=len(samples))
         log.info("event %s: clip analysis produced %d diverse face sample(s)", eid, len(samples))
         for sample in samples:
             if st["done"]:
@@ -636,6 +746,190 @@ class EventProcessor:
                 if st.pop("candidate_live", False):
                     st.setdefault("live_fingerprints", deque(maxlen=12)).append(fingerprint)
 
+    @staticmethod
+    def _snapshot_profile_key(profile):
+        return json.dumps(profile or {}, sort_keys=True, separators=(",", ":"))
+
+    def _snapshot_context_valid(self, eid, st, profile_key, timestamp):
+        """An association anchor never refreshes the image's existing proof."""
+        profile = self.camera_profiles.get(st["camera"]) if self.camera_profiles else {}
+        return (self.events.get(eid) is st and not st.get("ended")
+                and not st.get("end_time") and not st.get("recovered")
+                and not st.get("polled") and self.camera_enabled(st["camera"])
+                and profile.get("observation_source", "snapshots") == "snapshots"
+                and self._snapshot_profile_key(profile) == profile_key
+                and type(timestamp) in (int, float) and math.isfinite(timestamp)
+                and timestamp >= st["start_time"] and 0 <= time.time() - timestamp < 10
+                and 0 <= time.time() - st.get("live_updated_at", 0) < 10
+                and 0 <= time.time() - st["created"] < 30)
+
+    def _snapshot_reset(self, eid, st, reason):
+        """Reset only this event's evidence; anchors cannot carry confirmations."""
+        st["snapshot_association_generation"] = st.get("snapshot_association_generation", 0) + 1
+        st["liveness_history"] = []
+        st["liveness"] = None
+        st["liveness_subject"] = None
+        st["liveness_keys"] = set()
+        st["decision"] = DecisionAccumulator(self.policy)
+        st.pop("snapshot_subject_track", None)
+        st.pop("best_recognized", None)
+        if st.get("snapshot_association_reason") != reason:
+            log.info("event %s (%s): snapshot association %s", eid, st["camera"], reason)
+            if self.audit:
+                self.audit.observation(eid, st["attempts"], reason,
+                                       source="secure_live_snapshot")
+        st["snapshot_association_reason"] = reason
+        capture_emit(self, eid, st['camera'], 'snapshot_association_reset', reason=reason,
+                     source='secure_live_snapshot', qualifying_samples=0)
+
+    def _snapshot_anchors(self, st, profile_key):
+        # Include active already-recognized subjects until their event ends;
+        # consuming one event must not hide a competing anchor from the next.
+        with self._jobs_lock:
+            states = [(key, other) for key, other in self.events.items()
+                      if other.get("camera") == st["camera"]
+                      and not other.get("ended") and not other.get("end_time")
+                      and not other.get("stream_observation")
+                      and other.get("snapshot_anchor_profile") == profile_key
+                      and other.get("snapshot_anchor") is not None]
+        return states
+
+    @staticmethod
+    def _anchor_retry_due(st):
+        due = st.get('snapshot_anchor_retry_at')
+        return due is not None and time.monotonic() >= due
+
+    def _obtain_snapshot_anchor(self, eid, st, profile, valid):
+        if not valid():
+            st.pop("snapshot_anchor_retry_at", None)
+            return False
+        if st.get("snapshot_anchor_terminal_reason"):
+            return False
+        if st.get("snapshot_anchor") is None:
+            if time.monotonic() < st.get("snapshot_anchor_retry_at", 0):
+                return False
+            st.pop("snapshot_anchor_retry_at", None)
+            if st.get("snapshot_anchor_attempts", 0) >= 2:
+                self._snapshot_reset(eid, st, "association_anchor_unavailable")
+                return False
+            st["snapshot_anchor_attempts"] = st.get("snapshot_anchor_attempts", 0) + 1
+            # association_frame checks the event/camera before AND after its
+            # cropped, unannotated image request. No gallery match takes place.
+            anchor_fetch_started = time.perf_counter()
+            image, reason = fetch_anchor(self.frigate, eid, st["camera"])
+            capture_emit(self, eid, st['camera'], 'anchor_fetch', accepted=image is not None,
+                         attempts=st['snapshot_anchor_attempts'], reason=reason,
+                         duration_ms=max(0, time.perf_counter() - anchor_fetch_started) * 1000)
+            if not valid():
+                self._snapshot_reset(eid, st, "association_context_changed")
+                return False
+            if image is None:
+                if reason in TRANSIENT_ANCHOR and st['snapshot_anchor_attempts'] < 2:
+                    st['snapshot_anchor_retry_at'] = time.monotonic() + ANCHOR_RETRY_SECONDS
+                else:
+                    st['snapshot_anchor_terminal_reason'] = reason
+                self._snapshot_reset(eid, st, reason)
+                return False
+            capture_preview(self, eid, st['camera'], image, 'anchor')
+            anchor_diagnostics = {} if capture_active(self, st['camera']) else None
+            with timing_stage(self, eid, "snapshot_anchor"):
+                anchor, reason = single_anchor(self.engine, image, profile,
+                    min_face_px=self.min_face_px, min_quality=self.min_face_quality,
+                    diagnostics=anchor_diagnostics)
+            capture_emit(self, eid, st['camera'], 'anchor_result',
+                         **(anchor_diagnostics or {}), accepted=anchor is not None)
+            if not valid():
+                self._snapshot_reset(eid, st, "association_context_changed")
+                return False
+            if anchor is None:
+                self._snapshot_reset(eid, st, reason)
+                return False
+            st["snapshot_anchor"] = anchor
+        return True
+
+    def _snapshot_subject(self, eid, st, img, usable, profile, timestamp):
+        """Associate the triggering person, never the best gallery/quality face."""
+        profile_key = self._snapshot_profile_key(profile)
+        valid = lambda: self._snapshot_context_valid(eid, st, profile_key, timestamp)
+        if not valid():
+            self._snapshot_reset(eid, st, "association_context_changed")
+            return None
+        if len(usable) > 4:
+            self._snapshot_reset(eid, st, "association_overcrowded_frame")
+            return None
+        if st.get("snapshot_anchor_profile") != profile_key:
+            self._snapshot_reset(eid, st, "association_anchor_pending")
+            st.pop("snapshot_anchor", None)
+            st.pop("snapshot_tracker", None)
+            st.pop("snapshot_anchor_retry_at", None)
+            st.pop("snapshot_anchor_terminal_reason", None)
+            st["snapshot_anchor_attempts"] = 0
+            st["snapshot_anchor_profile"] = profile_key
+        if not self._obtain_snapshot_anchor(eid, st, profile, valid):
+            return None
+        faces = [face for _, face in usable]
+        with timing_stage(self, eid, "snapshot_candidate_embeddings"):
+            for face in faces:
+                if hasattr(self.engine, "embed_face"):
+                    self.engine.embed_face(img, face)
+        if not valid() or any(FaceTracker._observation(face) is None for face in faces):
+            self._snapshot_reset(eid, st, "association_context_or_embedding_invalid")
+            return None
+        states = self._snapshot_anchors(st, profile_key)
+        association_diagnostics = {} if capture_active(self, st['camera']) else None
+        assignments = mutual_assignments([other["snapshot_anchor"] for _, other in states], faces,
+                                         diagnostics=association_diagnostics)
+        own = next((index for index, (key, _) in enumerate(states) if key == eid), None)
+        selected = assignments[own] if own is not None else None
+        if association_diagnostics is not None:
+            rows = association_diagnostics.get('assignments', [])
+            details = rows[own] if own is not None and own < len(rows) else {'reason': 'event_anchor_missing'}
+            capture_emit(self, eid, st['camera'], 'subject_assignment', **details,
+                         candidate_count=len(faces), anchor_count=len(states), accepted=selected is not None)
+        if selected is None:
+            capture_preview(self, eid, st['camera'], img, 'rejected')
+            self._snapshot_reset(eid, st, "association_ambiguous")
+            return None
+        tracker = st.setdefault("snapshot_tracker", FaceTracker(max_tracks=8))
+        previous = {key: track.bbox.copy() for key, track in tracker._tracks.items()}
+        tracks, _ = tracker.update(faces, time.monotonic())
+        track_ids = {id(face): key for key, face in tracks}
+        ambiguous = overlapping_indices(faces)
+        for index, face in enumerate(faces):
+            key = track_ids.get(id(face))
+            for other_index in range(index + 1, len(faces)):
+                other = faces[other_index]
+                other_key = track_ids.get(id(other))
+                if key in previous and other_key in previous:
+                    old = previous[key][:2] + previous[key][2:] - previous[other_key][:2] - previous[other_key][2:]
+                    new = face.bbox[:2] + face.bbox[2:] - other.bbox[:2] - other.bbox[2:]
+                    if float(np.dot(old, new)) < 0:
+                        ambiguous.update((index, other_index))
+        if selected in ambiguous:
+            capture_preview(self, eid, st['camera'], img, 'rejected', bbox=faces[selected].bbox)
+            self._snapshot_reset(eid, st, "association_overlap_or_crossing")
+            return None
+        track = track_ids.get(id(faces[selected]))
+        if track is None:
+            self._snapshot_reset(eid, st, "association_track_unavailable")
+            return None
+        if st.get("snapshot_subject_track") not in (None, track):
+            self._snapshot_reset(eid, st, "association_track_changed")
+        st["snapshot_subject_track"] = track
+        st["snapshot_association_reason"] = "association_established"
+        capture_preview(self, eid, st['camera'], img, 'associated', bbox=faces[selected].bbox)
+        generation = st.get("snapshot_association_generation", 0)
+
+        def guard():
+            if (not valid() or generation != st.get("snapshot_association_generation", 0)
+                    or st.get("snapshot_subject_track") != track):
+                return False
+            current = self._snapshot_anchors(st, profile_key)
+            matches = mutual_assignments([other["snapshot_anchor"] for _, other in current], faces)
+            return any(key == eid and matches[row] == selected for row, (key, _) in enumerate(current))
+
+        return usable[selected], guard
+
     def _process_snapshot(self, eid: str):
         st = self.events.get(eid)
         if st is None or st["done"]:
@@ -644,8 +938,13 @@ class EventProcessor:
             self.camera_profiles.get(st["camera"])
             if self.camera_profiles is not None else None
         )
+        capture_emit(self, eid, st['camera'], 'snapshot_eligibility',
+                     **self._capture_profile(st['camera'], camera_profile),
+                     event_ended=bool(st.get('ended') or st.get('end_time')),
+                     event_start_time=st.get('start_time'), attempts=st['attempts'])
         if camera_profile and camera_profile.get("recognition_mode", "event") != "event":
             if not self._live_access_camera(st):
+                capture_emit(self, eid, st['camera'], 'snapshot_skipped', reason='continuous_without_snapshot_access')
                 st.update(done=True, clip_analyzed=True)
                 return
             st["access_only"] = True
@@ -661,6 +960,7 @@ class EventProcessor:
         if live_access:
             if (st.get("live_fetches", 0) >= 12 or time.time() - st["created"] >= 30
                     or not 0 <= time.time() - st.get("live_updated_at", 0) < 10):
+                self._capture_snapshot_skip(eid, st, time.time())
                 return
             timestamp = st.get("live_snapshot_ts")
             if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
@@ -668,9 +968,17 @@ class EventProcessor:
                 if not st.get("live_timestamp_warned"):
                     log.info("event %s (%s): live_snapshot_timestamp_missing_or_stale", eid, st["camera"])
                     st["live_timestamp_warned"] = True
+                capture_emit(self, eid, st['camera'], 'snapshot_skipped', reason='capture_timestamp_missing_or_stale',
+                             capture_timestamp=timestamp)
                 return
             st["live_timestamp_warned"] = False
             if timestamp <= st.get("live_snapshot_consumed_ts", 0):
+                if self._anchor_retry_due(st):
+                    profile_key = st.get("snapshot_anchor_profile")
+                    self._obtain_snapshot_anchor(eid, st, camera_profile,
+                        lambda: self._snapshot_context_valid(eid, st, profile_key, timestamp))
+                    # Only association may advance. This used frame cannot count again.
+                    return
                 timing_frame_wait(self, eid, st, "unchanged_capture_timestamp")
                 return
             st["live_fetches"] = st.get("live_fetches", 0) + 1
@@ -678,6 +986,9 @@ class EventProcessor:
                 img = self.frigate.live_event_frame(eid)
             if img is None:
                 self.record_timing("snapshot_fetch", time.perf_counter() - fetch_started)
+                capture_emit(self, eid, st['camera'], 'snapshot_acquisition', source='secure_live_snapshot',
+                             accepted=False, reason='live_event_frame_unavailable',
+                             duration_ms=max(0, time.perf_counter() - fetch_started) * 1000)
                 return
             # Preserve the timestamp taken BEFORE the request. A newer MQTT image
             # may arrive during I/O; it must not refresh this image's age.
@@ -685,6 +996,8 @@ class EventProcessor:
                     or not self.camera_enabled(st["camera"])
                     or not 0 <= time.time() - timestamp < 10):
                 log.info("event %s (%s): live_frame_expired_or_ended during fetch", eid, st["camera"])
+                capture_emit(self, eid, st['camera'], 'snapshot_skipped', reason='live_frame_expired_or_ended',
+                             capture_timestamp=timestamp)
                 return
             source = "secure_live_snapshot"
             st["access1_evidence_ts"] = timestamp
@@ -718,12 +1031,21 @@ class EventProcessor:
         if img is None:
             img = self.frigate.snapshot(eid, crop=True)
         self.record_timing("snapshot_fetch", time.perf_counter() - fetch_started)
+        capture_emit(self, eid, st['camera'], 'snapshot_acquisition', source=source,
+                     accepted=img is not None, capture_timestamp=st.get('access1_evidence_ts'),
+                     duration_ms=max(0, time.perf_counter() - fetch_started) * 1000,
+                     event_ended=bool(st.get('ended') or st.get('end_time')))
         if img is None:
             st["attempts"] += 1
             if self.audit:
                 self.audit.observation(eid, st["attempts"], "no_snapshot")
             log.info("event %s (%s): no snapshot from Frigate", eid, st["camera"])
             return
+        capture_preview(self, eid, st['camera'], img, 'live')
+        if source not in ('secure_live_snapshot', 'live_camera'):
+            capture_emit(self, eid, st['camera'], 'archive_fallback', source=source,
+                         reason='snapshot_without_live_access_proof',
+                         event_ended=bool(st.get('ended') or st.get('end_time')))
         fingerprint = hashlib.sha256(img.tobytes()).hexdigest()
         if fingerprint == st.get("snapshot_fingerprint") or (live_access and fingerprint in st.get("live_fingerprints", ())):
             timing_frame_wait(self, eid, st, "duplicate_image")
@@ -737,6 +1059,8 @@ class EventProcessor:
             found = (self.engine.detect_faces(img)
                      if live_access and hasattr(self.engine, "detect_faces")
                      else self.engine.faces(img))
+        capture_emit(self, eid, st['camera'], 'detection_result', source=source,
+                     candidate_count=len(found), reason='detection_only' if live_access else 'detection_and_embedding')
         if source == "live_camera" and any(
             other_eid != eid and other.get("camera") == st["camera"]
             and not other.get("ended") and not other.get("end_time")
@@ -778,7 +1102,18 @@ class EventProcessor:
             for item in found
         ]
         usable = [(quality, item) for quality, item in measured if quality.usable]
+        capture_emit(self, eid, st['camera'], 'quality_result', source=source,
+                     candidate_count=len(found), usable_count=len(usable))
+        if capture_active(self, st['camera']):
+            for measured_quality, item in measured[:4]:
+                capture_emit(self, eid, st['camera'], 'candidate_quality', source=source,
+                             quality=measured_quality.score, accepted=measured_quality.usable,
+                             det_score=float(item.det_score),
+                             face_px=int(min(item.bbox[2] - item.bbox[0], item.bbox[3] - item.bbox[1])))
         if not usable:
+            capture_preview(self, eid, st['camera'], img, 'rejected')
+            if source == "secure_live_snapshot":
+                self._snapshot_reset(eid, st, "association_no_usable_face")
             # Haeufigster Normalfall (Ruecken zur Kamera, zu weit weg) — trotzdem
             # protokollieren, sonst sieht ein stiller Log wie ein Defekt aus. Die
             # Unterscheidung "zu klein" vs. "gar keins" entscheidet, wo man sucht:
@@ -804,19 +1139,35 @@ class EventProcessor:
                 log.info("event %s (%s): attempt %d, no face detected in snapshot %dx%d",
                          eid, st["camera"], st["attempts"], w, h)
             return
-        quality, face = max(usable, key=lambda item: item[0].score)
-        self._process_face(eid, st, img, face, quality=quality, source=source)
+        if source == "secure_live_snapshot":
+            subject = self._snapshot_subject(eid, st, img, usable, camera_profile,
+                                             st.get("access1_evidence_ts"))
+            if subject is None:
+                return
+            (quality, face), guard = subject
+            st["recognition_guard"] = guard
+            try:
+                self._process_face(eid, st, img, face, quality=quality, source=source)
+            finally:
+                st.pop("recognition_guard", None)
+                if not st.get("done") and not guard():
+                    self._snapshot_reset(eid, st, "association_changed_during_processing")
+        else:
+            quality, face = max(usable, key=lambda item: item[0].score)
+            self._process_face(eid, st, img, face, quality=quality, source=source)
 
     def _process_face(self, eid: str, st: dict, img, face, quality=None, source="snapshot"):
         if st["done"]:
             return
         guard = st.get("recognition_guard")
         if guard is not None and not guard():
+            capture_emit(self, eid, st['camera'], 'sample_rejected', source=source, reason='recognition_guard')
             return
         pending_live_identity = False
         liveness_service = getattr(self, "liveness", None)
         profile = self.camera_profiles.get(st["camera"]) if self.camera_profiles else {}
         if source == "secure_live_snapshot" and profile.get("observation_source", "snapshots") != "snapshots":
+            capture_emit(self, eid, st['camera'], 'sample_rejected', source=source, reason='camera_source_changed')
             return
         liveness_mode = "required" if source == STREAM_SOURCE else profile.get("liveness_mode", "advisory")
         if liveness_service is not None and liveness_mode != "off":
@@ -825,9 +1176,20 @@ class EventProcessor:
                 with scheduled:
                     with timing_stage(self, eid, "liveness_inference"):
                         liveness_frame = liveness_service.analyze(img, face)
+            capture_emit(self, eid, st['camera'], 'liveness_result', source=source,
+                         liveness_state=liveness_frame.get('state'), liveness_score=liveness_frame.get('score'),
+                         accepted=liveness_frame.get('live') is True, face_px=liveness_frame.get('face_px'),
+                         threshold=liveness_frame.get('threshold'))
+            if liveness_frame.get('live') is not True:
+                capture_preview(self, eid, st['camera'], img, 'rejected', bbox=face.bbox)
             st["liveness_history"].append(liveness_frame)
             st["liveness"] = liveness_service.consensus(st["liveness_history"])
             st["liveness"]["mode"] = liveness_mode
+            capture_emit(self, eid, st['camera'], 'liveness_progress', source=source,
+                         liveness_state=st['liveness'].get('state'),
+                         qualifying_samples=st['liveness'].get('live_frames'),
+                         required_samples=st['liveness'].get('required_frames'),
+                         reason='before_subject_binding')
             if self.audit:
                 self.audit.update_liveness(eid, st["liveness"])
             if liveness_mode == "required" and not st["liveness"]["confirmed"]:
@@ -883,6 +1245,7 @@ class EventProcessor:
                     finally:
                         for stage, seconds in timings.items():
                             self.record_timing(stage, seconds)
+                            capture_emit(self, eid, st['camera'], stage, duration_ms=seconds * 1000)
                             if getattr(self, "timing_diagnostics", False) is True:
                                 log.info("timing event=%s stage=%s elapsed_ms=%.1f", eid, stage, seconds * 1000)
                 else:
@@ -941,6 +1304,12 @@ class EventProcessor:
                 st['stream_samples']=len(history)
                 st['stream_reason']='same_subject_live' if subject and history else 'identity_unconfirmed'
                 st['liveness'].update(qualified_live_consensus(liveness_service,history,required))
+            elif source == "secure_live_snapshot" and liveness_mode == "required":
+                # An event anchor contributes zero samples. Preserve stricter
+                # configured requirements and the automatic-access minimum.
+                required = max(3, self.min_confirmations, liveness_service.required_frames)
+                st['liveness'].update(qualified_live_consensus(
+                    liveness_service, st['liveness_history'], required))
 
             if self.audit:self.audit.update_liveness(eid, st["liveness"])
             if liveness_mode == "required" and not st["liveness"]["confirmed"]:
@@ -958,6 +1327,14 @@ class EventProcessor:
             ignore_score=float(ig),
             ignore_group=ignore_group,
         )
+        capture_emit(self, eid, st['camera'], 'identity_result', source=source, state=decision.status,
+                     identity_score=float(score), identity_margin=float(decision.margin),
+                     threshold=self.match_thr, qualifying_samples=decision.confirmations,
+                     required_samples=self.min_confirmations, quality=float(quality.score) if quality else None)
+        capture_emit(self, eid, st['camera'], 'sample_progress', source=source,
+                     liveness_state=(st.get('liveness') or {}).get('state'),
+                     qualifying_samples=(st.get('liveness') or {}).get('live_frames'),
+                     required_samples=(st.get('liveness') or {}).get('required_frames'))
         quality_data = quality.to_dict() if quality else {}
         evidence_rank = (float(quality_data.get("score", 0)),
                          float(quality_data.get("sharpness", 0)), float(face.det_score))
@@ -968,13 +1345,20 @@ class EventProcessor:
                 evidence[slug] = {"rank": evidence_rank, "crop": crop_face(img, face.bbox).copy()}
         if pending_live_identity:
             return
-        if source == STREAM_SOURCE and guard is not None and not guard():
+        if source in ("secure_live_snapshot", STREAM_SOURCE) and guard is not None and not guard():
             return
         if decision.status == "recognized":
             if source == STREAM_SOURCE:st['access1_evidence_ts']=time.time()
+            capture_emit(self, eid, st['camera'], 'recognition_complete', source=source,
+                         identity_score=float(decision.score), identity_margin=float(decision.margin),
+                         qualifying_samples=decision.confirmations,
+                         event_ended=bool(st.get('ended') or st.get('end_time')),
+                         source_boundary='live_evidence' if source in ('secure_live_snapshot', STREAM_SOURCE) else 'archival_only')
             st["confirmed_monotonic"] = time.perf_counter()
             if st.get("mqtt_received_monotonic") is not None:
                 self.record_timing("mqtt_to_recognition", st["confirmed_monotonic"] - st["mqtt_received_monotonic"])
+                capture_emit(self, eid, st['camera'], 'mqtt_to_recognition', source=source,
+                             duration_ms=(st['confirmed_monotonic'] - st['mqtt_received_monotonic']) * 1000)
                 if getattr(self, "timing_diagnostics", False) is True:
                     log.info("timing event=%s stage=mqtt_to_recognition elapsed_ms=%.1f", eid,
                              (st["confirmed_monotonic"] - st["mqtt_received_monotonic"]) * 1000)
@@ -1040,7 +1424,8 @@ class EventProcessor:
             self._publish_notification(eid, st, decision.status, decision.person, decision.score,
                 margin=decision.margin, confirmations=decision.confirmations)
             access1 = getattr(self, "access1", None)
-            if access1 is not None and not st.get("continuous_sighting"):
+            if (access1 is not None and not st.get("continuous_sighting")
+                    and (guard is None or guard())):
                 access1.enqueue({
                     "event_id": eid, "slug": decision.slug, "camera": st["camera"],
                     "score": decision.score, "occurred_at": st.get("start_time"),

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4, uuid5
 from .access1_transport import Transport
+from .recognition_capture import emit as capture_emit
 
 log=logging.getLogger('faceid.access1')
 
@@ -237,6 +238,7 @@ class Access1Integration:
     def enqueue(self,event):
         if self.transport is None:
             self.last_submission={'state':'blocked','reason':'connector_disabled','ts':time.time()}
+            self._capture(event,'access1_queue',state='blocked',reason='connector_disabled')
             return
         try:
             # Freeze identity at recognition time; a reused name must not retarget queued work.
@@ -246,8 +248,20 @@ class Access1Integration:
                 event['person_id']=self.person_id(event.get('slug'))
                 event['camera_id']=self.config['cameras'].get(event.get('camera'))
             self._queue.put_nowait(event)
-        except queue.Full:log.warning('Access1 identity queue full; event not submitted')
-        except Exception:log.warning('Access1 identity unavailable; event not submitted')
+            self._capture(event,'access1_queue',state='queued')
+        except queue.Full:
+            self._capture(event,'access1_queue',state='blocked',reason='identity_queue_full')
+            log.warning('Access1 identity queue full; event not submitted')
+        except Exception:
+            self._capture(event,'access1_queue',state='blocked',reason='identity_unavailable')
+            log.warning('Access1 identity unavailable; event not submitted')
+
+    def _capture(self,event,stage,**fields):
+        try:
+            capture_emit(self.processor,event.get('event_id'),event.get('camera'),stage,
+                         evidence_source=event.get('evidence_source'),**fields)
+        except Exception:
+            pass # Passive observation must never change authorization or retries.
 
     def _worker(self):
         while True:
@@ -260,6 +274,7 @@ class Access1Integration:
 
     def present(self,event,*,defer=False):
         event=dict(event)
+        event['_submission_monotonic']=time.monotonic()
         with self._lock:
             self._submission_sequence=getattr(self,'_submission_sequence',0)+1
             event['_submission_order']=self._submission_sequence
@@ -270,10 +285,15 @@ class Access1Integration:
                 if event['_submission_order']>=getattr(self,'_last_submission_order',0):
                     self._last_submission_order=event['_submission_order']
                     self.last_submission={'state':'blocked','reason':'processing_failed','ts':time.time()}
+            self._capture(event,'access1_result',state='blocked',reason='processing_failed')
             raise
         return self._record_submission(event,result)
 
     def _record_submission(self,event,result):
+        self._capture(event,'access1_result',state=result.get('state'),reason=result.get('reason'),
+                      execution_confirmed=result.get('execution_confirmed'),
+                      door_open_confirmed=result.get('door_open_confirmed'),
+                      elapsed_ms=max(0,time.monotonic()-event.get('_submission_monotonic',time.monotonic()))*1000)
         manager=getattr(self.processor,'stream_observations',None)
         if manager is not None and event.get('evidence_source')=='bounded_local_stream':
             manager.receipt(event,result)
@@ -365,9 +385,12 @@ class Access1Integration:
                 with self.audit._connection() as con:
                     con.execute('UPDATE access1_attempts SET state=?,result=? WHERE request_id=?',('blocked',json.dumps({'reason':reason}),request_id))
                 return {'state':'blocked','reason':reason,'request_id':request_id}
+        self._capture(event,'access1_post_started',state='submitting')
         try:result=transport.call('POST',request_id,payload)
         except Exception as exc:failure_reason=self._result_failure(exc)
         self._timing(event,'access1_post',started)
+        self._capture(event,'access1_post_response',state=result.get('status') if isinstance(result,dict) else 'unconfirmed',
+                      reason=failure_reason)
         job={'event':event,'request_id':request_id,'result':result,
              'failure_reason':failure_reason,'transport':transport,
              'deadline':min(expires_at,time.time()+8),
@@ -390,6 +413,7 @@ class Access1Integration:
 
     def _timing(self,event,stage,started):
         seconds=max(0,time.perf_counter()-started)
+        self._capture(event,stage,elapsed_ms=seconds*1000)
         recorder=getattr(self.processor,'record_timing',None)
         if callable(recorder):recorder(stage,seconds)
         if getattr(self.processor,'timing_diagnostics',False) is True:

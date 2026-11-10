@@ -112,7 +112,20 @@ class LiveFrameReader:
                 return None
             if not 0 <= time.monotonic()-self.decoded['arrived'] <= self.max_age:
                 return None
-            return dict(self.decoded)
+            record = dict(self.decoded)
+        # Check only frames actually requested by inference, outside the reader
+        # lock. The decoder keeps draining; JPEG-only consumers need no check.
+        structured = record.pop('_structured', None)
+        if structured is None:
+            structured = frame_detail(record['image'])['detail'] == 'structured'
+        with self.lock:
+            if (self.stopped.is_set() or self.state != 'streaming' or
+                    self.generation != record['generation'] or
+                    not 0 <= time.monotonic()-record['arrived'] <= self.max_age):
+                return None
+            if self.decoded is not None and self.decoded['sequence'] == record['sequence']:
+                self.decoded['_structured'] = structured
+        return record if structured else None
 
     def report(self):
         with self.lock:
@@ -121,7 +134,8 @@ class LiveFrameReader:
             if state == "streaming" and age is not None and age > self.max_age:
                 state = "stale"
             return {"state": state, "width": self.width, "height": self.height,
-                    "frames": self.frames, "generation":self.generation, "rejection_reason":self.clock_reason, "rejections":dict(self.rejections), "age_ms": round(age * 1000) if age is not None else None}
+                    "frames": self.frames, "generation":self.generation, "rejection_reason":self.clock_reason, "rejections":dict(self.rejections), "age_ms": round(age * 1000) if age is not None else None,
+                    "jpeg_enabled":self.encode_jpeg}
 
     def stop(self):
         self.stopped.set()
@@ -170,9 +184,8 @@ class LiveFrameReader:
                     with self.lock:
                         if self.timestamp_origin is None:self.timestamp_origin=position
                         self.sequence += 1
-                        self.decoded = ({'sequence':self.sequence,'generation':self.generation,
+                        self.decoded = {'sequence':self.sequence,'generation':self.generation,
                                         'arrived':now,'pts_ms':position-self.timestamp_origin+1,'image':frame}
-                                        if frame_detail(frame)['detail']=='structured' else None)
                     if not self.encode_jpeg:
                         with self.lock:
                             self.state="streaming"
@@ -209,6 +222,8 @@ class LiveFramePool:
         self.retiring = []
         self.observation_sources = {}
         self.regular_sources = {}
+        self.calibration_sources = {}
+        self.calibration_timer = None
 
     def _retire(self, camera):
         reader = self.readers.pop(camera)
@@ -236,8 +251,12 @@ class LiveFramePool:
         with self.lock:
             self.regular_sources = dict(sources)
             for camera in list(self.readers):
-                if camera not in sources and camera not in self.observation_sources:
+                if camera not in sources and camera not in self.observation_sources and camera not in self.calibration_sources:
                     self._retire(camera)
+                else:
+                    # JPEG demand is symmetric: a surviving observation lease
+                    # alone must stop the former snapshot consumer's encoding.
+                    self.readers[camera].encode_jpeg = camera in sources
             for camera, url in sources.items():
                 reader=self.ensure(camera, url)
                 if reader is not None:reader.encode_jpeg=True
@@ -259,14 +278,60 @@ class LiveFramePool:
     def release_observation(self, camera):
         with self.lock:
             self.observation_sources.pop(camera,None)
-            if camera not in self.regular_sources and camera in self.readers:
+            if camera not in self.regular_sources and camera not in self.calibration_sources and camera in self.readers:
                 self._retire(camera)
+
+    def acquire_calibration(self, camera, url):
+        """Short renewable preview lease; never replace an active production source."""
+        with self.lock:
+            for sources in (self.observation_sources, self.regular_sources):
+                if camera in sources and sources[camera] != url:
+                    return None
+            if camera not in self.calibration_sources and len(self.calibration_sources) >= 1:
+                return None
+            retiring = sum(bool(getattr(item, 'observation', False)) and item.thread is not None
+                           and item.thread.is_alive() for item in self.retiring)
+            if camera not in self.observation_sources and len(set(self.observation_sources) | set(self.calibration_sources)) + retiring >= 2 and camera not in self.calibration_sources:
+                return None
+            reader = self.ensure(camera, url)
+            if reader is None:
+                return None
+            reader.observation = True
+            reader.encode_jpeg = camera in self.regular_sources
+            self.calibration_sources[camera] = time.monotonic() + 5
+            if self.calibration_timer is None:
+                self._schedule_calibration_expiry()
+            return reader
+
+    def _schedule_calibration_expiry(self):
+        self.calibration_timer = threading.Timer(5, self._expire_calibration)
+        self.calibration_timer.daemon = True
+        self.calibration_timer.start()
+
+    def _expire_calibration(self):
+        with self.lock:
+            self.calibration_timer = None
+            for camera, deadline in list(self.calibration_sources.items()):
+                if time.monotonic() >= deadline:
+                    self.calibration_sources.pop(camera, None)
+                    if camera not in self.observation_sources and camera not in self.regular_sources and camera in self.readers:
+                        self._retire(camera)
+            if self.calibration_sources:
+                self._schedule_calibration_expiry()
 
     def report(self):
         with self.lock:
-            return {camera: reader.report() for camera, reader in self.readers.items()}
+            return {camera: {**reader.report(),
+                             "regular_consumer":camera in self.regular_sources,
+                             "observation_consumer":camera in self.observation_sources,
+                             "calibration_consumer":camera in self.calibration_sources}
+                    for camera, reader in self.readers.items()}
 
     def close(self):
         with self.lock:
+            if self.calibration_timer is not None:
+                self.calibration_timer.cancel()
+                self.calibration_timer = None
+            self.calibration_sources.clear()
             self.observation_sources.clear()
             self.sync({})

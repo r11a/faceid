@@ -378,10 +378,10 @@ class WebUIClipTests(unittest.TestCase):
             _, jpeg = cv2.imencode('.jpg', image)
             engine = SimpleNamespace(detect_faces=Mock(return_value=[]),
                 faces=Mock(side_effect=AssertionError('size test must not recognize')),
-                background_work=nullcontext)
+                background_work=lambda *, timeout: nullcontext())
             processor = SimpleNamespace(audit=None, cameras={'door'}, min_face_px=48,
                 min_face_quality=.35, camera_profiles=SimpleNamespace(all=lambda:{}, get=lambda c:{}),
-                frigate=SimpleNamespace(cameras=lambda:['door'],latest_frame_bytes=lambda c:jpeg.tobytes()))
+                frigate=SimpleNamespace(cameras=lambda:['door'],latest_frame_bytes=lambda c, *, timeout:jpeg.tobytes()))
             client = TestClient(build_app({'faceid':{}}, engine, FakeGallery(), processor,
                 Path(tmp), Path(__file__).parents[1]/'static'))
             response = client.get('/api/cameras/door/analyze?include_preview=true')

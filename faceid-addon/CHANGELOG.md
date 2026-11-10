@@ -1,3 +1,11 @@
+## 6.7.2 — 2026-11-09
+- Merge the stream3-derived 6.7.1 calibration/UI and Access1 result-ordering fixes into 6.6.16-access1.early1.
+- Camera calibration and preview follow the configured source, reuse bounded shared readers and never submit access.
+- Keep live subject association, three-sample liveness safeguards, early anchor work, scheduler/resource limits and full capture diagnostics.
+- Bound calibration admission; yield to live recognition and expire unused preview leases. No source fallback.
+- Align all release labels, Ingress and rebuilt assets. Keep installed gallery, mappings, pairing and CPU/security settings.
+- Offline regression and image verification are documented separately. Real-camera latency and final Access1 acceptance remain rig-validation gates.
+
 ## 6.7.1 — 2026-11-02
 - Add opt-in continuously refreshed face-size measurements for the selected camera, using detection only and the exact measured image.
 - Refresh selected-camera previews after each image completes; serialize requests, cancel obsolete results, pause hidden-page sampling and retry unavailable frames.
@@ -14,83 +22,6 @@
 - Keep late Access1 receipts from replacing a newer attempt even when submissions share a clock tick.
 - Fix Linux startup script packaging and synchronize versioned frontend/Ingress assets.
 - Physical camera/Access1 commissioning is still required; no field latency guarantee.
-
-DEVELOPER HANDOFF — 6.6.12-access1.stream3
-Status: implementation available; operational camera acceptance remains pending.
-Do not present this as field-proven faster or a finished security certification.
-
-OBSERVED FIELD FAILURE
-Snapshots completed recognition + Access1 in about 11.2 s. Restream packet test
-showed 25 fps; operational reader churned generations, zero evidence samples.
-The report did not expose decoder clock values/reasons, so exact field cause
-cannot be conclusively attributed from that report alone.
-
-FOCUSED CORRECTIONS
-Shared decoder_position_ms uses native FFmpeg CAP_PROP_PTS in FPS time base when
-available; older builds retain POS_MSEC. Finite arbitrary/negative/zero timestamp
-origins are supported. Internal records normalize the origin, never arrival time.
-Repeated/backward/jumping timestamps, startup drain, local age and 750ms relative
-buffering growth still block evidence. Generation changes still clear history.
-Reader reports now expose categorical rejection counters and generation. Rejection
-logs are rate limited to once per five seconds; event lifecycle stages are logged.
-Observation-only readers drain without JPEG encoding. Existing regular JPEG consumers
-retain encoding. Production and manual decode diagnostics share timestamp extraction.
-No video-source fallback, liveness reduction, model or CPU setting change.
-
-MULTI-PERSON BEHAVIOR
-Anchor must contain exactly one usable face. Live candidates match that anchor and
-conservative tracks with mutual unique matching, .65 threshold/.08 margin. Detector
-order cannot select another person. Competing events cannot share one track;
-subject departure, crossings/overlap, ambiguous matching and identity changes reset
-evidence. More than four usable faces rejects the frame. No accumulated liveness
-transfers to a bystander. Synthetic regression tests are not field accuracy proof.
-
-PROCESSOR AND CORAL
-Measured embedding 1.35-1.49 seconds per face is CPU inference, not model queue wait.
-Detection was roughly .5 seconds. Multiple usable faces multiply embedding work;
-no fixed low latency is promised. Measure CPU quota, affinity, thread settings and
-actual provider on the stronger rig using retained benchmarks. Existing models run
-ONNX Runtime CPU; Coral USB Edge TPU needs compatible compiled TensorFlow Lite
-models and is not a drop-in accelerator. Model conversion/replacement is separate
-work requiring recognition/PAD validation; leave Coral/Frigate configuration intact.
-Sources: https://docs.opencv.org/4.13.0/d4/d15/group__videoio__flags__base.html
-https://gweb-coral-full.uc.r.appspot.com/docs/edgetpu/inference/
-
-NEXT ACCEPTANCE ON CAMERA RIG
-Install complete source/faceid-addon; preserve /data/gallery/pairing/mappings.
-Select restream + trust, recognition by event. Record startup/provider/CPU settings.
-First verify native PTS progresses, reader generation stabilizes and stream_ready
-appears. Then anchor, association, three samples, recognition and Access1 final
-result. If not, export operational report including reader rejection counters and
-logs; do not lower thresholds. Compare same scenes on direct RTSP and snapshots.
-Test two different enrolled people in both detection orders, bystander appearance,
-subject departure, overlap/crossings, duplicate/competing events, reconnect, and
-repeated approaches. Use 20 approaches per baseline/source and median/p95, success,
-wrong-person and duplicate counts. Zero wrong-person/duplicate activation required.
-No real camera/HA/Access1/relay endpoint was contacted during offline development.
-
-STARTUP CORRECTION — 6.6.12-access1.stream3
-The prior package contained CRLF line endings in faceid-addon/run.sh. Linux passed
-bashio plus a carriage return as the interpreter name, preventing startup.
-The script now uses LF. Docker also normalizes CRLF and checks bash syntax during
-build. A regression checks the source shebang, and an offline normal-entrypoint
-smoke runs s6 -> run.sh -> real bashio -> stubbed final application launch.
-Only the final Python application command is stubbed; no camera or Access1 runs.
-Recognition logic and model settings are unchanged. Version/cache markers updated.
-Install the COMPLETE source/faceid-addon over the existing local add-on source;
-refresh the repository and rebuild/update to 6.6.12-access1.stream3. Restart alone
-will not replace a previously built image. Preserve /data, pairing and mappings.
-Expected startup line: Starting FaceID..., followed by normal model-loading logs.
-The earlier image parity/model checks did not exercise the normal container startup
-chain. This missing test is now covered. Rig commissioning remains pending.
-
-## 6.6.12-access1.stream3 — 2026-10-31
-- Integrate event-anchored restream/direct RTSP observation with existing Access1 handling.
-- Preserve snapshot defaults and require explicit per-camera local-network trust.
-- Enforce same-subject minimum-three liveness evidence, bounded timing and cancellation.
-- Retain operational diagnostics, private input previews and credential-safe configuration.
-- Preserve models, thresholds, saved mappings, connector policies and dependency versions.
-- Rig commissioning pending; no field-speed or general security guarantee.
 
 ## 6.6.11-access1.test1 — 2026-10-30
 - Restore operational startup according to saved settings (no forced setting changes).
@@ -139,6 +70,113 @@ chain. This missing test is now covered. Rig commissioning remains pending.
 - Sequential, bounded, low-priority diagnostics; ephemeral credentials and redacted reports.
 - Add Settings link and English/Hebrew test guide.
 - No recognition, liveness, Access1 authorization, defaults or data migration changes.
+
+## 6.6.5-access1.1
+
+FaceID 6.6.5-access1.1 — focused embedding/scheduler maintenance release
+Local fork based on 6.6.4-access1.1 / upstream 6.6.2. 2026-10-30.
+
+Changes
+- One CPU recognition-model warmup inference runs before camera workers start.
+  It uses a synthetic zero image through the installed model's get_feat()
+  preprocessing. It is not an event or a face, and never updates identity,
+  gallery, liveness, confirmations, notifications or Access1. Startup takes the
+  warmup time instead of the first visitor paying that cold-inference cost.
+  Accelerated providers are left unchanged. A failed warmup logs a categorical
+  warning; real inference still has to succeed normally.
+- embed_face now rechecks the existing embedding after acquiring its lock.
+  Two concurrent callers sharing the same face object do not calculate it twice.
+  No embeddings are shared across different face objects/events/frames.
+- Event-correlated embedding_scheduler_wait and embedding_compute timings split
+  the existing face_embedding duration. Compute still calls the same installed
+  model.get(), so it includes alignment, preprocessing and model execution.
+  No replacement alignment or recognition implementation was introduced.
+- Bounded per-engine timing counters report p50/p95 wait and compute time,
+  failure count and startup warmup status through the existing health report.
+- Secure-live sampling no longer repeatedly enqueues work whose snapshot
+  timestamp is missing, stale, future, before the event, or already consumed.
+  These jobs previously reached the same execution gate and returned without
+  useful image work. Execution-time gates remain intact to handle races.
+  Fresh valid timestamps resume sampling; notification-only sampling is unchanged.
+
+Preserved
+Model weights, FP32 precision, library versions, face alignment, gallery math,
+similarity thresholds, liveness model and required frame count, same-identity
+and duplicate-evidence guards, source provenance, expiry, TLS/security settings,
+Access1 mappings/permissions/APB/interlocks/timetables, POST deduplication and
+the prior separate receipt worker. No motion analysis or live door operations.
+No automatic CPU setting change: saved cpu_threads=2 remains 2 after upgrading.
+
+Measured evidence and limits
+Your successful event: 8.04 s MQTT-to-recognition; about 4.87 s inside embedding
+across three frames; about 51 ms liveness; 565 ms Access1 result round trip.
+Your startup log confirms CPUExecutionProvider, cpu_threads=2, spinning=true.
+Local synthetic-input FP32 benchmark: two threads median 208.65 ms versus four
+100.36 ms. Eight local CPUs were visible in that initial benchmark.
+Separate old/new path comparison under a four-CPU Docker quota: at two threads,
+first embedding 336.67 -> 157.91 ms; at four threads 105.31 -> 108.35 ms (no cold
+benefit demonstrated there). Warm medians at four threads were about 98 ms.
+Outputs were bit-identical for the tested synthetic inputs. These small local
+benchmarks do not measure biometric accuracy or guarantee your HA latency.
+The benchmark used the public Immich buffalo_l recognition artifact, hash
+4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43;
+your installed file's hash was not collected. No downloaded model is packaged
+or substituted for your existing model. See benchmark logs and deployment guide.
+
+## 6.6.4-access1.1
+
+FaceID 6.6.4-access1.1 — local focused speed and timing release
+Base: local 6.6.3-access1.1, derived from upstream 6.6.2. 2026-10-30.
+
+Implemented
+1. The existing ordered identity worker still validates and POSTs each event
+   once. Pending/uncertain receipts move to a separate bounded GET-only worker.
+   A slow receipt no longer holds the submission queue. Direct synchronous
+   present() callers keep their previous behaviour unless defer=True is explicit.
+2. Receipt tracking retains the original evidence expiry and eight-second
+   reconciliation window, with an additional monotonic deadline against clock
+   rollback. No GET starts after the deadline; an in-flight HTTP call retains
+   its existing transport timeout. Each job is pinned to its original transport;
+   disconnect/re-pair stops reconciliation rather than redirecting it.
+3. A full result queue, expired evidence or failed tracking stays unconfirmed.
+   There is never a retry POST or a local access grant. A late pending display
+   cannot overwrite an already terminal receipt for the same request.
+4. Liveness loads its ONNX runtime before MQTT processing starts, moving model
+   loading out of the first real person's observation. Failure remains blocking
+   in required mode. No synthetic frame counts as liveness proof.
+5. CPU-only liveness now honors the existing explicit cpu_threads and
+   cpu_allow_spinning settings. Defaults and accelerated providers are unchanged.
+   No new forced thread count; fewer threads are not automatically faster.
+6. Optional timing_diagnostics (default false) logs event-correlated stage times.
+   Existing bounded performance metrics also include the new measured stages.
+   Waiting for an unchanged capture timestamp or duplicate image is explicitly
+   reported, rate-limited to one note per second per event while diagnostics is on.
+
+Preserved
+Three-frame liveness configuration and all other configured frame counts;
+same-subject binding, duplicate evidence checks, model weights, thresholds,
+face selection, freshness/expiry, source provenance, TLS, identity mapping,
+deterministic request IDs, duplicate POST prevention, single ordered POST worker,
+Access1 permissions/APB/interlocks/timetables, firmware, relay behaviour, UI flows.
+No motion analysis. No live application, relay or door was operated in testing.
+
+Limits
+This does not change Frigate's rate of fresh event snapshots, remove no-face
+history cards, or change false-person detections. Fast-mode scheduling stays
+250 ms; frame/attempt limits remain unchanged. The Access1 server itself is not
+edited: POST timing includes its processing and network round trip and is NOT
+a direct measurement of its authorization algorithm. Final result tracking is
+separate from physical door-contact confirmation. A faster UI result is not
+proof of a faster physical opening.
+
+Offline evidence
+With a fake receiver imposing an 800 ms receipt delay, the second POST started
+at 1382.91 ms in the baseline and 141.52 ms in this build (local host timings,
+including test database/filesystem overhead). This proves queue isolation, not
+end-to-end HA performance. Local synthetic-input PAD warm median was 6.98 ms
+with defaults and 11.60 ms with 2 threads/no spinning. Accordingly no default
+CPU tuning is imposed. Model-load time moved to startup, not eliminated.
+See benchmark.log for exact measurements and regression.log for final checks.
 
 # 6.6.3-access1.1 — Access1 results and liveness safeguards
 

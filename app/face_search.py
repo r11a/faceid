@@ -16,7 +16,7 @@ from contextlib import nullcontext
 
 import cv2
 import numpy as np
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from .engine import crop_face
@@ -25,6 +25,30 @@ from .quality import measure_face_quality
 from starlette.concurrency import run_in_threadpool
 
 log = logging.getLogger('faceid.face_search')
+
+INDEX_IDLE_SECONDS = 30.0
+INDEX_BATCH_IMAGES = 25
+INDEX_BATCH_SECONDS = 5.0
+INDEX_PREPROCESSOR = 'face-search-full-image-v1'
+
+
+def recognition_active(processor):
+    """Pending acquisition counts as live work even between model calls."""
+    with processor._jobs_lock:
+        if processor._queued_jobs or processor._deferred_jobs:
+            return True
+    for name, fields in (('stream_observations', ('sessions', 'pending')),
+                         ('continuous', ('pending',))):
+        service = getattr(processor, name, None)
+        if service is not None:
+            with service.lock:
+                if any(getattr(service, field, None) for field in fields):
+                    return True
+    # Snapshot states are also updated outside _jobs_lock. A copied list avoids
+    # iterating a changing dictionary; a concurrent transition can only defer work.
+    return any((not state.get('ended') and not state.get('done'))
+               or state['processing_lock'].locked()
+               for state in list(processor.events.values()))
 
 
 def normalized_vector(value):
@@ -38,12 +62,15 @@ def normalized_vector(value):
 
 
 class FaceSearch:
-    def __init__(self, audit, gallery, engine):
+    def __init__(self, audit, gallery, engine, *, live_activity=None):
         self.audit, self.gallery, self.engine = audit, gallery, engine
         self.frigate = None
         self.image_dir = audit.path.parent / 'face_search_images'
         self.image_dir.mkdir(parents=True, exist_ok=True)
         self._index_lock = threading.Lock()
+        self._index_context = threading.local()
+        self._live_activity = live_activity
+        self._idle_since = time.monotonic()
         self.index_status = {'running': False, 'processed': 0, 'indexed': 0, 'total': 0, 'error': None}
         with audit._lock, audit._connection() as con:
             con.executescript('''
@@ -55,10 +82,19 @@ class FaceSearch:
                     event_id TEXT PRIMARY KEY, attempted_ts REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS face_indexed (
                     event_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS face_index_empty (
+                    event_id TEXT NOT NULL, source_key TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL, model_key TEXT NOT NULL,
+                    PRIMARY KEY(event_id, source_key));
+                CREATE TRIGGER IF NOT EXISTS face_index_empty_cleanup
+                    AFTER DELETE ON events BEGIN
+                    DELETE FROM face_index_empty WHERE event_id=OLD.event_id;
+                    END;
             ''')
             con.execute('DELETE FROM face_samples WHERE event_id NOT IN (SELECT event_id FROM events)')
             con.execute('DELETE FROM face_indexed WHERE event_id NOT IN (SELECT event_id FROM events)')
             con.execute('DELETE FROM face_scan_attempts WHERE event_id NOT IN (SELECT event_id FROM events)')
+            con.execute('DELETE FROM face_index_empty WHERE event_id NOT IN (SELECT event_id FROM events)')
         self.prune_images()
 
     def coverage(self):
@@ -176,7 +212,7 @@ class FaceSearch:
                 'offset':offset, 'limit':limit, 'cameras':sorted({r['camera'] for r in ordered}),
                 'mode':'identity' if person else 'similarity', 'index':self.coverage()}
 
-    def start_index(self, *, remote=False, limit=500):
+    def start_index(self, *, remote=False, limit=500, force=False, automatic=False):
         if not 1 <= limit <= 2000:
             raise ValueError('Scan limit must be between 1 and 2000')
         if remote and self.frigate is None:
@@ -185,18 +221,90 @@ class FaceSearch:
             if self.index_status['running']:
                 return dict(self.index_status)
             self.index_status = {'running':True,'processed':0,'indexed':0,'total':0,'error':None,
-                                 'remote':remote,'limit':limit,'unavailable':0,'no_faces':0}
+                                 'remote':remote,'limit':limit,'unavailable':0,'no_faces':0,
+                                 'cached_no_faces':0,'automatic':automatic,'force':force,
+                                 'waiting_for_idle':automatic,'batches':0}
+            self._idle_since = time.monotonic()
         def run():
             try:
-                self.index_existing(remote=remote, limit=limit)
+                self.index_existing(remote=remote, limit=limit, force=force, automatic=automatic)
             except Exception:
                 log.exception('Historical face indexing failed')
                 self.index_status['error'] = 'סריקת ההיסטוריה נכשלה; אפשר לנסות שוב'
             finally:
                 with self._index_lock:
                     self.index_status['running'] = False
+                    self.index_status['waiting_for_idle'] = False
         threading.Thread(target=run, daemon=True, name='face-search-index').start()
         return self.coverage()
+
+    def _wait_for_idle(self, automatic):
+        waited = False
+        while True:
+            now = time.monotonic()
+            try:
+                activity = self.engine.live_activity() if hasattr(self.engine, 'live_activity') else {}
+                active = bool(activity.get('active')) or bool(self._live_activity and self._live_activity())
+                self._idle_since = max(self._idle_since, activity.get('last_activity_monotonic', 0.0))
+            except Exception:
+                # Uncertain foreground status must not start a background model call.
+                active = True
+            if active:
+                self._idle_since = now
+            if not active and (not automatic or now - self._idle_since >= INDEX_IDLE_SECONDS):
+                self.index_status['waiting_for_idle'] = False
+                if waited and getattr(self._index_context, 'batch', None) is not None:
+                    self._index_context.batch['images'] = 0
+                return
+            self.index_status['waiting_for_idle'] = True
+            waited = True
+            time.sleep(.25)
+
+    def _before_index_image(self):
+        batch = getattr(self._index_context, 'batch', None)
+        if batch is None:
+            return  # Explicit single-event recovery retains its existing behavior.
+        automatic = batch['automatic']
+        if (batch['images'] >= INDEX_BATCH_IMAGES
+                or (batch['images'] and time.monotonic() - batch['started'] >= INDEX_BATCH_SECONDS)):
+            # Resume the same cursor after a quiet window; never restart the corpus.
+            self._idle_since = time.monotonic()
+            if not automatic:
+                time.sleep(1.0)
+            batch['images'] = 0
+        self._wait_for_idle(automatic)
+        if not batch['images']:
+            batch['started'] = time.monotonic()
+            self.index_status['batches'] = self.index_status.get('batches', 0) + 1
+        batch['images'] += 1
+
+    def _model_key(self):
+        # Include installed model files and preprocessing/runtime identity. File
+        # metadata detects replacement without reading hundreds of MB at startup.
+        files = []
+        for task, model in sorted(getattr(getattr(self.engine, 'app', None), 'models', {}).items()):
+            path = Path(model.model_file)
+            try:
+                stat = path.stat()
+                files.append((task, path.name, stat.st_size, stat.st_mtime_ns))
+            except OSError:
+                files.append((task, path.name, 'missing'))
+        identity = {'preprocessor':INDEX_PREPROCESSOR, 'models':files,
+                    'runtime':getattr(self.engine, 'runtime', {}),
+                    'det_size':getattr(self.engine, 'det_size', None),
+                    'model_metadata':getattr(self.engine, 'models', {})}
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+    def _cached_empty(self, eid, source_key, fingerprint, force=False):
+        if force:
+            return False
+        with self.audit._connection() as con:
+            row = con.execute('SELECT fingerprint,model_key FROM face_index_empty '
+                              'WHERE event_id=? AND source_key=?', (eid, source_key)).fetchone()
+        if row and row == (fingerprint, self._model_key()):
+            self.index_status['cached_no_faces'] = self.index_status.get('cached_no_faces', 0) + 1
+            return True
+        return False
 
     def _recover_unknowns(self, event_id=None):
         # Reuse original vectors; redetecting a tight stored crop may find no face.
@@ -211,7 +319,7 @@ class FaceSearch:
             except (ValueError, TypeError, OSError, KeyError):
                 continue
 
-    def _index_evidence(self, eid, path):
+    def _index_evidence(self, eid, path, *, force=False):
         if self.engine is None:
             return 0
         try:
@@ -224,19 +332,38 @@ class FaceSearch:
             has_samples = con.execute('SELECT 1 FROM face_samples WHERE event_id=? LIMIT 1', (eid,)).fetchone()
         if old and old[0] == fingerprint and has_samples:
             return 0
+        if self._cached_empty(eid, 'local', fingerprint, force):
+            return 0
+        self._before_index_image()
         image = cv2.imread(str(path))
         if image is None:
-            return 0
-        indexed = self._index_image(eid, image)
-        # A failed/empty detection must remain retryable, including old markers.
+            return 0  # Decode failures remain retryable; never store an empty result.
+        indexed = self._index_image(eid, image, source_key='local', fingerprint=fingerprint,
+                                    force=force, admitted=True)
+        # Errors remain retryable; only a successful empty detection is cached.
         if indexed:
             with self.audit._connection() as con:
                 con.execute('INSERT OR REPLACE INTO face_indexed VALUES(?,?)', (eid, fingerprint))
         return indexed
 
-    def _index_image(self, eid, image):
+    def _index_image(self, eid, image, *, source_key='remote', fingerprint=None, force=False, admitted=False):
+        fingerprint = fingerprint or hashlib.sha256(image.tobytes()).hexdigest()
+        if self._cached_empty(eid, source_key, fingerprint, force):
+            return 0
+        if not admitted:
+            self._before_index_image()
+        faces = self.engine.faces(image)
+        if not faces:
+            with self.audit._connection() as con:
+                # Do not recreate cache metadata for an event deleted in flight.
+                con.execute('INSERT OR REPLACE INTO face_index_empty '
+                            'SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE event_id=?)',
+                            (eid, source_key, fingerprint, self._model_key(), eid))
+            return 0
+        with self.audit._connection() as con:
+            con.execute('DELETE FROM face_index_empty WHERE event_id=? AND source_key=?', (eid, source_key))
         indexed = 0
-        for face in self.engine.faces(image)[:8]:
+        for face in faces[:8]:
             if self.record(eid, face.normed_embedding, crop_face(image, face.bbox)):
                 indexed += 1
         return indexed
@@ -252,49 +379,84 @@ class FaceSearch:
         if not self.sample_vectors(event_id=event_id):
             self._index_evidence(event_id, self.audit.evidence_path(event_id))
 
-    def index_existing(self, *, remote=False, limit=500):
+    def index_existing(self, *, remote=False, limit=500, force=False, automatic=False):
         if not 1 <= limit <= 2000:
             raise ValueError('Scan limit must be between 1 and 2000')
-        self._recover_unknowns()
-        if self.engine is None:
-            return
+        self._wait_for_idle(automatic)
+        # Read metadata without decoding images. Recovered unknown images share
+        # the same job limit/cursor instead of escaping the bounded worker.
+        unknowns = {}
+        for number, path in enumerate(self.gallery.unknown_dir.glob('*.json')):
+            if number % INDEX_BATCH_IMAGES == 0:
+                self._wait_for_idle(automatic)
+            try:
+                meta = json.loads(path.read_text(encoding='utf-8'))
+                if isinstance(meta, dict) and isinstance(meta.get('event_id'), str) and meta.get('embedding'):
+                    paths = unknowns.setdefault(meta['event_id'], [])
+                    if len(paths) < 8:
+                        paths.append(path)
+            except (ValueError, TypeError, OSError):
+                continue
         with self.audit._connection() as con:
-            # Indexed events need no inference or throttle delay. Explicit remote
-            # scans bound the entire missing corpus batch, including local images.
+            # Both modes bound all candidates, including retained unknown crops.
             query = ('SELECT e.event_id FROM events e LEFT JOIN face_scan_attempts a '
                      'ON a.event_id=e.event_id WHERE NOT EXISTS '
                      '(SELECT 1 FROM face_samples s WHERE s.event_id=e.event_id) '
                      'ORDER BY COALESCE(a.attempted_ts,0), COALESCE(e.start_ts,e.updated_ts) DESC')
-            events = con.execute(query + (' LIMIT ?' if remote else ''), (limit,) if remote else ()).fetchall()
-        candidates = [(eid, self.audit.evidence_path(eid)) for (eid,) in events]
-        if not remote:
-            candidates = [(eid,path) for eid,path in candidates if path.is_file()]
+            candidates = []
+            for (eid,) in con.execute(query):
+                path = self.audit.evidence_path(eid)
+                if eid in unknowns or (self.engine is not None and (remote or path.is_file())):
+                    candidates.append((eid, path))
+                    if len(candidates) >= limit:
+                        break
         self.index_status['total'] = len(candidates)
         background = self.engine.background_work() if hasattr(self.engine, 'background_work') else nullcontext()
-        with background:
-            for eid,path in candidates:
-                if remote:
-                    with self.audit._connection() as con:
-                        con.execute('INSERT OR REPLACE INTO face_scan_attempts VALUES(?,?)', (eid,time.time()))
-                try:
-                    indexed = self._index_evidence(eid, path) if path.is_file() else 0
-                    if not indexed and remote and self.frigate is not None:
-                        image = self.frigate.snapshot(eid, crop=True)
-                        if image is None:
-                            self.index_status['unavailable'] = self.index_status.get('unavailable',0) + 1
-                        else:
-                            indexed = self._index_image(eid, image)
-                            if not indexed:
-                                self.index_status['no_faces'] = self.index_status.get('no_faces',0) + 1
-                    elif not indexed:
-                        self.index_status['no_faces'] = self.index_status.get('no_faces',0) + 1
-                    self.index_status['indexed'] += indexed
-                except Exception:
-                    log.exception('Historical face snapshot failed for %s', eid)
-                    self.index_status['unavailable'] = self.index_status.get('unavailable',0) + 1
-                finally:
-                    self.index_status['processed'] += 1
-                    time.sleep(.1)
+        self._index_context.batch = {'automatic':automatic, 'images':0, 'started':time.monotonic()}
+        try:
+            with background:
+                self._index_candidates(candidates, unknowns, remote=remote, force=force, automatic=automatic)
+        finally:
+            self._index_context.batch = None
+            self.index_status['waiting_for_idle'] = False
+
+    def _index_candidates(self, candidates, unknowns, *, remote, force, automatic):
+        for eid,path in candidates:
+            self._wait_for_idle(automatic)
+            with self.audit._connection() as con:
+                con.execute('INSERT OR REPLACE INTO face_scan_attempts VALUES(?,?)', (eid,time.time()))
+            try:
+                indexed = 0
+                for unknown in unknowns.get(eid, []):
+                    self._before_index_image()
+                    try:
+                        meta = json.loads(unknown.read_text(encoding='utf-8'))
+                        if meta.get('event_id') != eid:
+                            continue
+                        if self.record(eid, meta['embedding'], cv2.imread(str(unknown.with_suffix('.jpg')))):
+                            indexed += 1
+                    except (ValueError, TypeError, OSError, KeyError):
+                        continue
+                if not indexed:
+                    indexed = self._index_evidence(eid, path, force=force) if path.is_file() else 0
+                if not indexed and remote and self.frigate is not None and self.engine is not None:
+                    self._before_index_image()
+                    image = self.frigate.snapshot(eid, crop=True)
+                    if image is None:
+                        self.index_status['unavailable'] = self.index_status.get('unavailable',0) + 1
+                    else:
+                        indexed = self._index_image(eid, image, force=force, admitted=True)
+                        if not indexed:
+                            self.index_status['no_faces'] = self.index_status.get('no_faces',0) + 1
+                elif not indexed:
+                    self.index_status['no_faces'] = self.index_status.get('no_faces',0) + 1
+                self.index_status['indexed'] += indexed
+            except Exception:
+                log.exception('Historical face snapshot failed for %s', eid)
+                self.index_status['unavailable'] = self.index_status.get('unavailable',0) + 1
+            finally:
+                self.index_status['processed'] += 1
+                time.sleep(.1)
 
 
 def register_face_routes(app, processor, gallery, engine):
@@ -393,9 +555,12 @@ def register_face_routes(app, processor, gallery, engine):
         return {'samples':[{'sample_id':sid,'image':f'api/faces/images/{sid}' if (service.image_dir/f'{sid}.jpg').is_file() else None} for (sid,) in rows]}
 
     @app.post('/api/faces/index')
-    def index_history(remote: bool=False, limit: int=500):
+    async def index_history(request: Request, remote: bool=False, limit: int=500, force: bool=False):
+        if force:
+            from .access1_admin import require_pairing_admin
+            await require_pairing_admin(request)
         try:
-            return service.start_index(remote=remote, limit=limit)
+            return service.start_index(remote=remote, limit=limit, force=force)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
