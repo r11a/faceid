@@ -1,0 +1,80 @@
+FACEID SUBJECT ASSOCIATION HANDOFF
+Prepared 2026-11-06. Focus: automatic-access snapshot attribution and shared stream helpers.
+
+1. Problem and resulting behavior
+
+Previously the secure_live_snapshot path detected the full event image, applied the existing ROI and quality requirements, then selected the highest-quality usable face. With two people visible, that could attribute a known bystander to the Frigate event instead of the tracked person who triggered it. Gallery identity and later liveness consistency could not prove that initial attribution.
+
+The automatic-access snapshot path now obtains an event-specific person crop and requires exactly one usable face in that crop. The embedding from that face is the event's association anchor. It does not count toward identity confirmations, liveness samples, image freshness or access approval. Each usable live snapshot candidate must match this anchor uniquely before the unchanged gallery/liveness/Access1 pipeline can consider it.
+
+An unknown or unregistered triggering subject is not replaced by a better-known bystander. Two clear subjects may progress independently under their own events. Ambiguity resets the affected event's accumulated evidence instead of borrowing another person's history.
+
+2. Files and common interfaces
+
+app/subject_association.py (new; mirrored to faceid-addon/app):
+- usable_faces(image, faces, profile, min_face_px=..., min_quality=..., apply_roi=True, hour=None): existing pixel, detector and quality policy; configured full-image ROI when applicable. Returns (face, quality) pairs.
+- single_anchor(engine, image, profile, min_face_px=..., min_quality=...): exactly one usable face; normalized embedding plus a categorical reason. The full-image ROI is not applied inside the already person-cropped image because its coordinate system differs.
+- mutual_assignments(anchors, faces): normalized cosine similarity >= 0.65 and a >= 0.08 alternative-match margin in BOTH directions. No gallery identities, enrollment preference or order-dependent tie breaking. Invalid/nonfinite/incompatible vectors cannot match.
+- overlapping_indices(faces): indices of boxes with positive-area overlap.
+
+app/mqtt_listener.py (mirrored to faceid-addon/app):
+- Secure snapshots use _snapshot_subject rather than strongest-quality selection.
+- _snapshot_context_valid preserves the existing event identity, camera enablement, timestamp freshness, active-event and bounded observation checks, and also checks that the camera profile/source has not changed.
+- _snapshot_reset clears only that event's liveness/decision/best-recognized evidence and changes its association generation.
+- _snapshot_anchors includes established same-camera snapshot anchors for active events, including already-recognized events until they end, so consuming an event does not remove a competing anchor from consideration.
+- A recognition guard checks the current association again during processing and immediately before Access1 enqueue. A late competing anchor, camera/profile change or expiry cannot preserve a rejected in-flight sample for a later attempt.
+
+app/stream_observation.py is owned by the stream coordinator change. It reuses usable_faces, single_anchor and mutual_assignments; stream timing/generation/expiry proof remains in that coordinator. Review its full handoff for async anchor scheduling and capacity limits.
+
+3. Snapshot anchor and continuity rules
+
+- Uses existing FrigateAPI.association_frame(event_id, camera), with crop=1, timestamp=0, bbox=0. That method checks active person-event metadata and camera before and after the image request.
+- Maximum two anchor fetch attempts for the cached profile. A failed/ambiguous anchor never falls back to the best gallery match.
+- A cached successful anchor is reused for the event. Profile changes invalidate it and clear the old evidence.
+- Maximum four usable candidate faces per processed snapshot. An overcrowded frame is rejected before candidate embedding work (the first anchor may already have been computed); the code does not arbitrarily choose four subjects.
+- Established anchors and current candidates use mutual unique assignment. An unrelated event whose anchor cannot match any current candidate does not block a clearly associated subject.
+- Per-event FaceTracker continuity preserves the existing conservative motion rules: size ratio within one-third to three times and center displacement within twice the smaller box diagonal. It does not drift the original track embedding toward bystanders.
+- Missing/unmatched faces, overlapping boxes, crossings, changed tracks and ambiguity clear confirmation history. A new track cannot inherit prior confirmations.
+- Snapshot image-hash, increasing capture timestamp and duplicate-embedding protections remain in force. The anchor never refreshes the retained snapshot timestamp.
+- Required-liveness secure snapshots now enforce at least three distinct same-subject live samples, preserving any stricter identity or liveness requirement. Off/advisory policies are not silently changed; existing Access1 admission guards remain authoritative.
+
+4. Preserved behavior and boundaries
+
+Ordinary archival snapshots, manual image handling and clip recognition retain their existing selection behavior and do not acquire new access authority. Existing snapshot evidence type, authenticated transport, Access1 request schema, mappings and result handling are unchanged. This change does not make a new claim about camera capture time and does not broaden local-network trust.
+
+These are independent-person recognition safeguards, not a tailgating detector. A known subject receiving a correct decision does not prove that nobody else passed through a physical doorway. No new cross-event cooldown, multi-door policy or Access1 authorization bypass is introduced.
+
+5. Resource and reliability limits to review
+
+Snapshot attribution necessarily adds a bounded first-anchor cost: event metadata, cropped image and metadata recheck, then one anchor embedding. HTTP is still within the legacy snapshot live-priority reservation (not a held model inference lock). Background work may wait for that reservation; the stream coordinator's asynchronous anchor work is the preferred resource improvement. This snapshot hardening itself is not a claimed latency optimization.
+
+Every usable candidate may need an embedding for sound association. That cost is bounded at four faces but can exceed the former unsafe one-face selection cost. Matching only gallery-enrolled faces or selecting the clearest four would reduce cost by weakening attribution and is not implemented.
+
+Anchor quality depends on Frigate's event-specific person crop and the actual visible face. A crop with zero or two usable faces is refused. A persistent ambiguous crop requires inspection of retained inputs; thresholds should not be lowered to force a pass.
+
+Mutual assignment includes currently established event anchors, not guessed anchors for sessions still awaiting their event crop. A later competing established anchor invalidates an in-flight guard. Real multi-person/crossing behavior still needs commissioning on the intended rig; synthetic vector tests do not establish field accuracy or physical anti-tailgating behavior.
+
+There is no asynchronous result proof extension for secure snapshots in this change. The immediate recognition/enqueue guard and existing connector admission gates remain the contract. Stream submission-time evidence validation is separately retained in the stream coordinator.
+
+6. Tests and evidence
+
+Added tests/test_snapshot_subject_association.py. Updated the obsolete test_cpu_efficiency expectation which explicitly required strongest-quality bystander selection; it now verifies event-anchor selection. No existing threshold was weakened to make tests pass.
+
+Focused offline run, networking disabled:
+python -m unittest test_snapshot_subject_association test_live_access_bench test_live_consensus_bench test_cpu_efficiency -v
+
+Result: 64 tests passed. Full output: snapshot-targeted-tests.txt beside this handoff.
+
+Coverage includes two subjects and separate events, detector order, higher-quality bystander, duplicate competing anchors, unrelated uncertain subject, zero/multiple-face anchor, invalid vectors, ROI coordinate separation, bounded anchor attempts, event end/source changes during fetch, max-four rejection, overlap/crossing, implausible motion, missing subject, late competitor invalidation, and three distinct samples with a configured two-frame detector. Existing fresh snapshot transport, duplicate image/timestamp/embedding, stale/end rejection, ordinary snapshot/clip behavior and CPU engine API tests also pass.
+
+These tests use mocked HTTP, synthetic embeddings and mocked liveness. No camera, HA, Access1 server, relay or door was contacted. Full backend/frontend suites, final image build and real-model/codec smoke evidence belong to the parent package's final regression gate. A faster field response is not claimed here.
+
+7. Developer review checklist
+
+- Compare app files against faceid-addon/app byte for byte before packaging.
+- Preserve helper cosine/margin values and all existing gallery/quality/liveness thresholds.
+- Keep the event anchor separate from live confirmation samples and timestamps.
+- Verify profile/source changes, event end and expiry remain checked after slow anchor/model work.
+- Retain independent event history; never use highest gallery confidence to resolve association ambiguity.
+- Run paired single-person/two-person/crossing commissioning and inspect actual retained crops on failure.
+- Keep any future cross-event deduplication or tailgating feature separate from this focused attribution change.

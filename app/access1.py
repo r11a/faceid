@@ -19,6 +19,8 @@ from .access1_transport import Transport
 from .recognition_capture import emit as capture_emit
 
 log=logging.getLogger('faceid.access1')
+# Result checks after a pending POST: reporting only, the door path does not wait on them.
+RESULT_POLL_SECONDS=(.1,.2,.3)
 
 
 def atomic(path,value):
@@ -236,19 +238,25 @@ class Access1Integration:
         self._directory_thread.start()
 
     def enqueue(self,event):
+        """Queue an identity request. Returns an Event set once the POST has
+        started (or the request ended before it), so callers can hold their
+        own database writes until then; None when nothing was queued."""
         if self.transport is None:
             self.last_submission={'state':'blocked','reason':'connector_disabled','ts':time.time()}
             self._capture(event,'access1_queue',state='blocked',reason='connector_disabled')
-            return
+            return None
         try:
             # Freeze identity at recognition time; a reused name must not retarget queued work.
             event=dict(event)
             event['_queued_monotonic']=time.perf_counter()
+            gate=threading.Event()
+            event['_post_gate']=gate
             with self._lock:
                 event['person_id']=self.person_id(event.get('slug'))
                 event['camera_id']=self.config['cameras'].get(event.get('camera'))
             self._queue.put_nowait(event)
             self._capture(event,'access1_queue',state='queued')
+            return gate
         except queue.Full:
             self._capture(event,'access1_queue',state='blocked',reason='identity_queue_full')
             log.warning('Access1 identity queue full; event not submitted')
@@ -270,7 +278,14 @@ class Access1Integration:
                 self._timing(event,'submission_queue',event.get('_queued_monotonic',time.perf_counter()))
                 self.present(event,defer=True)
             except Exception:log.warning('Access1 identity processing unavailable; no automatic replay')
-            finally:self._queue.task_done()
+            finally:
+                self._release_post_gate(event)
+                self._queue.task_done()
+
+    @staticmethod
+    def _release_post_gate(event):
+        gate=event.get('_post_gate') if isinstance(event,dict) else None
+        if gate is not None:gate.set()
 
     def present(self,event,*,defer=False):
         event=dict(event)
@@ -322,6 +337,7 @@ class Access1Integration:
             return result
 
     def _present(self,event,*,defer=False):
+        prepare_started=time.perf_counter()
         stream = event.get('evidence_source') == 'bounded_local_stream'
         if stream:
             manager=getattr(self.processor,'stream_observations',None)
@@ -368,10 +384,23 @@ class Access1Integration:
             'recognition':{'score':event.get('score'),'metric':'face_embedding_similarity'},
             'liveness':{'status':'passed','method':'rgb_passive','score':event.get('liveness_score'),
                         'confirmed_frames':event.get('liveness_frames',0)}}
+        self._timing(event,'access1_pre_insert',prepare_started)
+        insert_started=time.perf_counter()
         with self.audit._connection() as con:
+            # WAL + NORMAL: atomic and crash-safe, no disk flush before the POST.
+            # Only a power cut at this instant could drop the row; nothing replays.
+            con.execute('PRAGMA synchronous=NORMAL')
+            con.execute('BEGIN IMMEDIATE')
+            self._timing(event,'access1_attempt_lock',insert_started)
+            commit_started=time.perf_counter()
             try:con.execute('INSERT INTO access1_attempts VALUES(?,?,?,?,?,?)',
                 (request_id,event['event_id'],time.time(),'pending',json.dumps(payload),None))
-            except sqlite3.IntegrityError:return {'state':'duplicate','request_id':request_id}
+            except sqlite3.IntegrityError:
+                con.rollback()
+                return {'state':'duplicate','request_id':request_id}
+            con.commit()
+            self._timing(event,'access1_attempt_commit',commit_started)
+        self._timing(event,'access1_attempt_insert',insert_started)
         result=None
         failure_reason=None
         transport=self.transport
@@ -385,7 +414,10 @@ class Access1Integration:
                 with self.audit._connection() as con:
                     con.execute('UPDATE access1_attempts SET state=?,result=? WHERE request_id=?',('blocked',json.dumps({'reason':reason}),request_id))
                 return {'state':'blocked','reason':reason,'request_id':request_id}
+        self._timing(event,'access1_pre_post',prepare_started)
         self._capture(event,'access1_post_started',state='submitting')
+        # The request is on its way: recognition bookkeeping may write again.
+        self._release_post_gate(event)
         try:result=transport.call('POST',request_id,payload)
         except Exception as exc:failure_reason=self._result_failure(exc)
         self._timing(event,'access1_post',started)
@@ -428,7 +460,10 @@ class Access1Integration:
             return self._finish_result(job)
         remaining=min(job['deadline']-time.time(),job['monotonic_deadline']-time.monotonic())
         if remaining<=0:return self._finish_result(job)
-        time.sleep(min(.3,remaining))
+        # First check soon after the POST, then back off to the normal pace.
+        polls=job.get('polls',0)
+        job['polls']=polls+1
+        time.sleep(min(RESULT_POLL_SECONDS[min(polls,len(RESULT_POLL_SECONDS)-1)],remaining))
         if time.time()>=job['deadline'] or time.monotonic()>=job['monotonic_deadline']:
             return self._finish_result(job)
         started=time.perf_counter()

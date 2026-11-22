@@ -137,22 +137,27 @@ class CpuEfficiencyTests(unittest.TestCase):
         p.engine.faces.assert_not_called()
         p.engine.embed_face.assert_not_called()
 
-    def test_secure_snapshot_never_uses_quality_as_identity_when_anchor_is_missing(self):
+    def test_live_pipeline_uses_event_anchor_instead_of_best_quality_bystander(self):
         p, st = sampling.LiveSamplingTests().processor()
         p.frigate.live_event_frame.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
-        p.frigate.association_frame = Mock(return_value=None)
-        faces = [SimpleNamespace(bbox=np.array([0, 0, 80, 80]), det_score=.99),
-                 SimpleNamespace(bbox=np.array([10, 10, 70, 70]), det_score=.98)]
+        faces = [SimpleNamespace(bbox=np.array([0, 0, 40, 80]), det_score=.99,
+                                 normed_embedding=np.array([1., 0.])),
+                 SimpleNamespace(bbox=np.array([60, 0, 100, 80]), det_score=.98,
+                                 normed_embedding=np.array([0., 1.]))]
         p.engine.detect_faces = Mock(return_value=faces)
         p.engine.embed_face = Mock()
         p._process_face = Mock()
+        anchor = np.ones((100, 100, 3), dtype=np.uint8)
+        p.frigate.association_frame = Mock(return_value=anchor)
+        p.engine.detect_faces.side_effect = lambda image: [faces[0]] if image is anchor else faces
         with patch('app.mqtt_listener.measure_face_quality', side_effect=[
-            SimpleNamespace(usable=True, score=.6), SimpleNamespace(usable=True, score=.9)]):
+            SimpleNamespace(usable=True, score=.6), SimpleNamespace(usable=True, score=.9)]), \
+            patch('app.subject_association.measure_face_quality', return_value=SimpleNamespace(usable=True, score=.6)):
             p._process('e')
         p.engine.faces.assert_not_called()
-        p.engine.embed_face.assert_not_called()
-        p.frigate.association_frame.assert_called_once()
-        p._process_face.assert_not_called()
+        self.assertEqual(p.engine.embed_face.call_count, 3)
+        self.assertIs(p._process_face.call_args.args[3], faces[0])
+        self.assertEqual(p._process_face.call_args.kwargs['source'], 'secure_live_snapshot')
 
 
 if __name__ == '__main__':

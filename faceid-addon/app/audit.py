@@ -230,6 +230,7 @@ class AuditStore:
         face_px: int = 0,
         quality: float = 0.0,
         source: str = "snapshot",
+        ts: float | None = None,
     ):
         with self._lock, self._connection() as con:
             con.execute(
@@ -243,7 +244,7 @@ class AuditStore:
                 (
                     event_id,
                     attempt,
-                    time.time(),
+                    time.time() if ts is None else ts,
                     status,
                     person,
                     score,

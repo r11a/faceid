@@ -1,3 +1,18 @@
+# FaceID 6.7.2
+
+Merged operational candidate; ready for rig validation. Calibration follows the
+saved camera recognition source. Existing subject association, liveness and
+Access1 safeguards remain. No field speed or success-rate claim is made.
+
+[English installation and test guide](INSTALL-AND-COMMISSION-EN.txt) ·
+[מדריך התקנה ובדיקה](INSTALL-AND-COMMISSION-HE.txt) ·
+[Developer handoff](DEVELOPER-HANDOFF.txt) · [Tests](TEST-RESULTS.txt)
+
+Manual calibration never submits access. Normal automatic recognition can still
+submit access while diagnostics are open, according to the saved settings.
+
+## Historical technical notes (superseded by the guides above where different)
+
 # מצבי זיהוי במצלמות — 6.6.0
 
 בתוך FaceID פותחים **מצלמות**, בוחרים מצלמה ומשנים **מתי לזהות פנים**, ואז לוחצים **שמור הגדרות**. הבחירה נשמרת לכל מצלמה בנפרד ונכנסת לתוקף בלי הפעלה מחדש.

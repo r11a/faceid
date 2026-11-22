@@ -1,0 +1,274 @@
+configuration:
+  frigate_url:
+    name: Connection · Frigate URL
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  frigate_username:
+    name: Connection · Frigate username
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  frigate_password:
+    name: Connection · Frigate password
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  frigate_verify_tls:
+    name: 'Connection · Frigate: verify TLS certificate'
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  frigate_topic_prefix:
+    name: Connection · MQTT topic prefix (Frigate)
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  mqtt_host:
+    name: Connection · MQTT host
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  mqtt_port:
+    name: Connection · MQTT port
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  mqtt_user:
+    name: Connection · MQTT user
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  mqtt_password:
+    name: Connection · MQTT password
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  mqtt_prefix:
+    name: Connection · MQTT topic prefix (FaceID)
+    description: Usually set in FaceID > Setup > Connect; a value saved there wins over this one.
+  backend:
+    name: Engine and stream · Recognition engine
+    description: Measured on the installation; change only with a walk test afterwards.
+  stream_gpu_decode:
+    name: 'Engine and stream · Stream: GPU decode'
+    description: Measured on the installation; change only with a walk test afterwards.
+  stream_decode_width:
+    name: 'Engine and stream · Stream: decode width (0 = native)'
+    description: Measured on the installation; change only with a walk test afterwards.
+  stream_decode_threads:
+    name: 'Engine and stream · Stream: CPU decoder threads'
+    description: Measured on the installation; change only with a walk test afterwards.
+  stream_warm_seconds:
+    name: 'Engine and stream · Stream: keep warm after an event (s)'
+    description: Measured on the installation; change only with a walk test afterwards.
+  frigate_box_association:
+    name: Engine and stream · Frigate person-box association
+    description: Measured on the installation; change only with a walk test afterwards.
+  cpu_threads:
+    name: Engine and stream · Cpu threads
+    description: Measured on the installation; change only with a walk test afterwards.
+  cpu_allow_spinning:
+    name: Engine and stream · Cpu allow spinning
+    description: Measured on the installation; change only with a walk test afterwards.
+  timing_diagnostics:
+    name: Engine and stream · Timing diagnostics
+    description: Measured on the installation; change only with a walk test afterwards.
+  match_threshold:
+    name: Recognition · Match threshold
+    description: Tuning; change only after calibration. FaceID > Settings wins over this.
+  unknown_threshold:
+    name: Recognition · Unknown threshold
+    description: Tuning; change only after calibration. FaceID > Settings wins over this.
+  match_margin:
+    name: Recognition · Match margin
+    description: Tuning; change only after calibration. FaceID > Settings wins over this.
+  min_confirmations:
+    name: Recognition · Min confirmations
+    description: Tuning; change only after calibration. FaceID > Settings wins over this.
+  min_face_quality:
+    name: Recognition · Min face quality
+    description: Tuning; change only after calibration. FaceID > Settings wins over this.
+  recognition_session_seconds:
+    name: Recognition · Recognition session seconds
+    description: Tuning; change only after calibration. FaceID > Settings wins over this.
+  guest_match_threshold:
+    name: Recognition · Guest match threshold
+    description: Tuning; change only after calibration. FaceID > Settings wins over this.
+  guest_match_margin:
+    name: Recognition · Guest match margin
+    description: Tuning; change only after calibration. FaceID > Settings wins over this.
+  liveness_enabled:
+    name: Liveness · Liveness enabled
+    description: Protection against photos and screens.
+  liveness_threshold:
+    name: Liveness · Liveness threshold
+    description: Protection against photos and screens.
+  liveness_required_frames:
+    name: Liveness · Liveness required frames
+    description: Protection against photos and screens.
+  access_control_enabled:
+    name: Access1 · Door access control
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  access1_enabled:
+    name: Access1 · Access1 connector
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  access1_url:
+    name: Access1 · Access1 URL
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  access1_token:
+    name: Access1 · Access1 token
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  access1_ca:
+    name: Access1 · Access1 CA certificate
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  access1_bind_address:
+    name: Access1 · Access1 bind address
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  access1_directory_token:
+    name: Access1 · Access1 directory token
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  access1_tls_cert:
+    name: Access1 · Access1 TLS certificate
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  access1_tls_key:
+    name: Access1 · Access1 TLS key
+    description: Door control through Access1. Pairing is done in FaceID > Access1.
+  backup_enabled:
+    name: Backup and retention · Backup enabled
+    description: Also adjustable in FaceID > Settings.
+  backup_hour:
+    name: Backup and retention · Backup hour
+    description: Also adjustable in FaceID > Settings.
+  backup_keep:
+    name: Backup and retention · Backup keep
+    description: Also adjustable in FaceID > Settings.
+  backup_dir:
+    name: Backup and retention · Backup dir
+    description: Also adjustable in FaceID > Settings.
+  audit_retention_days:
+    name: Backup and retention · Audit retention days
+    description: Also adjustable in FaceID > Settings.
+  known_evidence_days:
+    name: Backup and retention · Known evidence days
+    description: Also adjustable in FaceID > Settings.
+  unknown_evidence_days:
+    name: Backup and retention · Unknown evidence days
+    description: Also adjustable in FaceID > Settings.
+  known_evidence_max:
+    name: Backup and retention · Known evidence max
+    description: Also adjustable in FaceID > Settings.
+  unknown_evidence_max:
+    name: Backup and retention · Unknown evidence max
+    description: Also adjustable in FaceID > Settings.
+  media_max_clip_mb:
+    name: Backup and retention · Media max clip mb
+    description: Also adjustable in FaceID > Settings.
+  media_cache_mb:
+    name: Backup and retention · Media cache mb
+    description: Also adjustable in FaceID > Settings.
+  media_retention_hours:
+    name: Backup and retention · Media retention hours
+    description: Also adjustable in FaceID > Settings.
+  max_faces_per_person:
+    name: Gallery and review · Max faces per person
+    description: Also adjustable in FaceID > Settings.
+  trimmed_keep:
+    name: Gallery and review · Trimmed keep
+    description: Also adjustable in FaceID > Settings.
+  dedupe_threshold:
+    name: Gallery and review · Dedupe threshold
+    description: Also adjustable in FaceID > Settings.
+  cluster_eps:
+    name: Gallery and review · Cluster eps
+    description: Also adjustable in FaceID > Settings.
+  suggest_threshold:
+    name: Gallery and review · Suggest threshold
+    description: Also adjustable in FaceID > Settings.
+  ignore_margin:
+    name: Gallery and review · Ignore margin
+    description: Also adjustable in FaceID > Settings.
+  hires_enroll:
+    name: Gallery and review · Hires enroll
+    description: Also adjustable in FaceID > Settings.
+  review_queue_max_total:
+    name: Gallery and review · Review queue max total
+    description: Also adjustable in FaceID > Settings.
+  review_queue_max_per_cluster:
+    name: Gallery and review · Review queue max per cluster
+    description: Also adjustable in FaceID > Settings.
+  review_queue_retention_days:
+    name: Gallery and review · Review queue retention days
+    description: Also adjustable in FaceID > Settings.
+  review_queue_dedupe_days:
+    name: Gallery and review · Review queue dedupe days
+    description: Also adjustable in FaceID > Settings.
+  clip_analysis:
+    name: Clips · Clip analysis
+    description: Recorded-clip analysis after an event.
+  clip_max_frames:
+    name: Clips · Clip max frames
+    description: Recorded-clip analysis after an event.
+  clip_max_samples:
+    name: Clips · Clip max samples
+    description: Recorded-clip analysis after an event.
+  clip_retry_attempts:
+    name: Clips · Clip retry attempts
+    description: Recorded-clip analysis after an event.
+  clip_retry_seconds:
+    name: Clips · Clip retry seconds
+    description: Recorded-clip analysis after an event.
+  video_decode:
+    name: Clips · Video decode
+    description: Recorded-clip analysis after an event.
+  poll_interval:
+    name: Clips · Poll interval
+    description: Recorded-clip analysis after an event.
+  presence_window:
+    name: Site and tracking · Presence window
+    description: Presence, visits and cross-camera tracking.
+  visit_gap_minutes:
+    name: Site and tracking · Visit gap minutes
+    description: Presence, visits and cross-camera tracking.
+  calibration_target_far:
+    name: Site and tracking · Calibration target far
+    description: Presence, visits and cross-camera tracking.
+  scenario_window:
+    name: Site and tracking · Scenario window
+    description: Presence, visits and cross-camera tracking.
+  camera_graph_json:
+    name: Site and tracking · Camera graph json
+    description: Presence, visits and cross-camera tracking.
+  reid_enabled:
+    name: Site and tracking · Reid enabled
+    description: Presence, visits and cross-camera tracking.
+  reid_ttl:
+    name: Site and tracking · Reid ttl
+    description: Presence, visits and cross-camera tracking.
+  reid_threshold:
+    name: Site and tracking · Reid threshold
+    description: Presence, visits and cross-camera tracking.
+  body_enabled:
+    name: Site and tracking · Body enabled
+    description: Presence, visits and cross-camera tracking.
+  body_threshold:
+    name: Site and tracking · Body threshold
+    description: Presence, visits and cross-camera tracking.
+  body_confirmations:
+    name: Site and tracking · Body confirmations
+    description: Presence, visits and cross-camera tracking.
+  body_consensus_window:
+    name: Site and tracking · Body consensus window
+    description: Presence, visits and cross-camera tracking.
+  vision_advisor_enabled:
+    name: Site and tracking · Vision advisor enabled
+    description: Presence, visits and cross-camera tracking.
+  automation_cooldown:
+    name: Automations · Automation cooldown
+    description: Webhooks, Frigate sub-labels and the optional local AI.
+  webhook_urls:
+    name: Automations · Webhook urls
+    description: Webhooks, Frigate sub-labels and the optional local AI.
+  set_sub_label:
+    name: Automations · Set sub label
+    description: Webhooks, Frigate sub-labels and the optional local AI.
+  ai_enabled:
+    name: Automations · Ai enabled
+    description: Webhooks, Frigate sub-labels and the optional local AI.
+  ai_url:
+    name: Automations · AI URL
+    description: Webhooks, Frigate sub-labels and the optional local AI.
+  ai_vision_model:
+    name: Automations · Ai vision model
+    description: Webhooks, Frigate sub-labels and the optional local AI.
+  ai_embedding_model:
+    name: Automations · Ai embedding model
+    description: Webhooks, Frigate sub-labels and the optional local AI.
+  cameras:
+    name: Cameras (legacy) · Cameras
+    description: Camera selection is done in FaceID > Cameras; leave empty.
+  discovery_cameras:
+    name: Cameras (legacy) · Discovery cameras
+    description: Camera selection is done in FaceID > Cameras; leave empty.

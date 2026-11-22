@@ -7,7 +7,7 @@ import uvicorn
 import yaml
 
 from . import logbuffer
-from .diagnostic_mode import DIAGNOSTIC_ONLY, start_operational_services
+from .diagnostic_mode import DIAGNOSTIC_ONLY, OPENVINO_TEST_BUILD, start_operational_services
 from .engine import FaceEngine
 from .frigate_api import FrigateAPI
 from .gallery import Gallery
@@ -33,6 +33,7 @@ from .access_control import AccessControl
 from .guest_access import GuestAccess
 from .site_intelligence import SiteIntelligence
 from .migrations import run_migrations
+from . import setup_wizard
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -68,6 +69,11 @@ def main():
     if pending_audit.is_file():
         pending_audit.replace(data_dir / "audit.db")
         log.warning("restored audit history from the previous backup before opening the database")
+    # 6.9.0: undo a setup apply that did not finish, then record the setup state
+    # before anything below creates files (an upgrade is told apart from a blank install).
+    setup_wizard.recover_interrupted_apply(data_dir)
+    setup_state = setup_wizard.SetupState(data_dir)
+    setup_state.initialize(setup_wizard.existing_install(data_dir))
     migration = run_migrations(data_dir)
     if migration["changed"]:
         log.warning("data migration completed; recovery backup: %s", migration["backup"])
@@ -80,6 +86,10 @@ def main():
             cfg.setdefault("faceid", {}).update(json.loads(settings_f.read_text()))
         except (json.JSONDecodeError, OSError):
             log.warning("settings.json unreadable — ignoring it")
+    # Frigate/MQTT connection set in the FaceID UI wins over the add-on options.
+    if setup_wizard.merge_connection(cfg, data_dir):
+        log.info("Using the Frigate/MQTT connection saved in FaceID setup")
+    setup_missing = setup_wizard.missing_connections(cfg)
     if cfg["faceid"].get("backup_enabled") or cfg["faceid"].get("backup_dir"):
         validate_backup_dir(data_dir, Path(cfg["faceid"].get("backup_dir") or (data_dir / "backups")))
     log.info("loading InsightFace (buffalo_l) …")
@@ -88,6 +98,7 @@ def main():
         backend=str(cfg["faceid"].get("backend", "auto")),
         cpu_threads=cfg["faceid"].get("cpu_threads", 0),
         cpu_allow_spinning=cfg["faceid"].get("cpu_allow_spinning", True),
+        native_cache_dir=Path.home() / "openvino-cache",
     )
     gallery = Gallery(data_dir,
                       top_k=int(cfg["faceid"].get("match_top_k", 3)),
@@ -104,11 +115,22 @@ def main():
                  queue_cleanup["removed"], queue_cleanup["remaining"])
     frigate_cfg = cfg["frigate"]
     frigate = FrigateAPI(
-        frigate_cfg["url"],
+        str(frigate_cfg.get("url") or ""),
         username=str(frigate_cfg.get("username") or ""),
         password=str(frigate_cfg.get("password") or ""),
         verify_tls=bool(frigate_cfg.get("verify_tls", True)),
     )
+    frigate.live_frames.observation_linger = max(0.0, min(3600.0, float(
+        cfg["faceid"].get("stream_warm_seconds", 0))))
+    from . import live_frames
+    live_frames.DECODE_THREADS = max(1, min(4, int(cfg["faceid"].get("stream_decode_threads", 2))))
+    live_frames.GPU_DECODE = bool(cfg["faceid"].get("stream_gpu_decode", True))
+    live_frames.DECODE_WIDTH = max(0, min(4096, int(cfg["faceid"].get("stream_decode_width", 0))))
+    log.info("Stream readers: warm hold %.0f s after an event, %s decode%s, %d CPU decoder threads",
+             frigate.live_frames.observation_linger,
+             "GPU (VAAPI) when available" if live_frames.GPU_DECODE else "CPU",
+             f" at {live_frames.DECODE_WIDTH} px" if live_frames.GPU_DECODE and live_frames.DECODE_WIDTH else "",
+             live_frames.DECODE_THREADS)
     media_store = EventMediaStore(
         data_dir, frigate,
         max_clip_bytes=int(cfg["faceid"].get("media_max_clip_mb") or 150) * 1_000_000,
@@ -178,10 +200,21 @@ def main():
         dispatcher=dispatcher, ai_context=ai_context, media_store=media_store,
         frame_distributor=frame_distributor, body_recognition=body_recognition,
     )
+    # A lone person event may bind the one face inside Frigate's live person box.
+    processor.box_association = bool(cfg["faceid"].get("frigate_box_association", True))
+    # Per-sample audit rows and review images are written by a background writer.
+    processor.audit_async = True
     processor.frigate_sync = FrigateGallerySync(data_dir, gallery, engine, frigate)
     processor.camera_profiles = CameraProfiles(
         data_dir / "camera_profiles.json", default_min_face_px=processor.min_face_px
     )
+    live_frames.CAMERA_DECODE = processor.camera_profiles.decode_map()
+    from .face_search import recognition_active
+    processor.setup_missing = setup_missing
+    processor.setup_walk_test = setup_wizard.WalkTest()
+    processor.setup_geometry = setup_wizard.GeometryMonitor(
+        data_dir, setup_state, frigate, processor.camera_profiles,
+        enabled=processor.camera_enabled, busy=lambda: recognition_active(processor))
     processor.alerts = AlertStore(audit, gallery, processor)
     processor.visits = VisitService(
         audit, processor.camera_profiles,
@@ -220,14 +253,26 @@ def main():
     from .access1 import Access1Integration
     processor.access1 = None
     def start_connector():
+        if OPENVINO_TEST_BUILD:
+            log.warning("OPENVINO TEST BUILD: Access1 connector is disabled")
+            return
         try:
             processor.access1 = Access1Integration(data_dir, audit, gallery=gallery,
                 processor=processor, options=f.get('access1_connector') or {})
             processor.access1.start()
         except Exception:
             log.error('Optional Access1 module unavailable; recognition continues unchanged')
-    if not start_operational_services(processor,start_connector):
+    if setup_missing:
+        processor.diagnostic_only = DIAGNOSTIC_ONLY
+        log.warning("SETUP MODE: %s not configured - recognition and Access1 are not started. "
+                    "Open FaceID from the Home Assistant sidebar to finish setup.",
+                    " and ".join(name.upper() if name == "mqtt" else name.capitalize() for name in setup_missing))
+    elif not start_operational_services(processor,start_connector):
         log.warning('DIAGNOSTIC-ONLY BUILD: automatic recognition and Access1 connector are NOT started; saved settings unchanged')
+    if "frigate" not in setup_missing:
+        processor.setup_geometry.start()
+    log.info("effective configuration: %s", json.dumps(
+        setup_wizard.effective_config(cfg, processor, engine, gallery), sort_keys=True, default=str))
     start_auto_backup(cfg["faceid"], data_dir)
     app = build_app(cfg, engine, gallery, processor, data_dir, BASE / "static")
     uvicorn.run(app, host="0.0.0.0", port=int(cfg["faceid"].get("port", 8600)), log_level="warning")

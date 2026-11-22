@@ -1,10 +1,10 @@
 """Offline admission-contract tests; no camera/network/relay is contacted."""
-from concurrent.futures import Future
 import json
 from pathlib import Path
 import tempfile
 import time
 import unittest
+from concurrent.futures import Future, ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -16,6 +16,14 @@ from app.liveness import LivenessDetector
 from app.access1 import Access1Integration
 from app.live_frames import LiveFrameReader, LiveFramePool
 from test_access1 import Audit, Gallery
+
+
+class ImmediateExecutor:
+    def submit(self,fn,*args):
+        future=Future()
+        try:future.set_result(fn(*args))
+        except Exception as error:future.set_exception(error)
+        return future
 
 
 class StreamTests(unittest.TestCase):
@@ -44,17 +52,11 @@ class StreamTests(unittest.TestCase):
         self.integration.transport.call.return_value={'status':'relay_activated','reason':'output_on','execution_confirmed':True}
         self.p.access1=self.integration
         self.m=self.p.stream_observations
-        # Drive the bounded anchor worker deterministically between synthetic frames.
-        self.addCleanup(self.m.anchor_executor.shutdown, wait=True)
-        def submit_anchor(fn, session):
-            result = Future()
-            try:
-                result.set_result(fn(session))
-            except Exception as exc:
-                result.set_exception(exc)
-            return result
-        self.m.anchor_executor.submit = submit_anchor
         self.m._quality=lambda *args:SimpleNamespace(usable=True,score=.9,to_dict=lambda:{'score':.9,'sharpness':100})
+        quality=patch('app.subject_association.measure_face_quality',side_effect=lambda *a,**k:self.m._quality(*a))
+        quality.start();self.addCleanup(quality.stop)
+        self.m.anchor_executor.shutdown(wait=True)
+        self.m.anchor_executor=ImmediateExecutor()
         self.addCleanup(self.m.executor.shutdown,wait=True)
 
     def face(self,n,bbox=None,other=False):
@@ -69,7 +71,7 @@ class StreamTests(unittest.TestCase):
     def frame(self,n,faces=None):
         self.faces=faces if faces is not None else [self.face(n)]
         self.reader.record={'sequence':n,'generation':self.reader.generation,'arrived':time.monotonic(),
-                            'pts_ms':1000+n*250,'image':np.full((100,1200,3),n,np.uint8)}
+                            'pts_ms':1000+n*250,'image':np.full((100,100,3),n,np.uint8)}
         self.m._step('front')
 
     def confirmed(self):
@@ -99,6 +101,120 @@ class StreamTests(unittest.TestCase):
         for n in (1,2,3):self.frame(n,[self.face(n),self.face(n,[120,0,200,80],True)])
         self.assertTrue(s['st']['done'])
 
+    def test_blocked_second_anchor_does_not_stall_ready_subject(self):
+        s=self.trigger('ready');self.frame(1)
+        blocked=Future()
+        self.m.anchor_executor=SimpleNamespace(submit=lambda *args:blocked)
+        other=self.trigger('blocked')
+        self.frame(2);self.frame(3)
+        self.assertTrue(s['st']['done'])
+        self.assertIsNone(other['anchor'])
+        self.assertEqual(other['anchor_attempts'],1)
+        self.assertEqual(other['st']['stream_samples'],0)
+        self.assertEqual(self.integration._queue.qsize(),1)
+
+    def test_anchor_fetch_capacity_and_cancelled_result(self):
+        futures=[]
+        def submit(*args):
+            future=Future();future.set_running_or_notify_cancel();futures.append(future)
+            return future
+        self.m.anchor_executor=SimpleNamespace(submit=submit)
+        a=self.trigger('a');self.trigger('b');self.trigger('c');self.frame(1)
+        self.assertEqual(len(futures),2)
+        deadline=a['deadline'];self.m.finish(a,'event_ended')
+        self.frame(2)
+        self.assertEqual(len(futures),2) # Retiring fetch still consumes capacity.
+        futures[0].set_result(np.zeros((100,100,3),np.uint8))
+        self.frame(3)
+        self.assertEqual(len(futures),3)
+        self.assertEqual(a['deadline'],deadline)
+        self.assertIsNone(a['anchor'])
+        self.assertTrue(self.integration._queue.empty())
+
+    def test_two_clear_subjects_have_independent_histories(self):
+        self.frigate.association_frame.side_effect=lambda eid,camera:np.full((100,100,3),0 if eid=='a' else 99,np.uint8)
+        self.engine.detect_faces=lambda image:([self.face(0)] if image[0,0,0]==0 else
+            [self.face(0,other=True)] if image[0,0,0]==99 else self.faces)
+        self.gallery.match_candidates.side_effect=lambda vector,**kwargs:([('alice','Alice',.9),('other','Other',.1)]
+            if vector[0]>vector[1] else [('other','Other',.9),('alice','Alice',.1)])
+        a=self.trigger('a');b=self.trigger('b')
+        for n in (1,2,3):self.frame(n,[self.face(n),self.face(n,[120,0,200,80],True)])
+        self.assertTrue(a['st']['done']);self.assertTrue(b['st']['done'])
+        self.assertEqual(a['st']['stream_samples'],3);self.assertEqual(b['st']['stream_samples'],3)
+        self.assertNotEqual(a['track'],b['track'])
+        self.assertNotEqual(a['st']['best_person'],b['st']['best_person'])
+
+    def test_duplicate_admission_precedes_detection(self):
+        calls=[]
+        def detect(reader,*,admit):
+            record=dict(reader.frame_record());record['processing_age_ms']=0
+            if not admit(record):record['processing_rejected']='duplicate_frame';return record,[]
+            calls.append(record['sequence']);return record,self.faces
+        self.engine.detect_frame_record=detect
+        s=self.trigger();self.frame(1);self.frame(1)
+        self.assertEqual(calls,[1]);self.assertEqual(s['st']['stream_samples'],1)
+
+    def test_compute_time_does_not_reclassify_fresh_arrival(self):
+        def detect(reader,*,admit):
+            record=dict(reader.frame_record());record['processing_age_ms']=20
+            self.assertTrue(admit(record))
+            # Simulate a 1.5s detector call; evidence still has its original lifetime.
+            record['arrived']-=1.5
+            return record,self.faces
+        self.engine.detect_frame_record=detect
+        s=self.trigger()
+        # The event began before the (back-dated) frame arrived: still valid evidence.
+        s['started']-=2;s['wall_started']-=2
+        self.frame(1)
+        self.assertEqual(s['st']['stream_samples'],1)
+        self.assertLess(s['st']['stream_deadline']-time.monotonic(),9)
+
+    def test_preview_encodes_only_on_demand_and_failure(self):
+        s=self.trigger();self.frame(1)
+        initial=self.m.counters['preview_encodes']
+        self.assertEqual(initial,1) # One anchor; no per-frame previews.
+        self.frame(2)
+        self.assertEqual(self.m.counters['preview_encodes'],initial)
+        self.m.request_preview(s['eid']);self.frame(3)
+        self.assertEqual(self.m.counters['preview_encodes'],initial+2)
+        self.m.retain_preview(s,self.reader.record['image'],'live')
+        self.assertEqual(self.m.counters['preview_encodes'],initial+2)
+        self.m.preview_until=time.monotonic()-1
+        self.m.retain_preview(s,self.reader.record['image'],'associated',self.face(1).bbox)
+        self.assertEqual(self.m.counters['preview_encodes'],initial+2)
+
+    def test_preview_error_never_changes_access_evidence(self):
+        s=self.trigger();self.m.request_preview(s['eid'])
+        with patch('app.stream_observation.cv2.imencode',side_effect=RuntimeError('codec')):
+            for n in (1,2,3):self.frame(n)
+        self.assertTrue(s['st']['done']);self.assertEqual(s['st']['stream_samples'],3)
+
+    def test_cancel_during_detection_does_not_retain_raw_input(self):
+        s=self.trigger()
+        def detect(reader,*,admit):
+            record=dict(reader.frame_record());record['processing_age_ms']=0
+            self.assertTrue(admit(record))
+            self.m.finish(s,'event_ended')
+            return record,self.faces
+        self.engine.detect_frame_record=detect
+        self.frame(1)
+        self.assertNotIn('front',self.m.last_images)
+        self.assertNotIn('front',self.m.trackers)
+        self.assertTrue(self.integration._queue.empty())
+
+    def test_cancel_before_reader_admission_does_not_leak_lease(self):
+        def url(camera):
+            self.m.cancel_all('camera_disabled')
+            return 'rtsp://frigate:8554/front'
+        self.frigate._live_url=url
+        self.assertIsNone(self.trigger())
+        self.frigate.live_frames.acquire_observation.assert_not_called()
+
+    def test_cancelled_session_does_not_schedule_anchor(self):
+        s=self.trigger();self.m.finish(s,'event_ended')
+        self.assertFalse(self.m._anchor(s))
+        self.frigate.association_frame.assert_not_called()
+
     def test_face_detector_order_cannot_change_event_subject(self):
         s=self.trigger()
         for n in (1,2,3):
@@ -123,11 +239,93 @@ class StreamTests(unittest.TestCase):
         s=self.trigger();self.frame(1,[self.face(i) for i in range(5)])
         self.assertEqual(s['reason'],'overcrowded_frame')
 
-    def test_ambiguous_anchor_fails_after_two_attempts(self):
-        s=self.trigger();self.engine.detect_faces=lambda _: [self.face(0),self.face(1)]
-        for n in range(1,4):self.frame(n)
-        self.assertNotIn('event-1',self.m.sessions)
+    def pending_anchor(self):
+        future = Future()
+        self.m.anchor_executor = SimpleNamespace(submit=lambda *args: future)
+        session = self.trigger()
+        self.frame(1)
+        self.assertIsNotNone(session.get('early_candidate'))
+        self.p.liveness.analyze.assert_not_called()
+        self.assertTrue(self.integration._queue.empty())
+        return session, future
+
+    def test_latest_early_face_consumed_once_after_anchor(self):
+        session, future = self.pending_anchor()
+        self.frame(2)
+        self.assertEqual(session['early_candidate'][0]['sequence'], 2)
+        future.set_result((self.face(0).normed_embedding, 'association_anchor_ready', True))
+        self.m._step('front')
+        self.m._step('front')  # Same sequence is still the reader's latest.
+        self.assertEqual(session['st']['stream_samples'], 1)
+        self.assertTrue(self.integration._queue.empty())
+        self.frame(3)
+        self.frame(4)
+        self.assertEqual(session['st']['stream_samples'], 3)
+        self.assertEqual(self.integration._queue.qsize(), 1)
+        self.integration.transport.call.assert_not_called()
+
+    def test_early_face_expires_before_matching(self):
+        session, future = self.pending_anchor()
+        session['early_candidate'][0]['arrived'] -= 2
+        future.set_result((self.face(0).normed_embedding, 'association_anchor_ready', True))
+        self.m._step('front')
+        self.assertEqual(session['st']['stream_samples'], 0)
+        self.p.liveness.analyze.assert_not_called()
+
+    def test_generation_change_discards_early_face(self):
+        session, future = self.pending_anchor()
+        self.reader.generation += 1
+        self.reader.record = None
+        future.set_result((self.face(0).normed_embedding, 'association_anchor_ready', True))
+        self.m._step('front')
+        self.assertNotIn('early_candidate', session)
+        self.p.liveness.analyze.assert_not_called()
+
+    def test_second_event_or_second_face_drops_provisional_detection(self):
+        session, future = self.pending_anchor()
+        self.frame(2, [self.face(2), self.face(2, [120,0,200,80], True)])
+        self.assertNotIn('early_candidate', session)
+        self.frame(3)
+        other = self.trigger('other')
+        self.m.finish(other, 'event_ended')
+        self.assertNotIn('early_candidate', session)
+        future.set_result((self.face(0).normed_embedding, 'association_anchor_ready', True))
+        self.m._step('front')
+        self.p.liveness.analyze.assert_not_called()
+        self.assertTrue(self.integration._queue.empty())
+
+    def test_mismatched_early_face_cannot_start_history(self):
+        session, future = self.pending_anchor()
+        future.set_result((self.face(0, other=True).normed_embedding, 'association_anchor_ready', True))
+        self.m._step('front')
+        self.assertEqual(session['st']['stream_samples'], 0)
+        self.p.liveness.analyze.assert_not_called()
+
+    def test_delayed_anchor_retries_once_without_extending_deadline(self):
+        self.frigate.association_frame.side_effect = [None, np.zeros((100,100,3),np.uint8)]
+        session = self.trigger()
+        deadline = session['deadline']
+        self.frame(1)
+        self.frame(2)
+        self.assertEqual(self.frigate.association_frame.call_count,1)
+        self.assertEqual(session['st']['stream_samples'],0)
+        session['anchor_retry_at'] = time.monotonic() - 1
+        for n in (3,4,5):self.frame(n)
         self.assertEqual(self.frigate.association_frame.call_count,2)
+        self.assertEqual(session['deadline'],deadline)
+        self.assertEqual(session['st']['stream_samples'],3)
+        self.assertEqual(self.integration._queue.qsize(),1)
+        self.integration.transport.call.assert_not_called()
+
+    def test_ambiguous_anchor_is_retried_then_fails(self):
+        # A crop without exactly one usable face is refetched (Frigate's crop
+        # improves as the person approaches), then the event gives up.
+        import app.stream_observation as observation
+        s=self.trigger();self.engine.detect_faces=lambda _: [self.face(0),self.face(1)]
+        with patch.object(observation,'ANCHOR_REFRESH_INTERVAL',0):
+            for n in range(1,observation.ANCHOR_FACE_RETRIES+3):self.frame(n)
+        self.assertNotIn('event-1',self.m.sessions)
+        self.assertEqual(self.frigate.association_frame.call_count,observation.ANCHOR_FACE_RETRIES)
         self.assertTrue(self.integration._queue.empty())
 
     def test_reconnect_clears_evidence_and_keeps_deadline(self):
@@ -253,9 +451,8 @@ class StreamTests(unittest.TestCase):
     def test_preview_private_and_excluded_from_report(self):
         s=self.trigger();self.frame(1)
         self.assertIsInstance(self.m.preview(s['eid'],'anchor'),bytes)
-        report = json.dumps(self.m.report())
-        self.assertNotIn('"image":', report)
-        self.assertNotIn('data:image/', report)
+        self.assertNotIn('"image":',json.dumps(self.m.report()))
+        self.assertNotIn('"embedding":',json.dumps(self.m.report()))
         self.m.previews[s['eid']]['updated']-=181
         self.assertIsNone(self.m.preview(s['eid'],'anchor'))
 

@@ -151,8 +151,81 @@ describe("stream observation settings", () => {
 });
 
 
+describe("live preview double buffering", () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+  const stubBrowser = (responses) => {
+    let blobs = 0;
+    const revoked = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      const next = responses.length > 1 ? responses.shift() : responses[0];
+      return next ? { ok: true, blob: async () => ({}) } : { ok: false, status: 503 };
+    }));
+    vi.stubGlobal("URL", { createObjectURL: () => `blob:${++blobs}`, revokeObjectURL: url => revoked.push(url) });
+    vi.stubGlobal("Image", class { set src(value) { this.value = value; queueMicrotask(() => this.onload?.()); } get src() { return this.value; } });
+    return revoked;
+  };
+  const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  it("shows each frame from memory, keeps it through a failed frame and frees replaced frames", async () => {
+    vi.useFakeTimers();
+    const revoked = stubBrowser([true, false, true]);
+    await act(() => { renderer = create(<LiveFrame camera="door" controls />); });
+    await settle();
+    expect(renderer.root.findByType("img").props.src).toBe("blob:1");
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    await settle();
+    expect(renderer.root.findByType("img").props.src).toBe("blob:1");
+    expect(text(renderer.toJSON())).not.toContain("אין תמונה זמינה");
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    await settle();
+    expect(renderer.root.findByType("img").props.src).toBe("blob:2");
+    expect(revoked).toContain("blob:1");
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+  it("reports an outage only after repeated failures without a recent frame", async () => {
+    vi.useFakeTimers();
+    stubBrowser([false]);
+    await act(() => { renderer = create(<LiveFrame camera="door" controls />); });
+    for (let index = 0; index < 3; index += 1) {
+      await settle();
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+    }
+    expect(text(renderer.toJSON())).toContain("אין תמונה זמינה");
+  });
+});
+
+
 describe("live size calibration", () => {
   afterEach(() => vi.useRealTimers());
+  it("never overlays measurements when their exact preview is missing", async () => {
+    api.mockResolvedValue({width:320,height:240,faces:[{box:[1,2,10,20],face_px:18,usable:true}],min_face_px:48});
+    await act(() => { renderer=create(<LiveFrame camera="door" controls />); });
+    await act(async () => renderer.root.findByType("button").props.onClick());
+    expect(renderer.root.findAll(node => typeof node.props.className === "string" && node.props.className.startsWith("face-box"))).toHaveLength(0);
+    expect(text(renderer.toJSON())).toContain("תמונת המדידה אינה זמינה");
+  });
+  it("pauses hidden measurement and resumes serially with the configured source label", async () => {
+    vi.useFakeTimers();vi.stubGlobal("document",{hidden:true});
+    api.mockResolvedValue({preview:"data:image/jpeg;base64,FRAME",width:720,height:1280,source:"direct_rtsp",faces:[],min_face_px:48});
+    try {
+      await act(() => { renderer=create(<LiveFrame camera="door" controls />); });
+      await act(() => renderer.root.findByType("button").props.onClick());
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      expect(api).not.toHaveBeenCalled();
+      document.hidden=false;
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+      expect(api).toHaveBeenCalledOnce();
+      expect(text(renderer.toJSON())).toContain("RTSP ישיר המוגדר לזיהוי");
+      expect(renderer.root.findByProps({className:"live-frame"}).props.style.aspectRatio).toBe("720 / 1280");
+    } finally {vi.unstubAllGlobals();}
+  });
+  it("recovers after a busy source without displaying stale boxes", async () => {
+    vi.useFakeTimers();api.mockRejectedValueOnce(new Error("recognition_busy")).mockResolvedValue({preview:"data:image/jpeg;base64,FRAME",width:640,height:480,faces:[],min_face_px:48});
+    await act(() => {renderer=create(<LiveFrame camera="door" controls />);});
+    await act(async () => renderer.root.findByType("button").props.onClick());
+    expect(text(renderer.toJSON())).toContain("recognition_busy");
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    expect(renderer.root.findByType("img").props.src).toBe("data:image/jpeg;base64,FRAME");
+  });
   it("serializes measurement and ignores a response after changing camera", async () => {
     vi.useFakeTimers();
     let finish;

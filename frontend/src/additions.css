@@ -81,3 +81,5 @@
 .recognition-alert-list { display: grid; gap: 12px; }
 .recognition-alert-list > button { display: grid; text-align: right; gap: 6px; }
 .history-reference-choices>div{display:grid;justify-items:center;align-content:start;gap:10px;padding:16px;border:1px solid var(--border-soft);border-radius:14px;background:var(--surface-2);max-width:240px}.history-reference-choices img{width:144px;height:144px;object-fit:cover}.history-reference-choices p{margin:0;text-align:center}.face-timeline>div>.button{margin-top:8px}
+/* 6.9.1 setup wizard: existing screens shown inside a wizard step */
+.setup-embedded{display:grid;gap:12px;border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:16px}

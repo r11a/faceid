@@ -9,6 +9,17 @@ ROLES = {"observation", "entry", "exit", "entry_exit", "restricted", "intercom"}
 MODES = {"standard", "intercom"}
 LIVENESS_MODES = {"off", "advisory", "required"}
 RECOGNITION_MODES = {"event", "presence", "continuous"}
+DECODE_KEYS = ("gpu_decode", "decode_width", "decode_step")
+
+
+def decode_override(stored):
+    """6.9.0 per-camera stream decode (gpu, width, step), or None for the global options."""
+    stored = stored if isinstance(stored, dict) else {}
+    gpu, width, step = (stored.get(key) for key in DECODE_KEYS)
+    if (type(gpu) is bool and type(width) is int and type(step) is int
+            and (width == 0 or 320 <= width <= 4096) and 1 <= step <= 10):
+        return gpu, width, step
+    return None
 
 
 def profile_capture_fields(profile):
@@ -100,6 +111,7 @@ class CameraProfiles:
                 "liveness_mode", "required" if mode == "intercom" else "advisory"
             ),
             "roi": stored.get("roi") if isinstance(stored.get("roi"), list) else [0.0, 0.0, 1.0, 1.0],
+            "decode": (dict(zip(DECODE_KEYS, decode)) if (decode := decode_override(stored)) else None),
         }
 
     def update(
@@ -192,6 +204,8 @@ class CameraProfiles:
                 "liveness_mode": liveness_mode,
                 "roi": roi,
             }
+            # Setup-owned stream decode survives a camera studio save.
+            profiles[camera].update({key: stored[key] for key in DECODE_KEYS if key in stored})
             temporary = self.path.with_suffix(".tmp")
             temporary.write_text(
                 json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -199,6 +213,12 @@ class CameraProfiles:
             temporary.chmod(0o600)
             temporary.replace(self.path)
         return self.get(camera)
+
+    def decode_map(self):
+        """Camera -> (gpu, width, step) for cameras with a valid per-camera decode."""
+        with self._lock:
+            return {name: decode for name, value in self._read().items()
+                    if (decode := decode_override(value)) is not None}
 
     def observation_config(self, camera):
         """Internal only: never return this credential-bearing record from an API."""

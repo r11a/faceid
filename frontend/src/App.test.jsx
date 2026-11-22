@@ -3,11 +3,11 @@ import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.jsx";
 
-const controls = vi.hoisted(() => ({ role: "admin", crashHealth: false }));
+const controls = vi.hoisted(() => ({ role: "admin", crashHealth: false, setupState: "migrated" }));
 vi.mock("./api.js", () => ({ api: vi.fn() }));
 vi.mock("./hooks.js", () => ({ useResource: path => ({
   loading: false, error: null,
-  data: path === "health" ? { status: "ok", queue: 7 } : { name: "Operator", role: controls.role },
+  data: path === "health" ? { status: "ok", queue: 7, setup: { state: controls.setupState } } : { name: "Operator", role: controls.role },
 }) }));
 vi.mock("./AlertCenter.jsx", () => ({ AlertCenter: "mock-alert-center" }));
 vi.mock("./ui.jsx", () => ({ ToastProvider: ({ children }) => children, Badge: ({ children }) => children }));
@@ -23,6 +23,7 @@ vi.mock("./pages/Management.jsx", async () => {
     return createElement("mock-health");
   } };
 });
+vi.mock("./pages/Setup.jsx", () => ({ SetupPage: "mock-setup" }));
 vi.mock("./pages/Advanced.jsx", () => ({ AdvancedPage: "mock-advanced", CalibrationPage: "mock-calibration", LearningPage: "mock-learning", SettingsPage: "mock-settings" }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -40,7 +41,7 @@ const mount = async () => {
 const expectPage = id => expect(renderer.root.findAllByType(`mock-${id}`)).toHaveLength(1);
 
 beforeEach(() => {
-  controls.role = "admin"; controls.crashHealth = false;
+  controls.role = "admin"; controls.crashHealth = false; controls.setupState = "migrated";
   listeners = new Map(); inputFocus = vi.fn(); previousFocus = vi.fn();
   const location = { hash: "#/home", reload: vi.fn() };
   vi.stubGlobal("location", location);
@@ -65,7 +66,7 @@ describe("workspace navigation", () => {
     await mount(); await click(namedButton(nav("workspace-primary-nav"), "ניהול"));
     expect(location.hash).toBe("/management");
     const directory = nav("workspace-directory-items");
-    expect(directory.findAllByType("button")).toHaveLength(8);
+    expect(directory.findAllByType("button")).toHaveLength(9);
     expect(directory.findAllByProps({ className: "workspace-category-icon tone-orange" }).length).toBeGreaterThan(0);
     await click(namedButton(directory, "בקרת כניסה")); expectPage("access1");
   });
@@ -76,7 +77,7 @@ describe("workspace navigation", () => {
       ["פעילות", [["home", "מבט כללי"], ["review", "דורש טיפול"], ["events", "אירועים ותחקור"]]],
       ["אנשים", [["people", "אנשים"], ["faces", "גלריה וחיפוש"]]],
       ["מצלמות", [["live", "מצלמות"], ["intercom", "כניסה ואינטרקום"]]],
-      ["ניהול", [["health", "תקינות המערכת"], ["access1", "בקרת כניסה"], ["guests", "אורחים"], ["automations", "אוטומציות"], ["settings", "הגדרות"]]],
+      ["ניהול", [["setup", "אשף הגדרה"], ["health", "תקינות המערכת"], ["access1", "בקרת כניסה"], ["guests", "אורחים"], ["automations", "אוטומציות"], ["settings", "הגדרות"]]],
     ];
     for (const [workspace, screens] of groups) {
       await click(namedButton(nav("workspace-primary-nav"), workspace));
@@ -156,7 +157,7 @@ describe("screen search and theme", () => {
 
   it("searches every screen including experts and opens a matching result with Enter", async () => {
     await mount(); await click(renderer.root.findByProps({ className: "workspace-search-toggle" }));
-    expect(nav("workspace-search-results").findAllByType("button")).toHaveLength(17);
+    expect(nav("workspace-search-results").findAllByType("button")).toHaveLength(18);
     const input = renderer.root.findByType("input");
     await act(() => input.props.onChange({ target: { value: "Access1" } }));
     expect(nav("workspace-search-results").findAllByType("button")).toHaveLength(1);
@@ -188,5 +189,22 @@ describe("screen search and theme", () => {
     await click(renderer.root.findByProps({ "aria-label": "מעבר למצב בהיר" }));
     expect(document.documentElement.dataset.theme).toBe("light");
     await click(namedButton(nav("workspace-primary-nav"), "אנשים")); expectPage("people");
+  });
+});
+
+describe("setup wizard entry", () => {
+  it("opens the wizard on a blank installation", async () => {
+    controls.setupState = "fresh";
+    await mount();
+    expectPage("setup");
+    expect(location.hash).toBe("/setup");
+  });
+
+  it("keeps the dashboard after an upgrade and offers setup under management", async () => {
+    await mount();
+    expectPage("home");
+    location.hash = "#/management";
+    await dispatch("hashchange");
+    expect(text(renderer.root)).toContain("אשף הגדרה");
   });
 });

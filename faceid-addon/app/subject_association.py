@@ -50,6 +50,28 @@ def usable_faces(image, faces, profile, *, min_face_px, min_quality,
     return result
 
 
+# A usable anchor below these limits is still used, but it is replaced by a
+# better Frigate crop when one arrives (blur or a head turned down to a phone
+# makes every later stream face look like a different person).
+ANCHOR_MIN_SHARPNESS = 0.25
+ANCHOR_MIN_FRONTAL = 0.55
+# The entrance camera looks down: frontal walk-ups measure about 0.08-0.25 there.
+ANCHOR_PITCH_LIMITS = (-0.19, 0.26)
+
+
+def anchor_grade(details):
+    """Return (strong, rank) for anchor diagnostics from single_anchor()."""
+    sharpness = float(details.get('anchor_sharpness') or 0.0)
+    frontal = float(details.get('anchor_frontal') or 0.0)
+    pitch = details.get('anchor_pitch')
+    low, high = ANCHOR_PITCH_LIMITS
+    pitch_excess = 0.0 if pitch is None else max(0.0, low - pitch, pitch - high)
+    strong = (sharpness >= ANCHOR_MIN_SHARPNESS and frontal >= ANCHOR_MIN_FRONTAL
+              and pitch is not None and pitch_excess == 0.0)
+    rank = float(details.get('anchor_quality') or 0.0) - pitch_excess
+    return strong, rank
+
+
 def single_anchor(engine, image, profile, *, min_face_px, min_quality, diagnostics=None):
     """Extract exactly one usable subject; crop-local coordinates have no ROI."""
     found = (engine.detect_faces(image) if hasattr(engine, 'detect_faces')
@@ -59,7 +81,12 @@ def single_anchor(engine, image, profile, *, min_face_px, min_quality, diagnosti
     if len(usable) != 1:
         _diagnostics(diagnostics, reason='anchor_face_ambiguous_or_low_quality')
         return None, 'anchor_face_ambiguous_or_low_quality'
-    face = usable[0][0]
+    face, quality = usable[0]
+    _diagnostics(diagnostics, **{'anchor_' + name: getattr(quality, attribute)
+                                 for name, attribute in (('face_px', 'face_px'), ('sharpness', 'sharpness'),
+                                                         ('frontal', 'frontal'), ('quality', 'score'),
+                                                         ('pitch', 'pitch'))
+                                 if getattr(quality, attribute, None) is not None})
     if hasattr(engine, 'embed_face'):
         engine.embed_face(image, face)
     observation = FaceTracker._observation(face)

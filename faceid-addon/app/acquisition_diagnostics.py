@@ -66,10 +66,11 @@ def probe_source(url, seconds=12):
 
 
 class AcquisitionDiagnostics:
-    def __init__(self, probe=probe_source, decode=None, compare=None, preview=None, clear_preview=None):
+    def __init__(self, probe=probe_source, decode=None, compare=None, preview=None, clear_preview=None, timestamp=None):
         self.probe = probe
         self.decode = decode
         self.compare=compare;self.preview=preview;self.clear_preview=clear_preview
+        self.timestamp = timestamp
         self.lock = threading.Lock()
         self.state = {'running': False, 'results': []}
         self.owner = None
@@ -87,13 +88,20 @@ class AcquisitionDiagnostics:
         threading.Thread(target=self._run, args=(sources,), daemon=True,
                          name='acquisition-diagnostic').start()
 
+    def set_phase(self, phase):
+        with self.lock:
+            self.state['current'] = phase
+
     def _run(self, sources):
         try:
             for source, url in sources:
                 with self.lock:
                     self.state['current'] = source
                 try:
-                    if source == 'decode_chain':
+                    if source == 'timestamp_comparison':
+                        result = (self.timestamp(self.state.get('camera'), url, self.owner, self.set_phase)
+                                  if self.timestamp and url else {'error':'restream_not_configured'})
+                    elif source == 'decode_chain':
                         result = self.decode(self.state.get('camera'),url) if self.decode and url else {'error':'decode_unavailable'}
                     elif source in ('preview','crop_compare'):
                         callback=self.preview if source=='preview' else self.compare
@@ -122,11 +130,14 @@ class AcquisitionDiagnostics:
 def register_acquisition_routes(app, processor, static_dir):
     from .decode_diagnostics import run_decode, run_preview, blockers
     from .crop_diagnostics import PreviewCache,validate_region
+    from .timestamp_diagnostics import run_timestamp_test
     previews=PreviewCache()
     diagnostic = AcquisitionDiagnostics(decode=lambda camera,url:run_decode(processor,camera,url),
         preview=lambda camera,url,region,owner:run_preview(processor,camera,url,region,lambda images:previews.put(owner,images)),
         compare=lambda camera,url,region,owner:run_decode(processor,camera,url,region=region,
-            preview=lambda images:previews.put(owner,images),benchmarks=True),clear_preview=previews.clear)
+            preview=lambda images:previews.put(owner,images),benchmarks=True),clear_preview=previews.clear,
+        timestamp=lambda camera,url,owner,phase:run_timestamp_test(processor,camera,url,
+            lambda images:previews.put(owner,images),probe_source,phase))
     discovery = {'until': 0.0, 'names': []}
 
     def cameras():
@@ -278,7 +289,7 @@ def register_acquisition_routes(app, processor, static_dir):
             if not isinstance(body, dict) or set(body) - {'camera', 'source', 'direct_url','region'}:
                 raise ValueError()
             camera, source = body.get('camera'), body.get('source')
-            if camera not in await asyncio.to_thread(cameras) or source not in ('restream', 'restream_clock', 'direct', 'both', 'decode_chain','preview','crop_compare'):
+            if camera not in await asyncio.to_thread(cameras) or source not in ('restream', 'restream_clock', 'direct', 'both', 'decode_chain','preview','crop_compare','timestamp_comparison'):
                 raise ValueError()
             region=validate_region(body.get('region',[.25,.1,.75,.9])) if source in ('preview','crop_compare') else None
             if 'region' in body and region is None:raise ValueError()
@@ -286,6 +297,12 @@ def register_acquisition_routes(app, processor, static_dir):
         except (ValueError, TypeError):
             raise HTTPException(400, 'Choose a configured camera and valid private-LAN RTSP URL') from None
         sources = []
+        if source == 'timestamp_comparison':
+            reasons = blockers(processor, camera)
+            if reasons:
+                raise HTTPException(409, 'Timestamp comparison blocked: '+', '.join(reasons))
+            url = await asyncio.to_thread(processor.frigate._live_url, camera)
+            sources.append((source, url))
         if source in ('decode_chain','preview','crop_compare'):
             reasons = blockers(processor,camera)
             if reasons:

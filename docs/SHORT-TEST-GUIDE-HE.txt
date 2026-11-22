@@ -1,0 +1,31 @@
+FaceID 6.7.4 — operational rig test
+
+1. Back up the existing add-on and its data. Install/rebuild from source/faceid-addon,
+   retaining the same local slug and /data. Check that HA and the diagnostic page
+   both show 6.7.4. Existing mappings and settings carry over.
+2. Open Acquisition diagnostic → Record full recognition test. Choose Enterance
+   and Frigate restream. Click Start recording before approaching the camera.
+3. Make one normal approach alone. Let Frigate create a new person event. Observe
+   the test output. If no reaction, wait for the event to end. Stop recording and
+   download the full capture. Record whether Access1 shows a confirmed relay
+   result and whether the physical output changed. If it fails, include the event
+   ID and matching logs. This flow exercises the normal Access1 connector.
+4. Do the optional timestamp comparison separately if confirmation still drops.
+   Select Enterance and Timestamp comparison, click Run diagnostic once, stay out
+   of view during Baseline, then step in at Recognition. A stopwatch is optional.
+   When the references finish, download the redacted report. RTP runs on a second
+   connection during the recognition phase. FFprobe runs separately afterward.
+
+Normal recognition and Access1 remain active on this build, including while the
+diagnostic page is open. The manual timestamp trial has no access submission of its
+own. It adds temporary decode and probe work, so measure normal output latency
+using the passive full capture. Native timestamps and RTP do not prove sensor age.
+
+Timestamp fix: use the FFmpeg media position rather than rounding to nominal FPS
+units. The original frame age, 750 ms relative backlog, and three-sample minimum
+still apply. Real backlog can still interrupt live confirmation. Previous
+production 6.7.2 is the rollback package if needed; retain /data and rebuild.
+
+עברית: התקינו את 6.7.4 תוך שמירה על /data. הפעילו הקלטת זיהוי מלאה לפני
+הגעה למצלמת Enterance. בדקו אם Access1 דיווח על הפעלת ממסר ואם היציאה פעלה בפועל.
+עצרו את ההקלטה והורידו את הדוח. אבחון חותמות הזמן זמין כבדיקה נפרדת.

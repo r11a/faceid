@@ -1,3 +1,178 @@
+## 6.9.5 — 2026-11-22
+- Integrate native OpenVINO inference, VAAPI decoding, anchor refresh, setup wizard and site settings transfer from the 6.9.4 handoff.
+- Reject gradual video backlog even when decoder reads block. Stream clock drift can trigger a reconnect instead of accepting increasingly old frames.
+- Bound pending audit writes to 200 and drain older writes before final evidence, including after the warning timeout.
+- Upgrade through the existing Home Assistant add-on repository. Installed options and persistent data are retained.
+- Hardware acceleration and connected-door behavior require validation on the target installation.
+
+# 6.9.4 Claude test build
+
+Same as 6.9.3 with one change reverted at the user's request:
+
+- FaceID Settings page: back to the 6.9.2 layout, with one "שמירת כל השינויים" (Save all changes) button in the page header. The per-section "שמירת הסעיף" buttons from 6.9.3 are removed.
+- Everything else in 6.9.3 is kept: step 3 flash fix, walk-test banner, site file export/import, grouped Home Assistant options page, no rig default for the Frigate address. Recognition, association, liveness, thresholds and Access1 requests are unchanged.
+
+# 6.9.3 Claude test build
+
+Last planned wizard release. Recognition, association, liveness, thresholds and Access1 requests are unchanged.
+
+- Step 3 picture: with face measurement on, each measured picture is fully prepared before it replaces the visible one (plain pictures already were), and a failed measurement keeps the last picture instead of jumping back. This removes the flashing seen on the rig. The Cameras page uses the same picture and gets the same fix.
+- Step 3 now says: measurement only, the door still opens on a normal recognition; the walk test is in step 6.
+- While a walk test runs, every wizard step shows a banner: camera, time left, "the door will not open", and a Stop button.
+- Site file (step 6): export downloads one file with FaceID settings and each camera's profile and stream decode. It holds no passwords, no Frigate/MQTT connection, no RTSP addresses, no internal key and no people (the gallery has its own backup). Import shows what would change and applies only after confirmation, through the same safe apply and one-step undo as the rest of setup. Cameras that do not exist in Frigate are skipped and listed; a direct-RTSP camera keeps its current source if this site has no RTSP address for it. A new camera, or one whose picture source changed, needs its view approved in step 3. Importing the file on the site it came from changes nothing.
+- Home Assistant options page: options are grouped (Connection, Engine and stream, Recognition, Liveness, Access1, Backup and retention, Gallery and review, Clips, Site and tracking, Automations) in that order, with group names. A new installation shows only ten options; the rest stay accepted and keep any value already saved. Home Assistant draws this page and gives it a single Save button; per-section saving is on FaceID's own Settings page.
+- The Frigate address no longer defaults to the test rig: a new installation starts in setup mode and opens the wizard at Connect.
+- FaceID Settings page: each section (Defaults, Backup, expert thresholds) has its own Save button, enabled only when that section changed, and saves only its own fields. The single "save all" button is gone.
+
+# 6.9.2 Claude test build
+
+Setup screen fixes from the 6.9.1 rig test. Nothing else changed.
+
+- Check the view: the picture is the same live view as the Cameras page. It keeps retrying while the camera stream starts (6.9.1 showed a black frame when the first picture was not ready yet), refreshes continuously, and has "measure faces": each face's size against the camera's minimum, without any access request.
+- Enroll and Access1: the existing People and Access1 screens now open inside the wizard step, with Back/Next kept, instead of leaving the wizard. The wizard also remembers its step if you leave it.
+
+# 6.9.1 Claude test build
+
+Guided setup in FaceID, plus the camera fix from the 6.9.0 rig test. Recognition, association, liveness, thresholds and Access1 requests are unchanged.
+
+- Setup screen (Management → Setup), six steps: Connect, Choose cameras, Check the view, Enroll, Access1 (optional), Review and test. A blank installation opens it automatically; an upgrade keeps its dashboard. Enrollment and Access1 pairing use the existing screens.
+- Check the view: live picture, stream probe with a recommended decode (saved only when confirmed, or keep the general settings), manual values when the stream cannot be probed, and "picture is right: approve camera".
+- Walk test: for up to 2 minutes on a chosen camera, recognitions are shown with liveness and time to recognition, and no Access1 request is sent. The door does not open.
+- Review: connections, engine, gallery, each enabled camera's decode and box matching state, Access1 state; finish setup; undo the last setup change.
+- Cameras on upgrade (6.9.0 rig finding): every Frigate camera, on or off, is accepted at the first check after an upgrade, so a camera turned on later behaves exactly as before. An installation already on 6.9.0 accepts the cameras it skipped. Only cameras in use have their stream probed.
+- All cameras are watched: one read of Frigate's configuration every 10 minutes covers cameras that are off too, so a change made while a camera is off is caught before it is turned on. A camera added to Frigate after the upgrade needs its view approved before box matching.
+
+# 6.9.0 Claude test build
+
+Backend for the setup wizard (the guided screens follow in 6.9.1). On an upgrade nothing changes: the 6.8.7 settings stay where they are and are used exactly as before.
+
+- Setup state: `setup.json` records whether this is an upgraded or a blank installation, the setup schema version and each camera's validated geometry. An upgrade is recorded as `migrated` and keeps working as before; a blank installation is `fresh`.
+- Blank installation: without an MQTT broker (or Frigate address) FaceID now starts in setup mode instead of stopping, with the UI available through Home Assistant. Recognition and Access1 start once both connections are set.
+- Frigate discovery reads camera names, restreams, detect size and the MQTT topic prefix from Frigate's configuration. FaceID then probes the exact restream it decodes (local FFprobe, one at a time, 10 s limit) for codec, size and frame rate. Frigate's admin-only probe endpoint is not used. If Frigate cannot be read, setup offers manual values.
+- Recommendations, never silent changes: decode width (native, or 1920 px above that), frame step (about 8 fps) and GPU decode are recommended from the probed stream and saved per camera only when confirmed. A camera without its own values uses the add-on options (the 6.8.7 behaviour).
+- Geometry guard: each used camera's source, restream, detect size, stream size and a keyed digest of its inputs are compared with what was validated. If one changes, Frigate box association is paused for that camera (a stored-face match is still accepted), the log and `/api/health` say what changed, and it resumes after the view is checked again or the change is undone. An upgraded installation accepts the geometry it finds on its first check.
+- One copy of each setting: tuning stays in `settings.json`, camera settings in `camera_profiles.json`. A Frigate/MQTT connection entered in setup goes to `connection.json` (private, not part of the downloadable backup, never returned by the UI) and takes precedence over the add-on options.
+- Apply and rollback: setup changes to these files are written as one operation with a backup and a journal. An interrupted apply is undone at the next start; the last apply can be rolled back in one step.
+- Setup endpoints (`/api/setup/...`) require the verified Home Assistant administrator through the sidebar, like Access1 pairing.
+- Startup logs `effective configuration: {...}` (no secrets) for before/after comparison.
+- Recognition, thresholds, liveness, enrollment, Access1 requests and the 6.8.7 timings are unchanged.
+
+# 6.8.7 Claude test build
+
+Capture 30 (6.8.6): with the recognition thread held off, writing the Access1 attempt row still took 486 ms of the 530 ms before the POST; recognition to `ha_command_accepted` was 1.11 s. The row was committed with a full disk flush (synchronous=FULL).
+
+- The Access1 attempt row is written in its own immediate transaction with `synchronous=NORMAL` (WAL): atomic and kept across a FaceID crash or restart, without waiting for a disk flush. Only a power cut at that instant could lose the row; requests are never replayed. All other audit writes keep full sync.
+- The write is timed in two parts: `access1_attempt_lock` (waiting for the database write lock) and `access1_attempt_commit` (insert and commit); `access1_attempt_insert` stays the total.
+- Duplicate refusal, request content, checks, thresholds, association, liveness and enrollment unchanged.
+
+# 6.8.6 Claude test build
+
+Capture 29 (6.8.5): the drift fix holds (836 ms followed over 82 s, no rejections; a warm reader was ready 334 ms after the trigger). Access1 was queued 7-16 ms after recognition, but the POST started 101 ms and 376 ms after queueing, so recognition to `ha_command_accepted` stayed at 616-850 ms. Before the POST the connector writes its `access1_attempts` row to the same SQLite database (WAL, synchronous=FULL) that the recognition thread was writing the audit flush, evidence and observation to at that moment.
+
+- The recognition thread holds its post-recognition bookkeeping (audit flush, evidence image, notification, observation) until the Access1 POST has started, at most 0.5 s. The connector releases the hold right before the POST, or when the request ends without one (blocked, duplicate, failure).
+- The time before the POST is measured in parts: `access1_pre_insert` (evidence and identity checks), `access1_attempt_insert` (the database row) and `access1_pre_post` (all of it), in the capture and in the timing log.
+- The first Access1 result check runs 0.1 s after a pending POST, then 0.2 s, then every 0.3 s as before. This only makes `accepted` appear sooner in FaceID; the door does not wait on it.
+- Request content, checks, thresholds, association, liveness and enrollment unchanged.
+
+# 6.8.5 Claude test build
+
+Captures 27 and 28 (6.8.4 diagnostics): the warm reader's measured lag rose ~12.5 ms per second while every read waited one frame interval (~120 ms) and none returned at once. The decoder keeps up; the stream's timestamps run ~1.2% slow against the N100 clock. After ~60 s this drift crossed the 750 ms limit and fresh frames were rejected (`buffering_growth`), which would also force needless reconnects on a longer hold.
+
+- Stream freshness follows clock drift: while every read in the last 10 s blocked for its frame, the lag is measured against the earliest offset of that window instead of the whole connection. Any read that returns at once (frames were queued) keeps the strict baseline, so a real decoder backlog is still rejected at 750 ms. `drift_ms` (drift followed so far) is in the reader report and capture samples.
+- Access1 is queued as soon as recognition completes, before the audit flush, evidence image, notification and log line (these took ~0.13-0.17 s before the request). The request content and its checks are unchanged.
+- Thresholds, association, liveness and enrollment unchanged.
+
+# 6.8.4 Claude test build
+
+Diagnostics only; recognition, association, thresholds and Access1 behaviour are unchanged. Captures 24 (native width) and 25 (1920) both show the warm reader's lag behind the stream clock growing while idle until frames are rejected (`buffering_growth`) about 40 s after the last event, but the log could not show whether, why or how often the reader reopened, and capture CPU covered only the Python process.
+
+- Every stream reopen is logged: `Stream reader reopening: reason=... after N s, lag_ms=... read_wait_ms=... instant_reads=...% generation=... retry_in=...`, then `Stream reader reopened: first usable frame after N ms (generation N)`. Reasons: `catch_up_timeout`, `read_failed`, `stream_closed`, `open_failed`, `frame_too_large`, `decoder_error`.
+- `buffering_growth` rejections log the lag and read wait. Read wait shows the cause: reads returning at once (high `instant_reads`) while the lag grows mean a real decoder backlog; reads blocking about one frame interval (about 120 ms) mean the decoder keeps up and the stream clock itself drifts.
+- Recognition capture: each one-second resource sample has `container_cpu_percent_one_core` (whole add-on container, FFmpeg included) and `reader` (state, generation, reopens, lag, read wait, instant reads). Reader starts and reopens are run-level records (`reader_started`, `reader_reopen`, `reader_reopened`), also between events.
+
+# 6.8.3 Claude test build
+
+Review of capture 21 (6.8.2: recognized 2.75 s, Access1 `ha_command_accepted` 3.69 s, all three samples associated by Frigate's box): a face once bound by the box was accepted on later frames by its tracker ID without re-checking that the box was fresh, so `association_box` records did not prove a fresh check per sample. One person could replace another in the same spot.
+
+- Every sample associated by the box rule now needs its own fresh Frigate box (frame time within 2 s, face centre inside); a bound tracker ID no longer counts. Otherwise only an anchor match associates.
+- A frame that arrived before the event started (possible with a warm reader) is never evidence for that event (`stream_frame_rejected`, reason `frame_before_event`).
+- `association_box` records include `box_age_ms`.
+- Thresholds, enrollment and Access1 result polling unchanged.
+
+# 6.8.2 Claude test build
+
+Log on 6.8.1: every new GPU reader delivered one frame and stalled (`GPU stream stalled after 1 frames; reconnecting`). The reader reads exactly one frame per FFmpeg showinfo report, but FFmpeg's default output timing for raw video may duplicate frames when the restream's timestamps jump at connect; an unreported 15 MB frame then blocks the pipe while the reader waits for a report. The camera preview uses the same reader, so it showed a frame about every 3 s.
+
+- GPU reader: `-vsync passthrough` (exactly one output frame per filtered frame) and frame thinning by count (`framestep=3`, about 8 fps from 25 fps) instead of the timestamp-based fps filter.
+- Camera preview decodes each fetched frame before swapping it in.
+- Access1 connector enabled again (test rig with reader and relay disconnected), so access events are produced end to end. With the connector active, the live-access snapshot path and live-work priority are active as in production.
+
+# 6.8.1 Claude test build
+
+Field capture on 6.8.0: GPU decoding ran, but the first two GPU readers of a walk-up stalled after a few frames (each needed 3 s to notice), leaving the stream unusable for about 9 s; a later reader ran without interruption. The second walk-up, on an already open reader, was recognized in 2.8 s with samples 0.34 s apart. Far faces at 1920 px width (65-88 px) identified at 0.39-0.48, below the 0.50 threshold. The warm hold was still 0 s in the saved options.
+
+- GPU reader: the frame-rate limit now runs after frames leave the GPU, the decoder gets 8 extra surfaces, FFmpeg progress output is off, and a stall is detected after 1.5 s. A stall is logged as `GPU stream stalled after N frames; reconnecting`; `GPU (VAAPI) decode active` is logged at the first frame.
+- `stream_decode_width` defaults to 0 (native size). A saved value is kept; set 0 in the options.
+- Anchor tilt limit raised from 0.17 to 0.26: this camera looks down and frontal walk-ups measure 0.08-0.25, so sharp frontal anchors were being refreshed needlessly.
+
+# 6.8.0 Claude test build
+
+Field capture and log on 6.7.9: the startup line showed `warm hold 0 s` (the saved option was 0); per-sample audit writes held the recognition worker for about 80 ms and once 0.9 s; samples were 0.5-0.8 s apart; the camera preview blinked every frame and the frame route often answered `503 stream_starting_or_no_valid_frame` because CPU decoding of the 5 MP H.265 stream falls behind and reconnects.
+
+- GPU stream decoding (`stream_gpu_decode`, default on): stream readers decode with the system FFmpeg on the Intel GPU (VAAPI), scale on the GPU to `stream_decode_width` (default 1920, same aspect; 0 keeps the native size) at 10 fps, and take each frame's media time from FFmpeg `showinfo`, so the reader's freshness and backlog rules are unchanged. The image adds the Intel media VA driver. Three consecutive GPU sources without a frame switch the reader to CPU decoding for 10 minutes; the log reports which decoder is active.
+- Per-sample audit rows, liveness state and pending review images are written by a background writer in submission order, with observation rows stamped at sample time. The queue is drained before a recognized or ignored decision writes its final evidence.
+- A stream step that processed a frame starts the next one immediately while the event still needs evidence, instead of waiting for the 0.25 s tick.
+- Camera preview: each frame is fetched once into memory and shown from there (the frame route is no-store, so reusing its URL downloaded it twice and blanked the picture). The "no image" notice needs three failures and no frame for 5 s.
+
+# 6.7.9 Claude test build
+
+Field capture on 6.7.8 (three walk-ups from the far side of the entrance): recognition took 5.1, 13.5 and 7.1 s. The face tracker keys a face to its first sighting; a face walking from far and angled (about 90 px) to near and frontal (150-180 px) no longer resembled it, so every frame started a new track and reset liveness and samples (`face_track_changed`).
+
+- A lone face inside the lone event's fresh Frigate box keeps its evidence when the tracker re-keys it (`face_track_rebound`). Identity and liveness must still agree on every sample; two faces or two person events reset exactly as before.
+- Warm reader diagnostics: startup log `Stream readers: warm hold N s after an event, M decoder threads`; captures report `warm_readers` and `warm_seconds`. A reader released while a camera preview is open now also stays warm.
+- Recognition capture keeps evidence resets, rejected samples and re-binds when the record cap is reached.
+
+# 6.7.8 Claude test build
+
+Field capture on 6.7.7: Frigate announced the event before storing it, the first anchor fetch got `metadata_not_ready`, and the fixed 2 s retry left a detected face waiting about 1.5 s for its anchor.
+
+- Anchor fetches that Frigate has not stored yet retry every 0.3 s (up to 8 fetches) instead of once after 2 s.
+- Box association no longer waits for the anchor: a lone person event with one detected face inside Frigate's fresh person box starts collecting evidence at once. The anchor still loads and is compared as before when it arrives. Two people, two faces or a stale box wait for the anchor exactly as in 6.7.7.
+- Camera preview: frames are preloaded off-screen and swapped only when complete; one failed frame keeps the last picture, and the "no image" notice appears only after three failures in a row. The frame no longer resizes on every refresh.
+
+# 6.7.7 Claude test build
+
+Field capture on 6.7.6: Frigate returned the same blurred, side-turned best snapshot on every refresh, so a sharp frontal face scored 0.19-0.29 against it for 19 s and was never associated. The idle warm reader drifted past the 750 ms backlog limit after about 50 s.
+
+- Frigate box association (`frigate_box_association`, default on): when this is the only person event on the camera and the frame has exactly one detected face, the face whose centre lies inside Frigate's current person box for the event (detect coordinates scaled to the stream, box frame time within 2 s, 15% margin) is associated even if the anchor does not match. The same tracked face then stays bound while it is the only face. Two people, two faces, a stale box or unknown detect resolution fall back to the anchor comparison unchanged. Identity, liveness and the three-sample rule are unchanged.
+- Anchor refresh skips the model when Frigate returns the identical crop, and such a fetch does not use up the 3-refresh budget.
+- Stream reader decodes with 2 FFmpeg threads (`stream_decode_threads`, 1-4) so a full-resolution stream no longer falls steadily behind.
+- `stream_warm_seconds` now defaults to 0 (off). An existing saved value is kept; set it to 0 in the app options.
+
+# 6.7.6 Claude test build
+
+Built on 6.7.5. Native OpenVINO stays opt-in; Access1 stays disabled in this test build.
+
+- Anchor refresh: an event anchor that is blurred, turned down (for example to a phone) or repeatedly fails to match the stream face is replaced by a newer Frigate crop before any association. At most 3 refreshes per event, 0.75 s apart. An anchor is never swapped after association, and a replacement resets evidence. A crop without exactly one usable face is retried up to 4 times instead of ending the event after 2.
+- Face quality now records up/down head tilt (`pitch`) from the five landmarks. It grades the anchor only; stream-frame gates and all thresholds are unchanged.
+- Warm stream reader: after an event the observation reader stays connected for `stream_warm_seconds` (default 60, 0 disables, at most one idle reader), so the next approach skips the RTSP connect and keyframe wait.
+- OpenVINO: the recognizer is compiled for a fixed batch of 1 (as benchmarked), OpenVINO CPU honours `cpu_threads`, and startup warmup runs 3 passes.
+- Recognition capture: repeated `snapshot_skipped` records fold into one counted record, lifecycle records (trigger, anchor, stream ready, samples, result) are kept when the record cap is reached, and anchor comparisons record the face box, size, detector score, tilt and sharpness.
+
+# 6.7.5 OpenVINO commissioning build
+
+Added opt-in native GPU and CPU inference, explicit fallback with active-evidence invalidation, and backend-aware recognition timing capture. Access1 submissions are disabled in this commissioning package.
+
+# FaceID 6.7.4
+
+Operational build. Restores automatic recognition and Access1, restores full recognition capture and retains the timestamp comparison. See the short test guide for a live output check.
+
+## Previous builds
+
+## 6.7.3-timestamp1
+
+Temporary isolated diagnostic. Compare both OpenCV timestamps on the same frame, with baseline and local model load, plus sequential native FFmpeg and RTP references. Production timestamp and access decision code are unchanged.
+
 ## 6.7.2 — 2026-11-09
 - Merge the stream3-derived 6.7.1 calibration/UI and Access1 result-ordering fixes into 6.6.16-access1.early1.
 - Camera calibration and preview follow the configured source, reuse bounded shared readers and never submit access.
@@ -6,22 +181,44 @@
 - Align all release labels, Ingress and rebuilt assets. Keep installed gallery, mappings, pairing and CPU/security settings.
 - Offline regression and image verification are documented separately. Real-camera latency and final Access1 acceptance remain rig-validation gates.
 
-## 6.7.1 — 2026-11-02
-- Add opt-in continuously refreshed face-size measurements for the selected camera, using detection only and the exact measured image.
-- Refresh selected-camera previews after each image completes; serialize requests, cancel obsolete results, pause hidden-page sampling and retry unavailable frames.
-- Fix dark unreadable pixel labels and align overlays with the source image aspect ratio. Keep full intercom capture as an explicit separate check.
+# FaceID 6.6.16-access1.early1
 
-## 6.7.0 — 2026-11-02
-- Publish the integrated stream3 handoff under a distinct version for Home Assistant update detection.
+Detect fresh live face candidates during the event anchor fetch, retry and reference-face processing. Only a current, uniquely associated candidate can enter normal liveness confirmation.
 
-## 6.6.12 — 2026-11-02
-- Integrate the access1.stream3 developer handoff: bounded event-triggered stream observations, decoder clock validation, and final delivery proof checks.
-- Add administrator acquisition, preview, crop and timing diagnostics with redacted exports.
-- Fix RTSP observation conflicts with continuous snapshot readers; stream sources explicitly use event mode. Existing snapshot modes remain available.
-- Preserve installed CPU/model settings, identity and liveness thresholds, and existing latest-event popups.
-- Keep late Access1 receipts from replacing a newer attempt even when submissions share a clock tick.
-- Fix Linux startup script packaging and synchronize versioned frontend/Ingress assets.
-- Physical camera/Access1 commissioning is still required; no field latency guarantee.
+[English guide](docs/INSTALL-TEST-EN.txt) | [עברית](docs/INSTALL-TEST-HE.txt)
+
+# FaceID 6.6.15-access1.anchor1
+
+Retry temporary anchor failures within the existing event deadline and report MQTT subscription acknowledgement and selected-camera event delivery in the passive capture.
+
+[English test guide](INSTALL-TEST-EN.txt) · [מדריך בדיקה](INSTALL-TEST-HE.txt)
+
+# 6.6.14-access1.capture1 — 2026-11-06
+
+Add an opt-in, bounded full recognition capture to the retained diagnostic page.
+Record safe camera readback and actual dispatch, presession rejection reasons,
+snapshot/restream/direct normal-path timings, subject association and PAD/sample
+progress, process resource use, and existing Access1 submission/result handling.
+Private input previews expire and are excluded from the exported report.
+
+Preserve ordinary recognition, liveness/association thresholds, source trust,
+Access1 policies and all prior manual diagnostic modes. Recorder failures are
+isolated. No production optimization or field performance claim in this pass.
+See the short EN/HE test guides and developer handoff.
+
+# 6.6.13-access1.resource1 — 2026-11-06
+
+Bound idle historical indexing and cache successful no-face results. Stop unused
+snapshot/JPEG demand. Validate structured frames on demand and reject duplicates
+before inference. Preserve freshness at processing start and evidence expiry.
+
+Bound stream anchor fetches to two workers; preserve active tracking when a second
+event arrives. Share conservative event-subject association with secure snapshots.
+Gate operational previews on a short administrator viewer lease. Add resource and
+timing diagnostics. No model/provider/default CPU/Access1 backend changes.
+
+Ready for rig validation; see the included EN/HE guide and test results. Three
+distinct liveness/identity samples and stricter saved requirements are preserved.
 
 ## 6.6.11-access1.test1 — 2026-10-30
 - Restore operational startup according to saved settings (no forced setting changes).

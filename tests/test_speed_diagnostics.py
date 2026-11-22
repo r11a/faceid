@@ -157,6 +157,36 @@ class SpeedDiagnosticsTests(unittest.TestCase):
         self.assertNotIn('PRIVATE',str(self.integration.last_submission))
         self.assertEqual([c.args[0] for c in self.integration.transport.call.call_args_list],['POST','GET'])
 
+    def test_older_processing_exception_does_not_replace_newer_result(self):
+        entered, release = threading.Event(), threading.Event()
+        errors=[]
+        def present(event, **kwargs):
+            if event['event_id']=='older':
+                entered.set();release.wait(2)
+                raise ValueError('fixture failure')
+            return {'state':'blocked','reason':'fixture_newer'}
+        def older():
+            try:self.integration.present(self.event('older'))
+            except ValueError:errors.append(True)
+        with patch.object(self.integration,'_present',side_effect=present):
+            worker=threading.Thread(target=older);worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.integration.present(self.event('newer'))
+            finally:release.set();worker.join(3)
+        self.assertEqual(errors,[True])
+        self.assertEqual(self.integration.last_submission['face_event_id'],'newer')
+
+    def test_submission_sequence_preserves_monotonic_capture_clock(self):
+        events=[]
+        def present(event, **kwargs):
+            events.append(dict(event));return {'state':'blocked','reason':'fixture'}
+        with patch.object(self.integration,'_present',side_effect=present), patch('app.access1.time.monotonic',return_value=123.5):
+            self.integration.present(self.event('one'))
+            self.integration.present(self.event('two'))
+        self.assertEqual([item['_submission_monotonic'] for item in events],[123.5,123.5])
+        self.assertEqual(events[1]['_submission_order'],events[0]['_submission_order']+1)
+
     def test_receipt_worker_starts_once(self):
         with patch('app.access1.threading.Thread') as factory:
             self.integration.start_worker()

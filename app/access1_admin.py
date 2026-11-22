@@ -49,6 +49,15 @@ async def administrator(user_id):
 
 
 async def require_pairing_admin(request: Request):
+    return await require_admin(request, "x-access1-pairing", "Access1 pairing")
+
+
+async def require_setup_admin(request: Request):
+    """6.9.0 setup endpoints: same verified HA administrator, own confirm header."""
+    return await require_admin(request, "x-faceid-setup", "Setup")
+
+
+async def require_admin(request: Request, confirm_header: str, purpose: str):
     # HA documents this exact Ingress source. Do not broaden to the addon subnet.
     # Pairing is deliberately unavailable through the optional public UI port.
     if not request.client or request.client.host != "172.30.32.2":
@@ -61,9 +70,9 @@ async def require_pairing_admin(request: Request):
     if request.method not in ("GET", "HEAD"):
         # Cross-origin forms cannot supply this header. No CORS permission is
         # provided by the module. Pairing changes are JSON-only.
-        if (request.headers.get("x-access1-pairing") != "1"
+        if (request.headers.get(confirm_header) != "1"
                 or request.headers.get("content-type", "").split(";")[0] != "application/json"):
-            raise HTTPException(403, "Pairing confirmation required")
+            raise HTTPException(403, f"{purpose} confirmation required")
     try:
         allowed = await asyncio.wait_for(administrator(user_id), timeout=5)
     except Exception as error:
@@ -71,8 +80,8 @@ async def require_pairing_admin(request: Request):
             "token_missing","handshake_invalid","ha_api_auth_rejected","user_list_unavailable"
         } else (
             "timeout" if isinstance(error,asyncio.TimeoutError) else "transport_unavailable")
-        log.warning("Access1 pairing administrator check failed: %s; pairing disabled",reason)
-        raise HTTPException(503, "HA administrator verification unavailable; pairing disabled ["+reason+"]") from None
+        log.warning("%s administrator check failed: %s; %s disabled",purpose,reason,purpose.lower())
+        raise HTTPException(503, f"HA administrator verification unavailable; {purpose.lower()} disabled ["+reason+"]") from None
     if not allowed:
         raise HTTPException(403, "Home Assistant administrator required")
     return user_id

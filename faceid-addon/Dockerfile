@@ -21,6 +21,11 @@ RUN python3 -m venv venv \
     && venv/bin/pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y build-essential python3-dev && apt-get autoremove -y
 
+RUN if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get update \
+    && apt-get install -y --no-install-recommends intel-opencl-icd ocl-icd-libopencl1 intel-media-va-driver \
+    && rm -rf /var/lib/apt/lists/* \
+    && venv/bin/pip install --no-cache-dir openvino==2025.4.1; fi
+
 COPY app app
 COPY static static
 COPY run.sh /

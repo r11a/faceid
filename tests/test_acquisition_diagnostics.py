@@ -105,6 +105,20 @@ class JobTests(unittest.TestCase):
 
 
 class RouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timestamp_route_requires_engine_and_uses_configured_restream(self):
+        body = json.dumps({'camera':'Enterance','source':'timestamp_comparison'}).encode()
+        self.processor.access1 = None
+        self.processor.diagnostic_only = False
+        self.processor.engine = None
+        with patch.object(module,'require_pairing_admin',new=AsyncMock(return_value='admin')), patch.object(module.AcquisitionDiagnostics,'start') as start:
+            with self.assertRaises(HTTPException) as error:
+                await self.route(request(body))
+            self.assertEqual(error.exception.status_code,409)
+            start.assert_not_called()
+            self.processor.engine = object()
+            await self.route(request(body))
+            self.assertEqual(start.call_args.args,('admin', [('timestamp_comparison','rtsp://frigate:8554/Enterance')]))
+
     async def test_crop_route_validates_region_and_uses_configured_source(self):
         self.processor.camera_enabled=lambda _:False
         self.processor.engine=object();self.processor.access1=None
