@@ -63,6 +63,29 @@ class UpgradeParityTests(unittest.TestCase):
         (data / "settings.json").write_text(json.dumps({"match_threshold": 0.5}), encoding="utf-8")
         return data
 
+    def test_672_configuration_upgrades_and_restarts_with_saved_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = self.make_687_install(root)
+            cfg = json.loads(json.dumps(BASELINE_687))
+            cfg["faceid"]["backend"] = "cpu"
+            for key in ("stream_warm_seconds", "stream_decode_threads", "stream_gpu_decode",
+                        "stream_decode_width", "frigate_box_association"):
+                cfg["faceid"].pop(key)
+            (root / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+            saved = {name: (data / name).read_bytes()
+                     for name in ("settings.json", "camera_profiles.json")}
+            first, _, started, connector = start(root)
+            second, _, _, _ = start(root)
+            self.assertEqual(first, second)
+            started.assert_called_once()
+            connector.assert_called_once()
+            self.assertEqual(first["options"]["backend"], "cpu")
+            self.assertEqual(first["options"]["match_threshold"], .5)
+            self.assertEqual(first["cameras"]["Enterance"]["observation_source"], "frigate_restream")
+            self.assertFalse(first["setup_mode"])
+            self.assertEqual(saved, {name: (data / name).read_bytes() for name in saved})
+
     def test_687_settings_are_unchanged_across_upgrade_and_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
