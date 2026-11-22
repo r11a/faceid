@@ -6,25 +6,120 @@ const html=readFileSync(new URL('../public/acquisition-diagnostics.html',import.
 const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 async function fixture(responses){
   const elements={};
-  for(const [,id] of html.matchAll(/\bid="([^"]+)"/g)){
+  for(const id of ['form','camera','source','directFields','direct','start','status','results','download','left','top','right','bottom','scene','previewPanel','fullInput','cropInput','regionFields','modeInfo','previewState','startupPanel','startupInput','operational','operationPreview','previewEvent','captureCamera','captureSource','captureDuration','captureStart','captureStop','captureDownload','captureStatus','captureSummary','capturePreviewEvent','capturePreviews']){
     elements[id]={replaceChildren(){this.options=[]},value:'',options:[],listeners:{},addEventListener(name,fn){this.listeners[name]=fn},append(o){this.options.push(o)},
       removeAttribute(name){delete this[name]},getContext(){return {drawImage(){},strokeRect(){}}},
       getBoundingClientRect(){return {left:0,top:0,width:100,height:100}},setPointerCapture(){}};
   }
   elements.source.value='restream';
+  elements.captureSource.value='frigate_restream';elements.captureDuration.value='300';
   ['left','top','right','bottom'].forEach((id,i)=>elements[id].value=[25,10,75,90][i]);
   const fetch=vi.fn(async()=>{const next=responses.shift();return {ok:next.ok!==false,json:async()=>next.body||next}});
   const timer=vi.fn();
-  const context=vm.createContext({document:{getElementById:id=>elements[id],createElement:()=>({style:{},remove(){}})},
+  const downloads=[];
+  const context=vm.createContext({document:{getElementById:id=>elements[id],createElement:()=>({style:{},remove(){},click(){downloads.push(this)}})},
     location:{href:'http://ha/api/hassio_ingress/example/acquisition-diagnostics'},fetch,
     URL,Blob,Image:class {naturalWidth=100;naturalHeight=100;set src(value){this.value=value;if(value)this.onload?.()}},
     setTimeout:timer,clearTimeout:vi.fn(),console});
   vm.runInContext(script,context);
   for(let i=0;i<15;i++)await Promise.resolve();
-  return {elements,fetch,timer};
+  return {elements,fetch,timer,downloads};
 }
 
 describe('acquisition diagnostic page',()=>{
+  it('starts only passive capture and never changes the selected camera profile',async()=>{
+    const capture={recording:true,state:'recording',capture_id:'c1',remaining_seconds:300,previews:[],preflight:{source_matches:true}};
+    const {elements,fetch}=await fixture([{running:false,cameras:['Enterance']},capture,{running:false,cameras:['Enterance'],recognition_capture:capture}]);
+    elements.captureCamera.value='Enterance';
+    await elements.captureStart.listeners.click();
+    const posts=fetch.mock.calls.filter(([,o])=>o.method==='POST');
+    expect(posts).toHaveLength(1);
+    expect(posts[0][0].pathname).toBe('/api/hassio_ingress/example/api/recognition-capture');
+    expect(JSON.parse(posts[0][1].body)).toEqual({action:'start',camera:'Enterance',expected_source:'frigate_restream',duration_seconds:300});
+    expect(posts[0][1].headers['X-Access1-Pairing']).toBe('1');
+    expect(elements.captureStop.disabled).toBe(false);expect(elements.start.disabled).toBe(true);
+    await elements.form.listeners.submit({preventDefault(){}});
+    expect(fetch.mock.calls.filter(([,o])=>o.method==='POST')).toHaveLength(1);
+    expect(html).toContain('does not generate a recognition, access request or relay command');
+  });
+  it('stops capture without stopping normal recognition or triggering an action',async()=>{
+    const active={recording:true,state:'recording',capture_id:'c1',previews:[]};
+    const stopped={...active,recording:false,state:'stopped'};
+    const {elements,fetch}=await fixture([{cameras:['Enterance'],recognition_capture:active},stopped,{cameras:['Enterance'],recognition_capture:stopped}]);
+    await elements.captureStop.listeners.click();
+    const posts=fetch.mock.calls.filter(([,o])=>o.method==='POST');
+    expect(posts).toHaveLength(1);expect(JSON.parse(posts[0][1].body)).toEqual({action:'stop'});
+    expect(elements.start.disabled).toBe(false);expect(elements.captureStart.disabled).toBe(false);
+  });
+  it('downloads a fresh full capture rather than the last polled status',async()=>{
+    const {elements,fetch,downloads}=await fixture([{cameras:['Enterance'],recognition_capture:{capture_id:'c1',state:'stopped',events:[]}},
+      {capture_id:'c1',state:'stopped',events:[{event_id:'new-result'}],previews:[]}]);
+    await elements.captureDownload.listeners.click();
+    expect(fetch.mock.calls.at(-1)[0].pathname).toBe('/api/hassio_ingress/example/api/recognition-capture');
+    expect(fetch.mock.calls.at(-1)[1].method).toBeUndefined();
+    expect(downloads[0].download).toBe('faceid-recognition-capture.json');
+    expect(elements.captureSummary.textContent).toContain('new-result');
+    expect(elements.captureStart.disabled).toBe(false);
+    expect(elements.captureSource.disabled).toBe(false);
+  });
+  it('restores the active capture camera/source on reload and preserves Stop after download',async()=>{
+    const active={capture_id:'c1',state:'recording',recording:true,camera:'Balcony',expected_source:'direct_rtsp',duration_seconds:120,previews:[]};
+    const {elements}=await fixture([{cameras:['Enterance','Balcony'],recognition_capture:active},active]);
+    expect(elements.captureCamera.value).toBe('Balcony');expect(elements.captureSource.value).toBe('direct_rtsp');
+    expect(elements.captureDuration.value).toBe('120');expect(elements.captureSource.disabled).toBe(true);
+    await elements.captureDownload.listeners.click();
+    expect(elements.captureStop.disabled).toBe(false);
+    expect(elements.captureStart.disabled).toBe(true);
+  });
+  it('retries a failed status poll and clears private capture images',async()=>{
+    const active={capture_id:'c1',state:'recording',recording:true,previews:[{event_id:'evt',kinds:['input'],expires_in:30}]};
+    const {elements,timer,fetch}=await fixture([{cameras:['Enterance'],recognition_capture:active},
+      {ok:false,body:{detail:'Temporarily unavailable'}},{cameras:['Enterance'],recognition_capture:active}]);
+    elements.capturePreviewEvent.value='evt';elements.capturePreviewEvent.listeners.change();
+    expect(elements.capturePreviews.options).toHaveLength(1);
+    await timer.mock.calls.find(([,ms])=>ms===5000)[0]();
+    expect(elements.capturePreviews.options).toHaveLength(0);
+    expect(elements.captureStop.disabled).toBe(true);
+    await timer.mock.calls.at(-1)[0]();
+    expect(fetch.mock.calls).toHaveLength(3);expect(elements.captureStop.disabled).toBe(false);
+  });
+  it('clears loaded private inputs at their expiry even without another successful poll',async()=>{
+    const {elements,timer}=await fixture([{cameras:['Enterance'],recognition_capture:{capture_id:'c1',previews:[{event_id:'evt',kinds:['input'],expires_in:30}]}}]);
+    elements.capturePreviewEvent.value='evt';elements.capturePreviewEvent.listeners.change();
+    expect(elements.capturePreviews.options).toHaveLength(1);
+    timer.mock.calls.find(([,ms])=>ms===30000)[0]();
+    expect(elements.capturePreviews.options).toHaveLength(0);
+  });
+  it('shows expected/saved mismatch and keeps private images opt-in',async()=>{
+    const {elements,fetch}=await fixture([{cameras:['Enterance'],recognition_capture:{capture_id:'c1',state:'recording',recording:true,
+      preflight:{expected_source:'frigate_restream',saved_source:'snapshots',source_matches:false},
+      previews:[{event_id:'evt',kinds:['anchor','input','subject','unsupported']}]}}]);
+    expect(elements.captureSummary.textContent).toContain('snapshots');
+    expect(elements.capturePreviews.options).toHaveLength(0);
+    elements.capturePreviewEvent.value='evt';elements.capturePreviewEvent.listeners.change();
+    expect(elements.capturePreviews.options).toHaveLength(3);
+    expect(elements.capturePreviews.options[0].src).toContain('/api/recognition-capture/preview/evt/anchor');
+    expect(fetch.mock.calls).toHaveLength(1);
+  });
+  it('does not offer capture while a manual benchmark runs or admin access fails',async()=>{
+    const {elements}=await fixture([{running:true,cameras:['Enterance']}]);
+    expect(elements.captureStart.disabled).toBe(true);
+    const denied=await fixture([{ok:false,body:{detail:'Verified administrator required'}}]);
+    expect(denied.elements.captureStart.disabled).toBe(true);
+    expect(denied.elements.captureStop.disabled).toBe(true);
+    expect(denied.elements.captureDownload.disabled).toBe(true);
+  });
+  it('requests a preview lease only for the selected operational event',async()=>{
+    const state={running:false,cameras:['Enterance'],results:[],operational_sessions:{active:[{event_id:'event-1',camera:'Enterance',state:'observing'}],recent:[]}};
+    const {elements,fetch}=await fixture([state,state]);
+    expect(fetch.mock.calls[0][0].search).toBe('');
+    expect(elements.operationPreview.options).toHaveLength(0);
+    expect(elements.download.disabled).toBe(false);
+    elements.previewEvent.value='event-1';
+    await elements.previewEvent.listeners.change();
+    expect(fetch.mock.calls[1][0].searchParams.get('preview_event')).toBe('event-1');
+    expect(elements.operationPreview.options).toHaveLength(3);
+  });
   it('shows startup sequence and a low-detail warning rather than ready',async()=>{
     const {elements}=await fixture([{running:false,cameras:['Enterance'],
       results:[{mode:'preview',state:'preview_low_detail',timestamp_issue_samples:2}],
@@ -73,7 +168,7 @@ describe('acquisition diagnostic page',()=>{
     elements.source.value='direct';elements.source.listeners.change();expect(elements.regionFields.hidden).toBe(true);
     expect(html).not.toContain('automatic recognition continues');
     expect(html).toContain('normal recognition and Access1 remain active');
-    expect(html).toContain('does NOT pause cameras');
+    expect(html).toContain('value="timestamp_comparison"');
   });
   it('submits the decode experiment without credentials or automatic start',async()=>{
     const {fetch,elements}=await fixture([{running:false,cameras:['Enterance'],results:[]},

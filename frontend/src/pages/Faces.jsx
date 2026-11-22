@@ -108,13 +108,9 @@ export function FaceExplorer({ source: initialSource, title, onEnroll, onReferen
   const coverage = index.data?.events_total != null ? index.data : state.data?.index;
   const similarityMode = !source.person || filters.similar;
   const rebuild = async (force = false) => {
-    const params = new URLSearchParams(coverage?.remote_available ? "remote=true&limit=500" : "");
-    const options = { method: "POST" };
-    if (force === true) {
-      params.set("force", "true");
-      options.headers = { "X-Access1-Pairing": "1" };
-    }
-    try { await api(`faces/index${params.size ? "?" + params : ""}`, options); indexWasRunning.current = true; toast("השלמת חיפוש בהיסטוריה החלה"); index.reload(); }
+    force = force === true;
+    const path = coverage?.remote_available ? "faces/index?remote=true&limit=500" : "faces/index";
+    try { await api(`${path}${force ? `${path.includes("?") ? "&" : "?"}force=true` : ""}`, { method: "POST", ...(force ? { headers: { "X-Access1-Pairing": "1" } } : {}) }); indexWasRunning.current = true; toast("השלמת חיפוש בהיסטוריה החלה"); index.reload(); }
     catch (error) { toast(error.message, "error"); }
   };
   return <div className="face-explorer">

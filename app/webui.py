@@ -2030,6 +2030,18 @@ def build_app(cfg, engine, gallery, processor, data_dir: Path, static_dir: Path)
                     "authenticated": bool(processor.frigate.username),
                     "tls_verified": bool(processor.frigate.verify_tls),
                 },
+                "setup": _setup_summary(),
                 "suggest_threshold": float(cfg["faceid"].get("suggest_threshold", 0.40))}
 
+    def _setup_summary():
+        from . import setup_wizard
+        value = setup_wizard.SetupState(data_dir).read()
+        statuses = [setup_wizard.camera_status(value, camera) for camera in value["cameras"]]
+        return {"state": value["state"],
+                "setup_mode": list(getattr(processor, "setup_missing", []) or []),
+                "cameras_to_check": sorted(item["camera"] for item in statuses
+                                           if item["status"] in ("changed", "unvalidated"))}
+
+    from .setup_api import register as register_setup
+    register_setup(app, cfg, engine, gallery, processor, data_dir)
     return app

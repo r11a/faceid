@@ -1,45 +1,103 @@
-DEVELOPER HANDOFF — 6.6.11-access1.test1
-Base: 6.6.10-access1.diag5. This is an operational test-rig release, not diagnostic-only.
+FaceID 6.7.2 integration handoff — 2026-11-09
 
-User explicitly authorized restored operation with disconnected relays. Do not
-interpret an open diagnostic page as a global inhibition switch.
+BASE AND SCOPE
+Foundation: 6.6.16-access1.early1 (local), not the higher-numbered 6.7.1 tree.
+Imported delta: 6.7.1 versus shared stream3 baseline. See both review diffs.
+No standalone mode, new model, dependency update, Frigate modification or Access1
+backend change. Native engine/liveness thresholds and access policy remain intact.
 
-Changes
-1. app/diagnostic_mode.py: DIAGNOSTIC_ONLY=False. Existing startup function and its
-   ordering are retained: connector then processor. main.py's existing guard also
-   restores background face indexing. Saved enable flags remain authoritative.
-2. app/decode_diagnostics.py: blockers now require the engine only. The former
-   connector/camera-disable policy was intentionally removed on user instruction.
-   run_decode and preview maintain no-access/no-event local result isolation.
-   No sample calls enqueue/present/publish/_process_face or records access evidence.
-   Shared model background priority and all deadlines/budgets/cooldown remain.
-   Invalid PTS/local stale frames rejected before hashing/inference. Redundant
-   post-sample .1-second sleep removed; next_sample cadence still controls sampling.
-3. app/acquisition_diagnostics.py: authenticated status includes runtime VERSION.
-4. Diagnostic HTML: actual server version exported; bilingual active-operation
-   notice, preview and test modes preserved. Frontend release label/cache refreshed.
-5. Tests distinguish operational coexistence from isolated diagnostic-only startup.
-   Verify running connector is never called by diagnostic paths, missing engine
-   still blocks, early rejection avoids model calls, same-subject/duplicate/threshold
-   guards remain. Existing decoder implementation unchanged.
+MERGED CHANGES
+access1.py: locked monotonically increasing submission sequence controls latest
+display ordering, including exceptions and equal clock ticks. Original monotonic
+timestamp remains for capture timing; request IDs, expiry and bounded reconciliation
+stay unchanged. No replay POST introduced.
 
-Preservation
-main.py, mqtt_listener.py, access1.py, engine.py, liveness.py, decision.py,
-camera_profiles.py, pairing/gallery and admission logic are unchanged from base.
-No credentials, user reports, real frames or gallery vectors are packaged.
+camera_profiles.py: stream sources are effectively event-driven on read/save.
+Snapshot modes remain available; retained profile capture/masking instrumentation.
+continuous_recognition already excluded stream source reservations and was retained.
 
-Scope boundary
-This release restores normal operation but DOES NOT implement event-triggered RTSP
-as admission evidence. Relative stream clocks do not prove capture age; tests also
-have not resolved the sparse face detections. Existing secure snapshot evidence
-path remains in place. Do not claim that this release fixes the eight-second
-production recognition delay. Measured wins apply to invalid diagnostic samples
-and redundant waits. The 2/4-thread benchmark is exploratory, not an automatic
-settings migration. Saved cpu_threads unchanged; documented optional value=4.
-No lower-than-three liveness sample control added. Do not lower existing safeguards.
+Security.jsx/styles: opt-in serial face-size measurement, exact measured preview,
+image-completion-driven refresh, stale-response cancellation, hidden-page pause,
+aspect-correct overlays and readable labels. Measurement responses without their
+JPEG are rejected rather than drawing boxes over a different image. Source changes
+invalidate the measurement effect. Labels distinguish snapshot preview from streams.
 
-Merge
-Apply only the listed focused diff, keep restored startup semantics explicit,
-and update release/cache identifiers. Run full backend and frontend suites,
-then verify image byte parity and offline model/codec smoke. No dependency changes.
-See CHANGED-FILES.json, preservation.json, focused-changes.patch and validation logs.
+CONFIGURED-SOURCE CALIBRATION
+New app/camera_calibration.py is separate from the pre-existing app/calibration.py
+(gallery calibration), whose implementation remains unchanged.
+webui camera /frame and /analyze delegate to one CameraCalibration instance.
+Snapshot mode uses existing camera_frame_bytes selection with bounded HTTP timeout.
+For restream/direct, the saved observation config selects _live_url or validated
+private direct URL, then borrows LiveFramePool.acquire_calibration. No fallback.
+
+Stream measurement uses engine.detect_frame_record after low-priority admission,
+so freshness is checked on the latest frame at processing start. Same-frame JPEG
+and geometry are returned. Generation/profile revision/stopped-reader checks reject
+results after source change. A JPEG is a display encoding of the same decoded BGR
+frame; this is not a claim of byte-identical raw RGB pixels after lossy encoding.
+Snapshot preview is not an event-specific association crop and is labelled as such.
+
+No calibration function embeds identities, evaluates live access, modifies gallery,
+counts liveness or calls Access1. Trust remains necessary for operational stream
+access but is not necessary for a non-authorizing diagnostic. Returned profiles mask
+secrets. Errors are categorical and private URLs are never returned.
+
+RESOURCE LIFECYCLE
+Single-flight calibration gate rejects concurrent requests, no request work queue.
+InferenceLock.background_work has an optional timeout (existing callers unchanged).
+Calibration yields to live waiters/reservations and waits at most 250 ms for model
+admission. Native inference already admitted is non-preemptive.
+
+LiveFramePool adds a renewable calibration lease, one camera maximum. It shares a
+compatible existing reader and rejects conflicts with active observation/regular
+sources. Decoder capacity still includes retiring threads. TTL is five seconds,
+swept on five-second timers (release within about 5–10 seconds after last request).
+Observation release/sync preserve an active calibration lease; calibration expiry
+never closes a reader still held by production. Pool close cancels the timer.
+Observation-only/calibration-only readers do not run a continuous JPEG encoder.
+Existing two operational-observation-camera cap remains; calibration is separately
+limited to one camera and may coexist with production readers within pool bounds.
+
+PRESERVED CONNECTED UNITS
+Subject-bound secure snapshots and common subject association; stream tracking,
+two-person/crossing/duplicate guards; >=3 distinct same-subject live samples;
+bounded anchor retries/early detection; evidence lifetime/generation/cancellation;
+idle-aware background indexing/negative cache; passive recognition capture/MQTT
+diagnostics; authenticated Access1 wire schema, request IDs and result worker.
+
+SETTINGS AND DATA
+No schema/data migration or automatic CPU/liveness changes. Pairing, gallery and
+camera/person IDs persist. Snapshot/direct/restream and local trust remain explicit.
+Continuous-camera identity recognition remains non-authorizing. Older recording/clip
+results cannot authorize access. Existing operational functions stay enabled while
+diagnostics run. Opening a diagnostic page is not a global inhibit action.
+
+TESTING
+See TEST-RESULTS.txt and exact logs. Preserve all local-only safety suites; incoming
+tests were merged rather than replacing their newer semantics. Important examples:
+highest-quality bystander must not replace the event subject; stream-to-snapshot
+switch releases/reacquires reader correctly; same-tick receipts and late exceptions
+cannot overwrite newer state; calibration never substitutes an alternate feed.
+
+Runtime smoke uses real ONNX recognition/liveness and synthetic H.265, with network
+disabled. Normal s6/bashio init is exercised with harmless app.main sentinel. It
+does not start a real broker/camera/connector. One optional full buffalo_l detector
+fixture is absent; do not misrepresent that skipped test or synthetic timings as
+field recognition performance. Only amd64 image was validated, not aarch64.
+
+KNOWN FIELD GATES
+The later anchor header/freshness contract is retained. Validate Frigate's event
+crop metadata/no-store/timestamp behavior. A failure is explicit; no weakening was
+introduced to force association. Decoder timestamp_nonprogressing field warnings
+still require source evidence. This merge does not invent a timestamp or grant
+access from arrival time alone. Explicit local-network trust is bounded delivery,
+not authenticated camera capture time.
+
+No real camera, HA, MQTT, Access1 or relay endpoint was contacted. Commissioning
+must verify one operational event through final Access1 result and compare actual
+latency/accuracy. Release label is 6.7.2 everywhere, with rebuilt/synchronized assets.
+
+INSTALL/ROLLBACK
+Use source/faceid-addon as a complete local add-on replacement. Do not replace
+persistent /data. Source selection can revert to snapshots; retain the prior full
+package/HA backup for software rollback. See bilingual installation guides.

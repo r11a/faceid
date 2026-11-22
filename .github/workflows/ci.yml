@@ -48,7 +48,7 @@ jobs:
 
       - name: Install dependencies
         # httpx is required by Starlette's TestClient, not by the FaceID runtime.
-        run: pip install -r requirements.txt httpx==0.28.1
+        run: pip install -r requirements.txt httpx==0.28.1 pytest==8.4.2
 
       - name: Import smoke test (would have caught issue #1)
         run: python -c "import app.main; import app.backfill; import app.enroll"
@@ -57,7 +57,7 @@ jobs:
         run: python -m compileall -q app
 
       - name: Unit tests
-        run: python -m unittest discover -s tests -v
+        run: python -m pytest -q tests
 
       - name: Import-consistency check (local imports must exist in their module)
         run: |

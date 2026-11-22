@@ -1,3 +1,236 @@
+# 6.9.4 Claude test build (on top of 6.9.3) - per-section Settings save reverted
+
+User request: remove the 6.9.3 "שמירת הסעיף" buttons and bring back the previous Settings page.
+
+Changes:
+- frontend/src/pages/Advanced.jsx restored byte for byte from 6.9.2 (single save of the whole form in the page header; SECTION_KEYS/settingsForm removed).
+- frontend/src/additions.css restored byte for byte from 6.9.2 (the 6.9.3 advanced panel-heading rule removed).
+- frontend/src/pages/Settings.test.jsx: now checks the single "save all" button and that it posts the whole form.
+- Version 6.9.4. No backend, run.sh, config.yaml schema or translation change.
+
+---
+
+
+# 6.9.3 Claude test build (on top of 6.9.2) - flash fix, walk-test banner, site file, short options page
+
+Rig findings (6.9.2): every check passed (live picture, embedded People/Access1, effective configuration identical after restart, walk test recognized with no Access1 request, normal pass opened the door). The step 3 picture flashed only with face measurement on. The user mistook step 3 measurement for the walk test.
+
+Changes:
+- frontend Security.jsx LiveFrame (shared with the Cameras page): measured preview pre-decoded (Image + decode) before setAnalysis; on a failed sample the last analysis is kept with faces [] and the error shown (AbortError ignored).
+- Setup.jsx: one walk-test poll in SetupPage (banner + Stop on every step; passed to ReviewStep/WalkTest); step 3 "measurement only" line; SiteTransfer (export -> blob download; import -> preview -> apply -> optional restart).
+- setup_wizard: SITE_SETTINGS (Settings-tab ranges + stream_warm_seconds; backup_dir excluded), SITE_CAMERA_KEYS, export_site(cfg, data_dir, profiles, version) exports effective settings and normalized camera profiles + decode (never direct_rtsp_url). import_site(...): validates format/ranges/unknown<match; cameras validated through CameraProfiles.update on a temporary copy (same rules as the camera studio); compares normalized views so re-import on the same site is a no-op; writes only changed settings keys (settings.json) and changed cameras (camera_profiles.json) via transaction(); connection.json, setup.json geometry and other cameras untouched. Settings take effect after restart (restart_required).
+- setup_api: GET /api/setup/export, POST /api/setup/import {site, apply} (admin). Frigate unreachable -> all cameras skipped.
+- faceid-addon/config.yaml regrouped (generator: scratchpad options693.py): 10 visible options, the rest optional (`?`) in grouped order; translations/en.yaml names "Group · Option". run.sh: every option without a fallback now has the exact 6.9.2 default (bools via null check, so false stays false); frigate_url falls back to "" (setup mode). Existing `//` expressions unchanged (note: `.liveness_enabled // true` still reads false as true, fail-safe, as before).
+- Advanced.jsx SettingsPage: SECTION_KEYS (defaults, backup, advanced); per-section save posts only those keys.
+- Tests: tests/test_setup_693.py (15): export has no secrets; same-site re-import changes no byte; new-site preview then apply; target RTSP address/other cameras kept; decode removal; six refused files write nothing; interrupted import undone at startup; run.sh with the short page = 6.9.2 defaults (only the Frigate URL differs); saved options read exactly as saved; every option grouped and named. test_setup_startup: export/import admin-guarded, API preview. Frontend: Setup.test.jsx (+4), Settings.test.jsx (2). Fixture tests/fixtures/addon-options-6.9.2.json.
+
+---
+
+
+# 6.9.2 Claude test build (on top of 6.9.1) - setup screen fixes
+
+Rig finding (6.9.1): step 3 showed a black frame; /api/cameras/Enterance/frame answered 503 stream_starting_or_no_valid_frame and the wizard's plain <img> never retried. Steps 4/5 navigated away from the wizard.
+
+Changes (frontend only):
+- Setup.jsx ViewStep uses Security.LiveFrame(camera, controls) (retry/double-buffered refresh + face measurement).
+- PeopleStep/Access1Step render PeoplePage/Access1Page inside the step (.setup-embedded in additions.css).
+- SetupPage keeps the step in sessionStorage ("faceid-setup-step").
+- Tests: Setup.test.jsx +2 (live frame with controls; embedded screens, Back present, step restored after remount).
+
+---
+
+
+# 6.9.1 Claude test build (on top of 6.9.0) - guided setup + all-camera acceptance
+
+Rig finding (6.9.0): Balcony (disabled) box_association true on first start, false after the first geometry check, because only enabled cameras were accepted.
+
+Changes:
+- setup_wizard.GeometryMonitor: check() records every Frigate camera; probes only enabled ones (probe and alias and enabled). upgrade_pending(value) = state migrated and not upgrade_all_cameras; the first full check accepts every camera without a validated record and sets migration_checked + upgrade_all_cameras (a 6.9.0 install with migration_checked accepts the rest). _decide/camera_status use upgrade_pending.
+- setup_wizard.WalkTest (start/stop/active/intercept/status; 10-300 s, last 20 results). mqtt_listener._submit_access1: guard check first, then walk_test.intercept() returns None before Access1 is touched; main sets processor.setup_walk_test.
+- setup_api: GET/POST /api/setup/walk-test, POST /api/setup/walk-test/stop (admin).
+- frontend/src/pages/Setup.jsx (new): SetupPage + six step components; setupApi() sends X-FaceID-Setup. App.jsx: "setup" page under Management and in the management directory; health.setup.state == "fresh" opens it once from home.
+- Tests: tests/test_setup_691.py (upgrade accepts cameras that are off without probing them, 6.9.0 install accepts skipped cameras, turned-on camera keeps association and fills its stream size, change while off is caught, camera added later needs approval, blank install unchanged, effective configuration identical after first check and restart with a disabled camera, walk test records and limits, recognized path skips Access1 during the walk test). frontend: Setup.test.jsx (7), App.test.jsx (wizard on blank install, upgrade keeps dashboard, counts 9/18).
+- Not done: "face too small" guidance from measured face size during the walk test (the walk test shows recognitions only; the hint is generic). Site export and trimmed add-on options -> 6.9.2.
+
+---
+
+
+# 6.9.0 Claude test build (on top of 6.8.7) - setup wizard backend
+
+Plan: ../SETUP-WIZARD-PLAN.md (agreed with the Codex review). No UI change in this release.
+
+Changes:
+- app/setup_wizard.py (new): SetupState (setup.json: schema_version, state fresh|migrated|completed, cameras{validated,current,changes}); journaled transaction()/recover_interrupted_apply()/rollback() over settings.json, camera_profiles.json, connection.json, setup.json (backup in setup-backup/, journal setup-journal.json); merge_connection() (connection.json over cfg frigate/mqtt), missing_connections(); probe_stream() (local ffprobe on FrigateAPI.live_url, lock + 10 s timeout, no URL/stderr leaves the function); recommend(); restream_alias() (same choice as FrigateAPI._main_stream, tested); discover(); GeometryMonitor (first check 30 s after start, then every 600 s, skipped while recognition is active; setup.key = 32-byte HMAC key for source_digest); apply_setup(); effective_config().
+- app/setup_api.py (new): /api/setup/status, discover, cameras/{camera}/probe, recommend, apply, rollback, cameras/{camera}/validate, complete, effective, restart (Supervisor /addons/self/restart). All behind access1_admin.require_setup_admin (confirm header x-faceid-setup).
+- access1_admin: require_admin(request, confirm_header, purpose); require_pairing_admin unchanged in behaviour.
+- live_frames: CAMERA_DECODE {camera: (gpu, width, step)}; open_capture(url, decode=None) falls back to GPU_DECODE/DECODE_WIDTH/DECODE_STEP; LiveFrameReader(decode=...); a changed decode applies when the camera's reader is next created. vaapi_source keeps decode_width/decode_step for the start log line.
+- camera_profiles: optional gpu_decode/decode_width/decode_step (decode_override(), decode_map(), "decode" in get()); update() keeps them on a studio save.
+- stream_observation._inside_box: returns False while processor.setup_geometry says the camera's geometry is unvalidated or changed (anchor path untouched).
+- frigate_api: config(), live_url().
+- main: recovery + SetupState.initialize before migrations; connection overlay; setup mode skips processor.start and the connector when Frigate/MQTT is missing; CAMERA_DECODE from profiles; GeometryMonitor; effective configuration logged.
+- run.sh: no MQTT broker is a warning (setup mode), not a fatal exit.
+- webui /api/health: "setup" {state, setup_mode, cameras_to_check}.
+- Tests: tests/test_setup_wizard.py (probe, recommendations incl. Enterance -> GPU/1920/3, discovery, connection precedence, backup exclusion, geometry guard, journal/rollback, reader decode); tests/test_setup_startup.py (6.8.7 upgrade parity through main() twice, interrupted apply undone at start, rollback restores the 6.8.7 effective config, blank install in setup mode, saved connection leaves setup mode, every setup route admin-only, confirm header).
+- Deferred: walk-test dry run (no Access1 request) and the guided UI -> 6.9.1; site export and trimmed add-on options (frigate_url default still points at the test rig) -> 6.9.2.
+
+---
+
+
+# 6.8.7 Claude test build (on top of 6.8.6)
+
+Capture 30: access1_attempt_insert 485.9 ms of access1_pre_post 529.9 ms (gate held the recognition thread off).
+
+Changes:
+- access1._present: the attempt INSERT runs as `PRAGMA synchronous=NORMAL`, `BEGIN IMMEDIATE` (timed: access1_attempt_lock), INSERT + explicit commit (timed: access1_attempt_commit); IntegrityError rolls back and returns duplicate as before. Per-connection pragma; AuditStore._connect still sets FULL for every other connection.
+- Tests: tests/test_claude_attempt_commit.py (NORMAL before BEGIN IMMEDIATE before INSERT, row stored; duplicate refused without a second POST; stage order pre_insert/lock/commit/insert/pre_post; AuditStore connections stay FULL). The first and third fail on 6.8.6.
+- If access1_attempt_lock dominates in the next capture, the wait is behind other audit writes: next options are NORMAL for the whole audit DB or a separate file for access1_attempts.
+
+---
+
+# 6.8.6 Claude test build (on top of 6.8.5)
+
+Capture 29: access1_queue -> access1_post_started took 101 / 376 ms. Suspected cause: the connector's access1_attempts INSERT (same audit DB, WAL + synchronous=FULL, busy timeout 10 s) waiting on the recognition thread's concurrent audit writes.
+
+Changes:
+- access1.Access1Integration.enqueue returns a threading.Event (`_post_gate` in the queued event; None when nothing was queued). `_present` sets it right before `transport.call('POST', ...)`; `_worker` sets it in `finally` (blocked/duplicate/exception paths). `_release_post_gate` helper.
+- access1._present timings: `access1_pre_insert`, `access1_attempt_insert`, `access1_pre_post` (from the start of `_present`).
+- access1._poll_result: sleep schedule RESULT_POLL_SECONDS = (.1, .2, .3), indexed by job['polls'], last value repeats.
+- mqtt_listener: `_submit_access1` returns the gate; the recognized path waits on it (ACCESS1_POST_GATE_SECONDS = 0.5) before `_audit_flush`. Writes already queued on the audit writer thread (e.g. this frame's update_liveness) are not held; the new timings will show whether they still delay the insert.
+- Tests: tests/test_claude_post_gate.py (gate set by the time the POST is sent; released when blocked before the POST; pre-POST timing parts; poll schedule .1/.2/.3/.3; bookkeeping waits for the gate; wait bounded). 7 of 8 fail on 6.8.5.
+
+---
+
+# 6.8.5 Claude test build (on top of 6.8.4)
+
+Captures 27/28: lag 0 -> 771 ms over ~60 s at ~12.5 ms/s, read_wait ~120 ms, instant_reads 0%: stream clock drift, not backlog.
+
+Changes:
+- live_frames.LiveFrameReader.accept_position: `offset_window` (deque of (now, offset, live)), DRIFT_WINDOW = 10 s. If every entry's read blocked (>= INSTANT_READ_MS), clock_offset = window minimum (may rise with drift); otherwise clock_offset = min(clock_offset, offset) as before (strict, never rises). `min_offset` keeps the connection minimum; `drift_ms` = clock_offset - min_offset. `note_read` sets `last_read_live`; accept_position without note_read keeps the old strict behaviour. Window and baseline reset per connection.
+- mqtt_listener: `_submit_access1` (same payload and continuous_sighting/guard conditions) is called right after `recognition_complete`/`mqtt_to_recognition`, before `_audit_flush`, save_evidence, `_publish_notification` and the decision log.
+- recognition_capture: READER_SAMPLE includes drift_ms.
+- Tests: tests/test_claude_drift_and_order.py (steady drift never rejects - fails on 6.8.4; same drift with instant reads rejects; backlog after long drift and fast backlog with blocking reads are caught; Access1 queued before flush/evidence/notification).
+
+---
+
+# 6.8.4 Claude test build (on top of 6.8.3)
+
+Diagnostics only (agreed with Codex after captures 24/25). No behaviour change.
+
+Changes:
+- live_frames.LiveFrameReader: `note_read` (EWMA read wait, instant reads < 10 ms), `lag_ms` (offset minus the minimum offset, the value the 750 ms buffering rule tests), `_note_reopen` (reason, connected seconds, lag, read wait, generation, retry delay; INFO log), `_note_first_usable` (first accepted frame after a reopen; INFO log). `report()` carries reopens, reasons, last_reopen and read stats. A stop is not a reopen.
+- recognition_capture: `_container_cpu_usec` (cgroup v2 usage_usec, v1 cpuacct.usage) gives `container_cpu_percent_one_core`; `_reader_state` / `_reader_transitions_locked` add a per-sample `reader` block and run-level `reader_started` / `reader_reopen` / `reader_reopened` records.
+- Tests: tests/test_claude_reader_diagnostics.py.
+
+---
+
+# 6.8.3 Claude test build (on top of 6.8.2)
+
+Review of capture 21 with Codex: `_box_face` returned the bound `box_track` before the freshness/containment check, so later samples of a tracker ID did not prove a fresh box; a person replacing another in the same spot without overlapping faces could inherit the binding. With a warm reader, a frame from before the trigger could also be admitted.
+
+Changes:
+- stream_observation `_box_face`: no `box_track` shortcut; every box association calls `_inside_box` (fresh box <= 2 s, face centre inside, same aspect). `box_track` removed. Track re-keys still rebind only through `_box_face`.
+- `_associate`: skips a session when `record['arrived'] < session['started']` (`stream_frame_rejected` / `frame_before_event`).
+- `association_box` carries `box_age_ms`.
+- Tests (fail on 6.8.2, pass here): stale box after binding, replacement person in the same spot, pre-event frame.
+
+---
+
+# 6.8.2 Claude test build (on top of 6.8.1)
+
+6.8.1 log: each new VaapiCapture produced one frame and stalled. With rawvideo output FFmpeg's default video sync may duplicate frames (restream timestamp jumps at connect); `VaapiCapture.read` consumes exactly one frame per showinfo line, so an unreported duplicate blocks FFmpeg on the stdout pipe while the reader waits for stderr: a deadlock ended only by READ_TIMEOUT.
+
+Changes:
+- vaapi_source.command: `-vsync passthrough`; `framestep=STEP` replaces `fps=N` (count-based, timestamp-independent). VaapiCapture(step=3); live_frames.DECODE_STEP = 3.
+- frontend LiveFrame: `image.decode()` before swapping the blob frame.
+- diagnostic_mode.OPENVINO_TEST_BUILD = False: Access1 connector starts (user request; test rig, relay disconnected). `_live_access_camera()` is True again, so the live-access snapshot path and `live_work()` priority run as in production.
+
+---
+
+# 6.8.1 Claude test build (on top of 6.8.0)
+
+Capture 19 (6.8.0): VAAPI decoding worked, but readers stalled within seconds of connecting twice in a row (sequence stuck, `stale`, reconnect after the 3 s read timeout); the third reader ran through two walk-ups. Probable cause: `fps` ahead of `scale_vaapi` held decoder surfaces while pacing go2rtc's connect burst. The second walk-up on the open reader reached recognition in 2.84 s with 0.34 s sample spacing (chained steps, background audit writes).
+
+Changes:
+- vaapi_source.command: `scale_vaapi`, `hwdownload,format=nv12`, then `fps`, then `showinfo`; `-extra_hw_frames 8`; `-nostats`. READ_TIMEOUT 1.5 s; `stalled` is set when a read times out after frames.
+- live_frames: `_gpu_started` logs at the first GPU frame; `_gpu_result` logs stalls (at most once a minute). DECODE_WIDTH default 0 (native).
+- subject_association.ANCHOR_PITCH_LIMITS upper bound 0.26 (camera pitch for frontal faces measured 0.08-0.25).
+
+---
+
+# 6.8.0 Claude test build (on top of 6.7.9)
+
+Capture 16 and its log (6.7.9): `warm hold 0 s` (option saved as 0); `_process_face` wrote audit rows and a review JPEG synchronously for every pending-liveness sample (about 80 ms, once 0.9 s); stream steps waited for the 0.25 s sampler tick; the preview blinked because the visible image re-requested the no-store frame URL, and the frame route returned 503 while the CPU-decoded reader caught up. The opencv-python wheel bundles FFmpeg without libva, so OpenCV cannot use VAAPI.
+
+Changes:
+- vaapi_source.py: `VaapiCapture` runs the system FFmpeg (`-hwaccel vaapi`, `fps=10,scale_vaapi=w=W:h=-2,hwdownload,format=nv12,showinfo`) and reads bgr24 frames from the pipe; showinfo gives pts_time and frame size per frame. It implements isOpened/read/get(POS_MSEC)/release, so `LiveFrameReader.run` is unchanged apart from `open_capture`. Stderr (which contains the URL) is parsed, never logged.
+- live_frames.py: `open_capture` picks GPU when `GPU_DECODE`, the render node exists and no recent failure; `_gpu_result` records success, remembers whether showinfo accepted `checksum=0`, and after 3 frameless GPU sources falls back to CPU for 600 s. `stop()` kills a GPU source to unblock its read.
+- Dockerfile: amd64 adds `intel-media-va-driver`.
+- mqtt_listener.py: `_audit_later` (single background writer when `audit_async`, enabled by main.py; inline otherwise) for pending-liveness update_liveness/observation/save_evidence, per-sample update_liveness and non-final observations; `_audit_flush` before recognized/ignored final writes. audit.py `observation(ts=...)`.
+- stream_observation.py `_work`: chains the next step when the step admitted a frame and a session still needs evidence.
+- frontend LiveFrame: fetch -> blob URL -> show; revoke replaced URLs; outage notice after 3 failures and 5 s without a frame.
+
+Not verifiable offline: VAAPI decoding itself (no Intel GPU on the build host). The fake-process tests cover parsing, frame assembly, release and fallback; on the rig the log line shows which decoder runs.
+
+---
+
+# 6.7.9 Claude test build (on top of 6.7.8)
+
+Capture 15 (6.7.8): FaceTracker keeps each track's first embedding (cosine >= .65 to continue). Approaching from the far side, consecutive faces fell below that against the first, far and angled sighting, so `_associate` reset evidence on every frame (`face_track_changed`); recognition needed 6-18 attempts.
+
+Changes:
+- stream_observation.py `_associate`: on a track key change, if `_box_face` binds the face (box association on, lone session, one detected face and track, inside the fresh box or the bound `box_track`), note `face_track_rebound` instead of resetting. Liveness and identity checks in `_process_face` are unchanged: a sample whose identity is not confirmed still clears the history.
+- live_frames.py `release_observation`: also lingers when a calibration (preview) lease holds the camera.
+- recognition_capture.py: `warm_readers`/`warm_seconds` in capacity; reset, rejection and rebound stages are evicted last.
+- main.py: startup log of the warm hold and decoder threads.
+
+Capture 15 also showed the warm reader off at runtime (reader retired right after each event with 30-37 s gaps); the new startup line shows the applied value.
+
+---
+
+# 6.7.8 Claude test build (on top of 6.7.7)
+
+Capture 13 (6.7.7): first anchor fetch at 0.33 s returned `metadata_not_ready`; ANCHOR_RETRY_SECONDS (2 s, two attempts) delayed the anchor to 3.36 s while the stream face was ready at 1.82 s. Recognition took 4.9 s instead of about 3.3 s.
+
+Changes:
+- stream_observation.py: transient anchor failures (TRANSIENT_ANCHOR) retry every ANCHOR_TRANSIENT_INTERVAL = 0.3 s up to ANCHOR_TRANSIENT_RETRIES = 8 fetches. The snapshot path in mqtt_listener.py keeps its own 2 s rule.
+- `_inside_box` is split from `_box_face`. In `_step_model`, a lone session without an anchor, with exactly one detected and usable face inside the fresh box, calls `_associate(..., anchorless=True)`; a pending anchor is passed to `mutual_assignments` as an invalid vector so only the box rule can bind it. Otherwise the early-candidate path is unchanged. The anchor fetch continues and is used normally once ready.
+- frontend Security.jsx LiveFrame: off-screen preload with swap on load, last frame kept through up to two failures, aspect ratio reset only on camera change.
+- GPU (VAAPI) decoding was not added: the image has no VA driver and the reader is OpenCV-based. Decide after the warm-reader test.
+
+---
+
+# 6.7.7 Claude test build (on top of 6.7.6)
+
+6.7.6 field capture: four anchor fetches returned the identical Frigate best snapshot (198 px, sharpness 0.24, frontal 0.53), so the refresh could not help; a sharp frontal stream face (140-180 px) scored 0.19-0.29 for 19 s. Frigate's best snapshot is chosen by person score and box area, not face quality, and need not change during an approach.
+
+Changes:
+- stream_observation.py: `_box_face` binds the one face inside Frigate's current person box (from MQTT new/update `box` + `frame_time`, scaled by `FrigateAPI.detect_size`) when the anchor gives no assignment. Preconditions: `processor.box_association`, exactly one active session on the camera, exactly one detected face and one track, box frame time within 2 s of the frame, matching aspect ratio. The bound track key (`box_track`) keeps association while it stays the only face; any evidence reset clears it.
+- `_prepare_anchor` hashes the crop; an identical refresh skips the model and does not consume the refresh budget.
+- live_frames.py: `DECODE_THREADS` (option `stream_decode_threads`, default 2).
+- main.py: `stream_warm_seconds` default 0.
+- tests: box rule (inside, outside, stale, disabled, second event, second face) and unchanged-crop refresh. `test_snapshot_subject_association.run_frame` now uses strictly increasing timestamps; it was flaky on Windows where two frames could share one clock tick.
+
+Trust note: the box rule replaces the anchor's embedding check by Frigate's spatial binding only for a lone person event with a lone face. Identity (0.50/0.08), liveness and three samples still apply. Frigate and FaceID must share a clock (same host) for the 2 s box age check; otherwise the rule never fires and the anchor decides.
+
+---
+
+# 6.7.6 Claude test build (on top of 6.7.5)
+
+Field captures 8-10 on 6.7.5 showed GPU compute is no longer the bottleneck (detection 180 ms, embedding 100 ms, anchor 0.3 s; one recognition in 4.7 s). Failed walk-ups came from the event anchor: Frigate's first crop was blurred or the head was turned down to a phone, and that one embedding was used for the whole event, so stream faces scored 0.2-0.45 against the 0.65 association threshold. The 6.7.5 CPU build failed the same way.
+
+Changes:
+- stream_observation.py: anchors are graded (anchor_grade in subject_association.py). A weak anchor, or one with 2 consecutive unmatched frames, is replaced by a newer Frigate crop while no subject is associated: at most 3 refreshes, 0.75 s apart, and only by a strong or better-ranked crop. The swap resets evidence. Crops without exactly one usable face retry up to 4 times.
+- quality.py: FaceQuality.pitch (signed; 0 frontal, positive down) from the five landmarks. Used only to grade the anchor.
+- live_frames.py: LiveFramePool.observation_linger keeps a released observation reader for stream_warm_seconds (default 60); one idle reader at most.
+- native_openvino.py: static [1,3,112,112] recognizer (rows run one by one), INFERENCE_NUM_THREADS = cpu_threads on OpenVINO CPU, 3 warmup passes.
+- recognition_capture.py: snapshot_skipped folds per reason with repeat_count; lifecycle stages are evicted last; association_match carries face geometry.
+
+Unchanged: identity (0.50/0.08), association (0.65/0.08), liveness, freshness, the 10 s evidence window, three samples, two-person handling, backend fallback rules.
+
+Caveat: with Access1 disabled, _live_access_camera() is False, so the snapshot path and live_work() priority differ from production. The stream observer does not depend on it, but production may contend for the inference lock differently.
+
+---
+
 FaceID 6.7.2 integration handoff — 2026-11-09
 
 BASE AND SCOPE

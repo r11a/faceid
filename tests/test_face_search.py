@@ -309,5 +309,238 @@ class FaceSearchTests(unittest.TestCase):
             self.assertEqual(con.execute('SELECT COUNT(*) FROM face_scan_attempts').fetchone()[0],0)
 
 
+
+    def test_local_scan_limit_advances_without_repeating_empty_images(self):
+        calls = []
+        self.engine.faces = lambda image: calls.append(True) or []
+        for i in range(4):
+            self.event(f'empty-{i}', 'yard', 100+i)
+            self.audit.save_evidence(f'empty-{i}', np.zeros((100,100,3), dtype=np.uint8))
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing(limit=2)
+            self.assertEqual(len(calls), 2)
+            self.search.index_existing(limit=2)
+            self.assertEqual(len(calls), 4)
+            self.search.index_existing(limit=4)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(self.search.index_status['cached_no_faces'], 4)
+        self.assertEqual(self.search.coverage()['events_indexed'], 0)
+
+    def test_negative_cache_survives_restart_but_image_model_and_force_invalidate(self):
+        from app.face_search import FaceSearch
+        calls = []
+        self.engine.faces = lambda image: calls.append(True) or []
+        self.event('empty', 'yard', 100)
+        path = self.audit.save_evidence('empty', np.zeros((100,100,3), dtype=np.uint8))
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing()
+            restored = FaceSearch(self.audit, self.gallery, self.engine)
+            restored.index_existing()
+            self.assertEqual(len(calls), 1)
+            self.engine.det_size = 320
+            restored.index_existing()
+            self.assertEqual(len(calls), 2)
+            restored.index_existing(force=True)
+            self.assertEqual(len(calls), 3)
+            self.audit.save_evidence('empty', np.ones((120,120,3), dtype=np.uint8))
+            restored.index_existing()
+            self.assertEqual(len(calls), 4)
+
+    def test_negative_cache_invalidates_on_model_file_and_preprocessor_change(self):
+        from app.face_search import FaceSearch
+        model = self.root / 'detector.onnx'
+        model.write_bytes(b'first')
+        self.engine.app = SimpleNamespace(models={'detection':SimpleNamespace(model_file=str(model))})
+        calls = []
+        self.engine.faces = lambda image: calls.append(True) or []
+        self.event('model-change', 'yard', 100)
+        self.audit.save_evidence('model-change', np.zeros((100,100,3), dtype=np.uint8))
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing()
+            model.write_bytes(b'new model')
+            self.search.index_existing()
+            with patch('app.face_search.INDEX_PREPROCESSOR', 'next-preprocessor'):
+                self.search.index_existing()
+        self.assertEqual(len(calls), 3)
+
+    def test_remote_negative_cache_uses_image_fingerprint_and_errors_are_retryable(self):
+        self.event('remote-empty', 'yard', 100)
+        calls = []
+        self.engine.faces = lambda image: calls.append(True) or []
+        image = np.zeros((100,100,3), dtype=np.uint8)
+        self.search.frigate = SimpleNamespace(snapshot=lambda *a, **kw: image)
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing(remote=True)
+            self.search.index_existing(remote=True)
+            self.assertEqual(len(calls), 1)
+            image[:] = 1
+            self.search.index_existing(remote=True)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.search.index_status['cached_no_faces'], 1)
+
+    def test_inference_failure_and_decode_failure_do_not_create_negative_cache(self):
+        self.event('retry', 'yard', 100)
+        path = self.audit.save_evidence('retry', np.zeros((100,100,3), dtype=np.uint8))
+        self.engine.faces = lambda image: (_ for _ in ()).throw(RuntimeError('temporary inference failure'))
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing()
+            with self.audit._connection() as con:
+                self.assertEqual(con.execute('SELECT COUNT(*) FROM face_index_empty').fetchone()[0], 0)
+            self.engine.faces = lambda image: [self.face]
+            self.search.index_existing()
+        self.assertEqual(len(self.search.sample_vectors(event_id='retry')), 1)
+        self.event('bad-image', 'yard', 101)
+        bad = self.audit.evidence_path('bad-image')
+        bad.write_bytes(b'not a JPEG')
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing()
+        with self.audit._connection() as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM face_index_empty').fetchone()[0], 0)
+
+    def test_negative_cache_removed_with_deleted_history(self):
+        self.event('empty-private', 'yard', 100, person='Alice')
+        self.audit.save_evidence('empty-private', np.zeros((100,100,3), dtype=np.uint8))
+        self.engine.faces = lambda image: []
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing()
+        self.audit.delete_person_history('Alice')
+        with self.audit._connection() as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM face_index_empty').fetchone()[0], 0)
+
+    def test_unknown_recovery_obeys_local_limit_without_redetection(self):
+        for i in range(3):
+            eid = f'unknown-{i}'
+            self.event(eid, 'yard', 100+i)
+            self.gallery.save_unknown(np.zeros((80,80,3), dtype=np.uint8), vector(), {'event_id':eid})
+        self.engine.faces = lambda image: self.fail('stored vectors must be reused')
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing(limit=1)
+        self.assertEqual(self.search.index_status['total'], 1)
+        self.assertEqual(self.search.coverage()['events_indexed'], 1)
+
+    def test_automatic_index_waits_for_thirty_idle_seconds_after_foreground_work(self):
+        clock = [0.0]
+        self.search._idle_since = 0
+        activity = {'active':True, 'last_activity_monotonic':0.0}
+        self.engine.live_activity = lambda: activity.copy()
+        def advance(seconds):
+            clock[0] += seconds
+            if clock[0] >= 3:
+                activity.update(active=False, last_activity_monotonic=3.0)
+        with patch('app.face_search.time.monotonic', side_effect=lambda: clock[0]), patch('app.face_search.time.sleep', side_effect=advance):
+            self.search._wait_for_idle(True)
+        self.assertGreaterEqual(clock[0], 33.0)
+        self.assertFalse(self.search.index_status['waiting_for_idle'])
+
+    def test_batch_image_limit_resumes_same_cursor_and_live_work_preempts_next_image(self):
+        calls, pauses = [], []
+        clock = [100.0]
+        self.search._idle_since = 0
+        for i in range(30):
+            self.event(f'batch-{i}', 'yard', 100+i)
+            self.audit.save_evidence(f'batch-{i}', np.zeros((100,100,3), dtype=np.uint8))
+        active = [False]
+        def infer(image):
+            calls.append(clock[0])
+            if len(calls) == 3:
+                active[0] = True
+            return [self.face]
+        self.engine.faces = infer
+        self.search._live_activity = lambda: active[0]
+        def advance(seconds):
+            if seconds == .25:
+                pauses.append(len(calls))
+                active[0] = False
+            clock[0] += seconds
+        with patch('app.face_search.time.monotonic', side_effect=lambda: clock[0]), patch('app.face_search.time.sleep', side_effect=advance):
+            self.search.index_existing(automatic=True)
+        self.assertEqual(len(calls), 30)
+        self.assertIn(3, pauses)
+        self.assertIn(28, pauses)
+        self.assertGreaterEqual(calls[28]-calls[27], 30)
+        self.assertEqual(self.search.coverage()['events_indexed'], 30)
+
+    def test_slow_single_model_call_finishes_then_batch_yields(self):
+        clock = [100.0]
+        calls = []
+        self.search._idle_since = 0
+        for i in range(2):
+            self.event(f'slow-{i}', 'yard', 100+i)
+            self.audit.save_evidence(f'slow-{i}', np.zeros((100,100,3), dtype=np.uint8))
+        def infer(image):
+            calls.append(clock[0])
+            clock[0] += 6
+            return [self.face]
+        self.engine.faces = infer
+        def advance(seconds):
+            clock[0] += seconds
+        with patch('app.face_search.time.monotonic', side_effect=lambda: clock[0]), patch('app.face_search.time.sleep', side_effect=advance):
+            self.search.index_existing(automatic=True)
+        self.assertEqual(len(calls), 2)
+        self.assertGreaterEqual(calls[1]-calls[0], 36)
+
+    def test_explicit_force_requires_verified_admin_and_preserves_normal_api(self):
+        with patch.object(self.search, 'start_index', return_value={'running':True}) as start:
+            response = self.client.post('/api/faces/index?force=true')
+            self.assertEqual(response.status_code, 403)
+            start.assert_not_called()
+            response = self.client.post('/api/faces/index?limit=7')
+            self.assertEqual(response.status_code, 200)
+            start.assert_called_once_with(remote=False, limit=7, force=False)
+        from unittest.mock import AsyncMock
+        with patch('app.access1_admin.require_pairing_admin', new_callable=AsyncMock, return_value='verified'), patch.object(self.search, 'start_index', return_value={'running':True}) as start:
+            response = self.client.post('/api/faces/index?force=true&limit=9')
+            self.assertEqual(response.status_code, 200)
+            start.assert_called_once_with(remote=False, limit=9, force=True)
+
+    def test_idle_activity_ignores_completed_events_but_keeps_pending_acquisition(self):
+        import threading
+        from app.face_search import recognition_active
+        processor = SimpleNamespace(_jobs_lock=threading.RLock(), _queued_jobs=set(), _deferred_jobs={}, events={},
+            stream_observations=SimpleNamespace(lock=threading.RLock(), sessions={}, pending=set()),
+            continuous=SimpleNamespace(lock=threading.RLock(), pending=set()))
+        processor.events['done'] = {'done':True, 'processing_lock':threading.Lock()}
+        self.assertFalse(recognition_active(processor))
+        processor.stream_observations.sessions['stream'] = {}
+        self.assertTrue(recognition_active(processor))
+        processor.stream_observations.sessions.clear()
+        processor._queued_jobs.add(('id', 'snapshot'))
+        self.assertTrue(recognition_active(processor))
+
+
+
+    def test_unknown_recovery_without_engine_still_reuses_stored_vectors(self):
+        self.event('engine-off', 'yard', 100)
+        self.gallery.save_unknown(np.zeros((80,80,3), dtype=np.uint8), vector(), {'event_id':'engine-off'})
+        self.search.engine = None
+        with patch('app.face_search.time.sleep'):
+            self.search.index_existing()
+        self.assertEqual(len(self.search.sample_vectors(event_id='engine-off')), 1)
+
+
+
+    def test_remote_cached_images_still_obey_decode_batch_budget(self):
+        clock, received = [100.0], []
+        image = np.zeros((100,100,3), dtype=np.uint8)
+        self.engine.faces = lambda image: []
+        for i in range(27):
+            eid = f'remote-cached-{i}'
+            self.event(eid, 'yard', 100+i)
+            self.search._index_image(eid, image)
+        self.engine.faces = lambda image: self.fail('successful empty results must be reused')
+        def snapshot(eid, crop):
+            received.append(clock[0])
+            return image
+        self.search.frigate = SimpleNamespace(snapshot=snapshot)
+        self.search._idle_since = 0
+        def advance(seconds):
+            clock[0] += seconds
+        with patch('app.face_search.time.monotonic', side_effect=lambda: clock[0]), patch('app.face_search.time.sleep', side_effect=advance):
+            self.search.index_existing(remote=True, automatic=True)
+        self.assertEqual(len(received), 27)
+        self.assertGreaterEqual(received[25]-received[24], 30)
+        self.assertEqual(self.search.index_status['cached_no_faces'], 27)
+
+
 if __name__ == '__main__':
     unittest.main()

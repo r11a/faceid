@@ -89,12 +89,16 @@ class InferenceLock:
 class FaceEngine:
     supports_embedding_timing = True
     def __init__(self, det_size: int = 640, providers=None, backend: str = "auto",
-                 cpu_threads: int = 0, cpu_allow_spinning: bool = True):
+                 cpu_threads: int = 0, cpu_allow_spinning: bool = True, native_cache_dir=None):
         from insightface.app import FaceAnalysis
         import onnxruntime as ort
 
         available = ort.get_available_providers()
-        providers = providers or self.providers_for_backend(backend, available)
+        from .native_openvino import NATIVE_BACKENDS
+        native_devices = NATIVE_BACKENDS.get(backend) if providers is None else None
+        providers = providers or self.providers_for_backend("cpu" if native_devices else backend, available)
+        self.backend_generation = 0
+        self.native_device = None
         self.backend = backend
         self.providers = providers
         self.available_providers = available
@@ -161,7 +165,60 @@ class FaceEngine:
         self._stream_frame_unavailable = 0
         self._stream_frame_rejected = 0
         self.embedding_warmup = {"state": "not_started", "elapsed_ms": None}
-        self._prepare_embedding()
+        if native_devices:
+            self._native_originals = {task: model.session for task, model in self.app.models.items()}
+            detector = self.app.models["detection"]
+            if hasattr(detector, "static_shape_sessions"):
+                self._native_detector_static_shapes = detector.static_shape_sessions
+            self._native_cache_dir = native_cache_dir or "/data/model-cache/openvino"
+            self._select_native(native_devices)
+        if self.native_device is None:
+            self._prepare_embedding()
+
+    def _select_native(self, devices):
+        from .native_openvino import PROVIDER, prepare_sessions
+
+        for device in devices:
+            try:
+                sessions, setup_ms, warm_ms = prepare_sessions(
+                    self.app.models, device, self.det_size, self._native_cache_dir,
+                    cpu_threads=self.cpu_threads)
+            except Exception as error:
+                log.warning("Native OpenVINO %s startup failed (%s)", device, type(error).__name__)
+                continue
+            self.native_device = sessions["detection"].device
+            self.providers = [PROVIDER]
+            if hasattr(self, "_native_detector_static_shapes"):
+                # SCRFD would otherwise derive an ORT session for the input
+                # resolution. The native session is already compiled for it.
+                self.app.models["detection"].static_shape_sessions = False
+            for task, session in sessions.items():
+                self.app.models[task].session = session
+                self.models[task]["providers"] = [PROVIDER]
+                session.on_failure = self._native_failed
+            self.embedding_warmup = {"state": "ready", "elapsed_ms": warm_ms}
+            log.info("Native OpenVINO selected device=%s setup_ms=%s warmup_ms=%s",
+                     self.native_device, setup_ms, warm_ms)
+            return
+        log.warning("Using ONNX Runtime CPU after native OpenVINO setup failed")
+
+    def _native_failed(self):
+        # Called under the inference scheduler. Never retry the failed call.
+        failed_device = self.native_device
+        self.backend_generation += 1
+        self.native_device = None
+        self.providers = ["CPUExecutionProvider"]
+        if hasattr(self, "_native_detector_static_shapes"):
+            self.app.models["detection"].static_shape_sessions = self._native_detector_static_shapes
+        for task, session in self._native_originals.items():
+            self.app.models[task].session = session
+            self.models[task]["providers"] = session.get_providers()
+        log.error("OpenVINO device=%s failed; invalidated recognition evidence", failed_device)
+        if failed_device and failed_device.startswith("GPU"):
+            self._select_native(("CPU",))
+        self.backend_generation += 1
+        log.info("Recognition fallback device=%s generation=%s",
+                 self.native_device or "ONNX Runtime CPU", self.backend_generation)
 
     def _prepare_embedding(self):
         """One CPU inference before event processing; never creates face evidence."""
@@ -213,6 +270,12 @@ class FaceEngine:
             )
         return requested
 
+    @property
+    def active_backend(self):
+        if self.native_device:
+            return "openvino_gpu" if self.native_device.startswith("GPU") else "openvino_cpu"
+        return "cpu" if self.providers == ["CPUExecutionProvider"] else self.backend
+
     def health(self):
         with self._metrics_lock:
             samples = list(self._inference_ms)
@@ -227,6 +290,9 @@ class FaceEngine:
         })
         return {
             "backend": self.backend,
+            "active_backend": self.active_backend,
+            "native_device": self.native_device,
+            "backend_generation": self.backend_generation,
             "cpu_tuning": {"threads": self.cpu_threads, "allow_spinning": self.cpu_allow_spinning,
                            "applied": self.cpu_tuning_applied},
             "providers": self.providers,

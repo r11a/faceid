@@ -31,6 +31,11 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y build-essential && apt-get autoremove -y
 
+RUN if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get update \
+    && apt-get install -y --no-install-recommends intel-opencl-icd ocl-icd-libopencl1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir openvino==2025.4.1; fi
+
 COPY app app
 COPY static static
 COPY scripts scripts

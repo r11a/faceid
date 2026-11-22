@@ -54,8 +54,9 @@ def runtime_limits():
 
 class DecodeReader:
     """One temporary decoder, one latest-frame slot; never queue old images."""
-    def __init__(self, url, seconds=45):
+    def __init__(self, url, seconds=45, observer=None):
         self.url, self.seconds = url, seconds
+        self.observer = observer
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.latest = None
@@ -79,6 +80,7 @@ class DecodeReader:
             if not capture.isOpened():
                 with self.lock:self.stats['error'] = 'decoder_open_failed'
                 return
+            opened = time.monotonic()
             while not self.stop_event.is_set() and time.monotonic()-begin < self.seconds:
                 started, cpu = time.monotonic(), time.thread_time()
                 ok, frame = capture.read()
@@ -101,15 +103,20 @@ class DecodeReader:
                     minimum_offset = offset if minimum_offset is None else min(minimum_offset,offset)
                     relative_backlog = max(0.,offset-minimum_offset)*1000
                     if relative_backlog > 750:reason='decoder_relative_backlog'
+                generation = None
+                if self.observer is not None:
+                    reason, generation = self.observer(capture, frame, pts, now, opened, now-started)
                 with self.lock:
                     self.stats['decoded_frames'] += 1
                     self.stats['read_ms_total'] += (now-started)*1000
                     self.stats['reader_thread_cpu_ms'] += (time.thread_time()-cpu)*1000
-                    if reason:self.stats[reason] += 1
+                    if reason:self.stats[reason] = self.stats.get(reason, 0) + 1
                     self.stats['relative_backlog_max_ms']=round(max(self.stats['relative_backlog_max_ms'],relative_backlog),2)
                     self.stats.setdefault('first_decoded_frame_ms', round((now-begin)*1000, 2))
                     self.stats['resolution'] = [int(frame.shape[1]), int(frame.shape[0])]
                     self.latest = (self.stats['decoded_frames'], now, pts, reason, frame)
+                    if generation is not None:
+                        self.latest += (generation,)
         except Exception:
             with self.lock:self.stats['error'] = 'decoder_failed'
         finally:
@@ -183,6 +190,7 @@ def run_decode(processor, camera, url, *, seconds=45, reader_factory=DecodeReade
     begin = time.monotonic()
     trial_begin = begin
     last_seq = 0
+    last_generation = None
     hashes = set()
     embedding_hashes = set()
     history = []
@@ -207,7 +215,11 @@ def run_decode(processor, camera, url, *, seconds=45, reader_factory=DecodeReade
                 if stats.get('finished'):break
                 time.sleep(.05)
                 continue
-            seq, received, pts, pts_reason, frame = item
+            seq, received, pts, pts_reason, frame = item[:5]
+            if len(item) > 5 and last_generation != item[5]:
+                last_generation = item[5]
+                history=[];subject=None;accumulator=DecisionAccumulator(policy)
+                model_samples=0;model_subject=None
             last_seq = seq
             next_sample=time.monotonic()+sample_interval
             sample = {'sequence':seq,'arrival_since_start_ms':round((received-begin)*1000,2),
@@ -312,6 +324,10 @@ def run_decode(processor, camera, url, *, seconds=45, reader_factory=DecodeReade
                 # Timing can be measured on rejected samples, but they never count.
                 if pts_reason:reject(pts_reason);history=[];continue
                 if time.monotonic()-received >= 10:reject('processing_exceeded_evidence_window');history=[];continue
+                if len(item) > 5:
+                    latest, _ = reader.take()
+                    if latest is None or latest[5] != item[5]:
+                        reject('stream_generation_changed_during_inference');continue
                 if pad.get('live') is not True:reject('liveness_'+str(pad.get('state','unavailable')));history=[];continue
                 if decision.status not in ('recognized','recognized_candidate'):
                     reject('identity_'+decision.status);history=[];continue

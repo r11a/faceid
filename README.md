@@ -1,3 +1,44 @@
+# FaceID 6.9.5
+
+Includes native OpenVINO and VAAPI support, anchor refresh and guided setup.
+Fixes gradual stream backlog detection and bounds ordered audit writes.
+Update the existing FaceID add-on from the r11a/faceid repository in Home Assistant.
+Refresh the add-on store if the update has not appeared, then open FaceID and select Update.
+Create a Home Assistant add-on backup before updating.
+
+Video timing now uses a strict connection baseline. Cameras with clock drift may
+reconnect. Slow storage applies backpressure to audit writes and final evidence
+waits for pending writes. Validate recognition and Access1 on the target hardware.
+
+## Earlier documentation
+
+# FaceID 6.7.4
+
+Operational build. Restores automatic recognition and Access1, restores full recognition capture and retains the timestamp comparison. See the short test guide for a live output check.
+
+## Previous builds
+
+# FaceID 6.7.3-timestamp1
+
+Temporary isolated timestamp test. The automatic recognition worker and Access1 connector are paused. Follow the short test guide for the single report and operational rollback.
+
+## Operational 6.7.2 reference documentation
+
+# FaceID 6.7.2
+
+Merged operational candidate; ready for rig validation. Calibration follows the
+saved camera recognition source. Existing subject association, liveness and
+Access1 safeguards remain. No field speed or success-rate claim is made.
+
+[English installation and test guide](docs/INSTALL-AND-COMMISSION-EN.txt) ·
+[מדריך התקנה ובדיקה](docs/INSTALL-AND-COMMISSION-HE.txt) ·
+[Developer handoff](docs/DEVELOPER-HANDOFF.txt) · [Tests](docs/TEST-RESULTS.txt)
+
+Manual calibration never submits access. Normal automatic recognition can still
+submit access while diagnostics are open, according to the saved settings.
+
+## Historical technical notes (superseded by the guides above where different)
+
 # FaceID 6.6.11-access1.test1 — operational test build
 
 Automatic recognition and the Access1 connector are restored according to saved

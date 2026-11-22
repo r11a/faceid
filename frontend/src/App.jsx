@@ -2,7 +2,7 @@ import React, { Component, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, AlertTriangle, BookOpenCheck, Bot, Camera, ChevronLeft,
   ClipboardCheck, DoorOpen, Gauge, Home, Images, Moon, Search, Settings,
-  ShieldCheck, Sparkles, Sun, UserPlus, Users, Wrench, X,
+  ShieldCheck, Sparkles, Sun, UserPlus, Users, WandSparkles, Wrench, X,
 } from "lucide-react";
 import { api } from "./api.js";
 import { useResource } from "./hooks.js";
@@ -15,8 +15,9 @@ import { Access1Page } from "./pages/Access1.jsx";
 import { CamerasPage, GuestsPage, IntercomPage, LivenessPage } from "./pages/Security.jsx";
 import { AutomationsPage, HealthPage } from "./pages/Management.jsx";
 import { AdvancedPage, CalibrationPage, LearningPage, SettingsPage } from "./pages/Advanced.jsx";
+import { SetupPage } from "./pages/Setup.jsx";
 
-const VERSION = "6.7.2 • RIG VALIDATION / בדיקת מערכת";
+const VERSION = "6.9.5 • CLAUDE TEST BUILD";
 const pages = {
   home: { title: "מבט כללי", subtitle: "אירועים ומיקומים אחרונים", icon: Home, component: DashboardPage },
   review: { title: "דורש טיפול", subtitle: "אישור מהיר של אירועים לא ודאיים", icon: ClipboardCheck, component: ReviewPage },
@@ -33,6 +34,7 @@ const pages = {
   health: { title: "תקינות המערכת", subtitle: "Frigate, MQTT, ביצועים ואחסון", icon: Gauge, component: HealthPage },
   learning: { title: "למידה מבוקרת", subtitle: "כלי שיפור שאינם משנים זהות לבד", icon: BookOpenCheck, component: LearningPage },
   calibration: { title: "כיול דיוק", subtitle: "המלצות המבוססות על אימותים שלך", icon: Sparkles, component: CalibrationPage },
+  setup: { title: "אשף הגדרה", subtitle: "חיבור, מצלמות ובדיקת הליכה", icon: WandSparkles, component: SetupPage },
   settings: { title: "הגדרות", subtitle: "ברירות מחדל, פרטיות וגיבוי", icon: Settings, component: SettingsPage },
   advanced: { title: "כלים מתקדמים", subtitle: "גוף, סנכרון, מפה, לוגים וכלי מנוע", icon: Wrench, component: AdvancedPage },
 };
@@ -41,11 +43,11 @@ const workspaces = [
   { id: "activity", title: "פעילות", icon: Activity, home: "home", pages: ["home", "review", "events"] },
   { id: "people", title: "אנשים", icon: Users, home: "people", pages: ["people", "faces"] },
   { id: "cameras", title: "מצלמות", icon: Camera, home: "live", pages: ["live", "intercom"] },
-  { id: "management", title: "ניהול", icon: Settings, home: "management", pages: ["management", "health", "access1", "guests", "automations", "settings"] },
+  { id: "management", title: "ניהול", icon: Settings, home: "management", pages: ["management", "setup", "health", "access1", "guests", "automations", "settings"] },
 ];
 const expertPages = ["liveness", "learning", "calibration", "advanced"];
 const managementItems = [
-  ["live", "מצלמות", "blue"], ["access1", "בקרת כניסה", "orange"],
+  ["setup", "אשף הגדרה", "green"], ["live", "מצלמות", "blue"], ["access1", "בקרת כניסה", "orange"],
   ["people", "אנשים ותמונות ייחוס", "rose"], ["automations", "חיבורים ואוטומציות", "green"],
   ["guests", "אורחים", "violet"], ["health", "מצב המערכת", "gold"],
   ["events", "יומן אירועים", "neutral"], ["settings", "הגדרות", "orange"],
@@ -99,6 +101,13 @@ function Shell() {
     searchInput.current?.focus();
     return () => previous?.focus?.();
   }, [searchOpen]);
+  // A blank installation opens the setup wizard once; an upgrade keeps its dashboard.
+  const setupOpened = useRef(false);
+  useEffect(() => {
+    if (setupOpened.current || health.data?.setup?.state !== "fresh") return;
+    setupOpened.current = true;
+    if (page === "home") navigate("setup");
+  }, [health.data, page]);
   const navigate = id => { location.hash = `/${id}`; setPage(id); if (expertPages.includes(id)) setExpert(true); setSearchOpen(false); setSearch(""); };
   const workspace = workspaces.find(item => item.pages.includes(page)) || workspaces[3];
   const showExpert = expert;

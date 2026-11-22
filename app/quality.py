@@ -4,6 +4,10 @@ from dataclasses import asdict, dataclass
 import cv2
 import numpy as np
 
+# Eye-to-nose share of the eye-to-mouth height in the ArcFace alignment
+# template (eyes y=51.7, nose 71.7, mouth 92.4 at 112 px).
+NEUTRAL_PITCH_RATIO = 0.49
+
 
 @dataclass
 class FaceQuality:
@@ -15,6 +19,9 @@ class FaceQuality:
     contrast: float
     frontal: float
     usable: bool
+    # Signed vertical head pose from the five landmarks: 0 is frontal,
+    # positive looks down, negative looks up. None without five landmarks.
+    pitch: float | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -45,6 +52,7 @@ def measure_face_quality(
     detection = float(face.det_score)
 
     frontal = 0.5
+    pitch = None
     kps = getattr(face, "kps", None)
     if kps is not None and len(kps) >= 3:
         left_eye, right_eye, nose = np.asarray(kps[:3], dtype=np.float32)
@@ -53,6 +61,11 @@ def measure_face_quality(
         yaw_offset = abs(float(nose[0] - eye_mid[0])) / eye_span
         roll = abs(float(left_eye[1] - right_eye[1])) / eye_span
         frontal = max(0.0, 1.0 - 1.8 * yaw_offset - 0.8 * roll)
+        if len(kps) >= 5:
+            mouth_y = float(np.asarray(kps[3:5], dtype=np.float32)[:, 1].mean())
+            span = mouth_y - float(eye_mid[1])
+            if span > 1.0:
+                pitch = float(nose[1] - eye_mid[1]) / span - NEUTRAL_PITCH_RATIO
 
     size_score = min(1.0, face_px / max(float(min_face_px * 2), 1.0))
     score = (
@@ -67,4 +80,5 @@ def measure_face_quality(
     return FaceQuality(
         round(score, 4), face_px, round(detection, 4), round(sharpness, 4),
         round(illumination, 4), round(contrast, 4), round(frontal, 4), usable,
+        None if pitch is None else round(pitch, 4),
     )

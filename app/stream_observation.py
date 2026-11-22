@@ -18,14 +18,53 @@ from uuid import uuid4
 import numpy as np
 import cv2
 
-from .frigate_api import fetch_anchor, TRANSIENT_ANCHOR, ANCHOR_RETRY_SECONDS
+from .frigate_api import fetch_anchor, TRANSIENT_ANCHOR
 from .decision import DecisionAccumulator
 from .face_tracks import FaceTracker
 from .quality import measure_face_quality
-from .subject_association import single_anchor, usable_faces, mutual_assignments
+from .subject_association import anchor_grade, single_anchor, usable_faces, mutual_assignments
 from .recognition_capture import active as capture_active, emit as capture_emit, preview as capture_preview
 
 SOURCE = 'bounded_local_stream'
+ANCHOR_REFRESH_LIMIT = 3        # replacement crops fetched per event
+ANCHOR_REFRESH_INTERVAL = 0.75  # seconds between anchor fetches
+ANCHOR_MISS_LIMIT = 2           # consecutive unmatched frames before a refresh
+ANCHOR_FACE_RETRIES = 4         # crops without one usable face before giving up
+ANCHOR_TRANSIENT_RETRIES = 8    # fetches while Frigate's event is not stored yet
+ANCHOR_TRANSIENT_INTERVAL = 0.3 # seconds; the MQTT event precedes the database row
+BOX_MAX_AGE = 2.0               # seconds between Frigate's person box and the stream frame
+BOX_MARGIN = 0.15               # box growth per side for detect/stream timing differences
+
+
+_NO_ANCHOR = np.zeros(1, np.float32)
+
+
+def _frigate_box(after):
+    """Validated person box (detect pixels) and its frame time from a Frigate event."""
+    try:
+        box = [float(value) for value in after.get('box')]
+        frame_time = float(after.get('frame_time'))
+    except (TypeError, ValueError):
+        return None
+    if (len(box) != 4 or not all(math.isfinite(v) for v in (*box, frame_time))
+            or box[2] <= box[0] or box[3] <= box[1]):
+        return None
+    return {'box': box, 'frame_time': frame_time}
+
+
+def _face_fields(face, qualities):
+    """Capture-only geometry of the face an anchor was compared with."""
+    try:
+        x1, y1, x2, y2 = (float(v) for v in face.bbox)
+        fields = {'bbox_x1': x1, 'bbox_y1': y1, 'bbox_x2': x2, 'bbox_y2': y2,
+                  'det_score': float(getattr(face, 'det_score', 0.0))}
+        quality = qualities.get(id(face))
+        for name in ('face_px', 'sharpness', 'frontal', 'pitch'):
+            if getattr(quality, name, None) is not None:
+                fields[name] = getattr(quality, name)
+        return fields
+    except (TypeError, ValueError):
+        return {}
 
 
 class StreamObservations:
@@ -64,7 +103,9 @@ class StreamObservations:
             session['reason'] = reason or stage
             capture_emit(self.processor,session['eid'],session['camera'],'stream_'+stage,
                          reason=reason or stage,source=session['profile']['observation_source'],
-                         elapsed_ms=item['elapsed_ms'])
+                         elapsed_ms=item['elapsed_ms'], active_backend=session.get('active_backend'),
+                         native_device=session.get('native_device'),
+                         qualifying_samples=session['st'].get('stream_samples',0))
             if stage in ('trigger_received','association_anchor_ready','recognition_complete','finished'):
                 _LOGGER.info('Stream observation event=%s stage=%s reason=%s elapsed_ms=%s',session['eid'],stage,reason or 'none',item['elapsed_ms'])
 
@@ -72,6 +113,7 @@ class StreamObservations:
         return {'event_id':session['eid'], 'camera':session['camera'], 'source':session['profile']['observation_source'],
                 'trust_policy':'explicit_local_network', 'capture_freshness_proven':False,
                 'state':session['state'], 'reason':session['reason'], 'timeline':list(session['timeline']),
+                'active_backend':session.get('active_backend'), 'native_device':session.get('native_device'),
                 'samples':session['st'].get('stream_samples',0),
                 'reader':session['reader'].report() if hasattr(session.get('reader'),'report') else None,
                 'required_samples':session['st'].get('stream_required',3)}
@@ -124,7 +166,9 @@ class StreamObservations:
             if camera!=session['camera']:
                 capture_emit(self.processor,eid,camera,'stream_route',result='skipped',reason='event_camera_changed');return
             if kind=='end' or after.get('end_time'):self.finish(session,'event_ended')
-            else:capture_emit(self.processor,eid,camera,'stream_route',result='existing',reason='session_already_active')
+            else:
+                self._store_box(session, after)
+                capture_emit(self.processor,eid,camera,'stream_route',result='existing',reason='session_already_active')
             return
         if retained or kind not in ('new','update') or after.get('end_time') or after.get('false_positive'):
             reason=('retained_event' if retained else 'event_ended' if kind=='end' or after.get('end_time')
@@ -153,6 +197,10 @@ class StreamObservations:
                      'wall_started':time.time(),'deadline':start+30,'state':'observing','reason':'trigger_received',
                      'timeline':deque(maxlen=128),'st':st,'reader':None,'generation':None,'sequence':None,
                      'anchor':None,'anchor_attempts':0,'track':None,'hashes':set(),'token':uuid4().hex}
+            engine = self.processor.engine
+            session['backend_generation'] = getattr(engine, 'backend_generation', 0)
+            session['active_backend'] = getattr(engine, 'active_backend', None)
+            session['native_device'] = getattr(engine, 'native_device', None)
             self.note(session,'trigger_received')
             if sum(s['camera']==camera for s in self.sessions.values())>=4:
                 session['state']='finished';self.note(session,'finished','session_capacity');self.completed.append(self.public(session));return
@@ -161,6 +209,7 @@ class StreamObservations:
             for neighbour in neighbours:
                 neighbour['early_allowed'] = False
                 neighbour.pop('early_candidate', None)
+            self._store_box(session, after)
             self.sessions[eid]=session
             self.processor.events[eid]=st
             capture_emit(self.processor,eid,camera,'stream_route',result='accepted',source=profile['observation_source'])
@@ -186,6 +235,8 @@ class StreamObservations:
     def valid(self, session):
         with self.lock:
             if self.sessions.get(session['eid']) is not session:return 'session_inactive'
+        if session.get('backend_generation', 0) != getattr(getattr(self.processor, 'engine', None), 'backend_generation', 0):
+            return 'inference_backend_changed'
         now=time.monotonic()
         if now>=session['deadline']:return 'observation_expired'
         if now>=session['st'].get('stream_deadline',float('inf')):return 'evidence_expired'
@@ -238,13 +289,27 @@ class StreamObservations:
         minimum=profile.get('night_min_face_px' if hour>=19 or hour<6 else 'min_face_px',self.processor.min_face_px)
         return measure_face_quality(image,face,min_face_px=minimum,min_quality=self.processor.min_face_quality)
 
+    def _refresh_due(self, session):
+        """A weak or repeatedly unmatched anchor is replaced before any association."""
+        return (session['track'] is None and not session['st'].get('done')
+                and session.get('anchor_refreshes', 0) < ANCHOR_REFRESH_LIMIT
+                and time.monotonic() >= session.get('anchor_next_refresh', 0)
+                and (not session.get('anchor_strong')
+                     or session.get('anchor_misses', 0) >= ANCHOR_MISS_LIMIT))
+
     def _anchor(self, session):
-        if session['anchor'] is not None:return True
+        # While a replacement is fetched the current anchor stays in use.
+        refreshing = session['anchor'] is not None
         future=session.get('anchor_future')
         if future is None:
-            if session['anchor_attempts']>=2:
-                self.finish(session,'association_anchor_unavailable');return False
-            if time.monotonic() < session.get('anchor_retry_at', 0):return False
+            if refreshing:
+                if not self._refresh_due(session):return True
+            else:
+                rejects = session.get('anchor_face_rejects', 0)
+                if (session['anchor_attempts'] - rejects >= ANCHOR_TRANSIENT_RETRIES
+                        or rejects >= ANCHOR_FACE_RETRIES):
+                    self.finish(session,'association_anchor_unavailable');return False
+                if time.monotonic() < session.get('anchor_retry_at', 0):return False
             with self.lock:
                 if self.valid(session):return False
                 # No unbounded executor backlog; cancelled fetches count while retiring.
@@ -252,38 +317,74 @@ class StreamObservations:
                     self.counters['anchor_capacity_waits']+=1
                     capture_emit(self.processor,session['eid'],session['camera'],'association_anchor_fetch',
                                  result='waiting',reason='anchor_fetch_capacity')
-                    return False
-                session['anchor_attempts']+=1
+                    return refreshing
+                if refreshing:
+                    session['anchor_refreshes'] = session.get('anchor_refreshes', 0) + 1
+                else:
+                    session['anchor_attempts']+=1
                 session['anchor_fetch_started']=time.perf_counter()
                 capture_emit(self.processor,session['eid'],session['camera'],'association_anchor_fetch',
-                             attempt=session['anchor_attempts'],result='started')
-                future = self.anchor_executor.submit(self._prepare_anchor, session)
+                             attempt=session['anchor_attempts']+session.get('anchor_refreshes', 0),
+                             result='started', reason='anchor_refresh' if refreshing else 'anchor_initial')
+                future = self.anchor_executor.submit(self._prepare_anchor, session, refreshing)
                 session['anchor_future']=future
                 self.anchor_pending[session['token']]=future
-        if not future.done():return False
+        if not future.done():return refreshing
         session.pop('anchor_future',None)
         with self.lock:self.anchor_pending.pop(session['token'],None)
         if self.valid(session):return False
         try:
             anchor, reason, crop_received = future.result()
         except Exception:
-            self.finish(session, 'anchor_processing_failed')
-            return False
+            anchor, reason, crop_received = None, 'anchor_processing_failed', None
+        details = session.pop('anchor_details', None) or {}
+        if refreshing:
+            session['anchor_next_refresh'] = time.monotonic() + ANCHOR_REFRESH_INTERVAL
+            if anchor is None:
+                if reason == 'anchor_unchanged':
+                    # Frigate has no newer crop yet; ask again without using the budget.
+                    session['anchor_refreshes'] -= 1
+                self.note(session, 'anchor_refresh_rejected', reason)
+                return True
+            strong, rank = anchor_grade(details)
+            if session['track'] is not None:
+                # The current anchor associated meanwhile; never swap mid-evidence.
+                self.note(session, 'anchor_refresh_rejected', 'association_established')
+            elif strong or rank > session.get('anchor_rank', -1.0):
+                self._set_anchor(session, anchor, strong, rank)
+                self.reset(session, 'anchor_refreshed')
+                self.note(session, 'association_anchor_refreshed', 'strong' if strong else 'weak')
+            else:
+                self.note(session, 'anchor_refresh_rejected', 'anchor_not_better')
+            return True
+        if crop_received is None:
+            self.finish(session, reason);return False
         if not crop_received:
-            if reason in TRANSIENT_ANCHOR and session['anchor_attempts'] < 2:
-                session['anchor_retry_at'] = time.monotonic() + ANCHOR_RETRY_SECONDS
+            if reason in TRANSIENT_ANCHOR and session['anchor_attempts'] < ANCHOR_TRANSIENT_RETRIES:
+                session['anchor_retry_at'] = time.monotonic() + ANCHOR_TRANSIENT_INTERVAL
                 self.note(session,'anchor_retry_scheduled',reason)
             else:
                 self.finish(session,reason)
             return False
         if self.valid(session):return False
         if anchor is None:
+            # Frigate's event crop improves while the person approaches.
+            session['anchor_face_rejects'] = session.get('anchor_face_rejects', 0) + 1
+            session['anchor_retry_at'] = time.monotonic() + ANCHOR_REFRESH_INTERVAL
             self.note(session,'anchor_rejected',reason);return False
-        session['anchor']=anchor
-        self.note(session,'association_anchor_ready')
+        strong, rank = anchor_grade(details)
+        self._set_anchor(session, anchor, strong, rank)
+        self.note(session,'association_anchor_ready', None if strong else 'anchor_weak')
         return True
 
-    def _prepare_anchor(self, session):
+    def _set_anchor(self, session, anchor, strong, rank):
+        session['anchor']=anchor
+        session['anchor_strong']=strong
+        session['anchor_rank']=rank
+        session['anchor_misses']=0
+        session['anchor_next_refresh']=time.monotonic()+ANCHOR_REFRESH_INTERVAL
+
+    def _prepare_anchor(self, session, refresh=False):
         eid, camera = session['eid'], session['camera']
         try:
             image, reason = fetch_anchor(self.processor.frigate, eid, camera)
@@ -292,28 +393,58 @@ class StreamObservations:
         if self.valid(session):
             return None, 'session_inactive', False
         capture_emit(self.processor, eid, camera, 'association_anchor_fetch',
-                     attempt=session['anchor_attempts'], result='received' if image is not None else 'unavailable',
+                     attempt=session['anchor_attempts']+session.get('anchor_refreshes', 0),
+                     result='received' if image is not None else 'unavailable',
                      reason=reason, anchor_fetch_wait_ms=(time.perf_counter()-session['anchor_fetch_started'])*1000)
         if image is None:
             return None, reason, False
-        self.retain_preview(session, image, 'anchor')
+        digest = hashlib.sha256(np.ascontiguousarray(image)).hexdigest()
+        if refresh and digest == session.get('anchor_digest'):
+            return None, 'anchor_unchanged', True
+        session['anchor_digest'] = digest
+        self.retain_preview(session, image, 'anchor', force=refresh)
         capture_preview(self.processor, eid, camera, image, 'anchor')
-        diagnostics = {} if capture_active(self.processor, camera) else None
+        diagnostics = {}
         started = time.perf_counter()
         anchor, reason = single_anchor(self.processor.engine, image, session['profile'],
             min_face_px=self.processor.min_face_px, min_quality=self.processor.min_face_quality,
             diagnostics=diagnostics)
+        session['anchor_details'] = diagnostics
+        strong, rank = anchor_grade(diagnostics)
         capture_emit(self.processor, eid, camera, 'association_anchor_model',
-                     anchor_model_ms=(time.perf_counter()-started)*1000, **(diagnostics or {}))
+                     anchor_model_ms=(time.perf_counter()-started)*1000, anchor_strong=strong,
+                     anchor_rank=rank, **diagnostics)
         return anchor, reason, True
 
     def _work(self, camera):
+        engine = getattr(self.processor, 'engine', None)
+        generation = getattr(engine, 'backend_generation', 0)
+        admitted = self.counters['frames_admitted']
         try:self._step(camera)
         except Exception:
-            with self.lock:sessions=[s for s in self.sessions.values() if s['camera']==camera]
-            for s in sessions:self.finish(s,'observation_processing_failed')
+            current_generation = getattr(engine, 'backend_generation', 0)
+            backend_changed = generation != current_generation
+            with self.lock:
+                sessions = [s for s in self.sessions.values() if s['camera'] == camera
+                            and (not backend_changed or s.get('backend_generation', 0) != current_generation)]
+            reason = 'inference_backend_changed' if backend_changed else 'observation_processing_failed'
+            for s in sessions:self.finish(s, reason)
         finally:
-            with self.lock:self.pending.discard(camera)
+            with self.lock:
+                self.pending.discard(camera)
+                # A step that processed a frame chains straight into the next one
+                # while the event needs evidence; idle steps wait for the tick.
+                again = (self.counters['frames_admitted'] > admitted and self.online
+                         and any(s['camera'] == camera and not s['st'].get('done')
+                                 for s in self.sessions.values()))
+                if again:
+                    self.pending.add(camera)
+                    self.next_start[camera] = time.monotonic() + .25
+            if again:
+                try:
+                    self.executor.submit(self._work, camera)
+                except RuntimeError:
+                    with self.lock:self.pending.discard(camera)
 
     def _capture_frame(self,sessions,record,reader):
         # Optional metadata must never interfere with model scheduling or admission.
@@ -374,7 +505,7 @@ class StreamObservations:
                 if (s['early_allowed'] and self.valid(s) is None
                         and reader.generation == record['generation'] and reader.frame_record() is not None
                         and 0 <= time.monotonic() - record['arrived'] <= 1):
-                    self._associate(camera, sessions, sessions, reader, record, usable, early=True)
+                    self._associate(camera, sessions, sessions, reader, record, usable, early=True, found_count=1)
                     return
         sessions = [s for s in sessions if s['anchor'] is not None or s['early_allowed']]
         if not sessions:
@@ -453,6 +584,17 @@ class StreamObservations:
             return
         if len(sessions) == 1 and sessions[0]['anchor'] is None:
             s = sessions[0]
+            if (getattr(self.processor, 'box_association', False) and len(found) == 1 and len(usable) == 1
+                    and self.valid(s) is None and reader.generation == record['generation']):
+                with self.lock:
+                    lone = sum(x['camera'] == camera for x in self.sessions.values()) == 1
+                    box = s.get('frigate_box')
+                if lone and self._inside_box(camera, box, record, usable[0][0]):
+                    with self.lock:
+                        s.pop('early_candidate', None)
+                    self._associate(camera, sessions, fresh, reader, record, usable,
+                                    found_count=1, anchorless=True)
+                    return
             with self.lock:
                 s.pop('early_candidate', None)
                 if (s['early_allowed'] and self.valid(s) is None and reader.generation == record['generation']
@@ -462,14 +604,73 @@ class StreamObservations:
                         s['early_face_seen'] = True
                         self.note(s, 'early_face_detected')
             return
-        self._associate(camera, sessions, fresh, reader, record, usable)
+        self._associate(camera, sessions, fresh, reader, record, usable, found_count=len(found))
 
-    def _associate(self, camera, sessions, fresh, reader, record, usable, *, early=False):
-        image = record['image']
-        for face, _ in usable:
-            self.processor.engine.embed_face(image, face)
+    def _store_box(self, session, after):
+        box = _frigate_box(after)
         with self.lock:
-            sessions=[s for s in sessions if self.valid(s) is None and s['anchor'] is not None]
+            current = session.get('frigate_box')
+            if box and (current is None or box['frame_time'] >= current['frame_time']):
+                session['frigate_box'] = box
+
+    def _box_face(self, camera, session, tracks, record, found_count):
+        """Index of the one face inside Frigate's current box for a lone person event.
+
+        Only with exactly one person event on the camera and exactly one detected
+        face in the frame; the anchor comparison decides every other case. Every
+        sample needs its own fresh box check: a previously bound tracker key is never
+        enough, because one person can replace another in the same spot.
+        """
+        if not getattr(self.processor, 'box_association', False) or found_count != 1 or len(tracks) != 1:
+            return None
+        with self.lock:
+            if sum(s['camera'] == camera for s in self.sessions.values()) != 1:
+                return None
+            box = session.get('frigate_box')
+        return 0 if self._inside_box(camera, box, record, tracks[0][1]) else None
+
+    def _inside_box(self, camera, box, record, face):
+        """Face centre inside Frigate's fresh person box, mapped to the stream frame."""
+        # 6.9.0: a camera whose source or geometry changed since it was validated
+        # binds faces by a stored-face (anchor) match only until it is revalidated.
+        geometry = getattr(self.processor, 'setup_geometry', None)
+        if geometry is not None and not geometry.box_association_allowed(camera):
+            return False
+        detect_size = getattr(self.processor.frigate, 'detect_size', None)
+        size = detect_size(camera) if callable(detect_size) else None
+        if not box or not size:
+            return False
+        frame_wall = time.time() - (time.monotonic() - record['arrived'])
+        if abs(frame_wall - box['frame_time']) > BOX_MAX_AGE:
+            return False
+        height, width = record['image'].shape[:2]
+        sx, sy = width / size[0], height / size[1]
+        if abs(sx - sy) > 0.05 * max(sx, sy):
+            return False  # Different aspect ratios: no trustworthy mapping.
+        x1, y1, x2, y2 = box['box']
+        mx, my = (x2 - x1) * BOX_MARGIN, (y2 - y1) * BOX_MARGIN
+        fx1, fy1, fx2, fy2 = (float(v) for v in face.bbox)
+        cx, cy = (fx1 + fx2) / 2, (fy1 + fy2) / 2
+        return (x1 - mx) * sx <= cx <= (x2 + mx) * sx and (y1 - my) * sy <= cy <= (y2 + my) * sy
+
+    def _associate(self, camera, sessions, fresh, reader, record, usable, *, early=False, found_count=None,
+                   anchorless=False):
+        image = record['image']
+        capture = (getattr(self.processor.engine, 'supports_embedding_timing', False) is True
+                   and capture_active(self.processor, camera))
+        for face, _ in usable:
+            if not capture:
+                self.processor.engine.embed_face(image, face)
+                continue
+            timings = {}
+            self.processor.engine.embed_face(image, face, timings=timings)
+            for name in ('embedding_compute', 'embedding_scheduler_wait'):
+                if name in timings:
+                    for session in fresh:
+                        capture_emit(self.processor, session['eid'], camera, name, duration_ms=timings[name]*1000)
+        with self.lock:
+            sessions=[s for s in sessions if self.valid(s) is None
+                      and (s['anchor'] is not None or (anchorless and len(sessions) == 1))]
             if early and (not sessions or not sessions[0]['early_allowed']):
                 return
             if reader.generation != record['generation']:
@@ -493,23 +694,54 @@ class StreamObservations:
         # Mutual unique matching prevents one face being assigned to two events.
         if not tracks:return
         diagnostics={} if capture_active(self.processor,camera) else None
-        best=mutual_assignments([s['anchor'] for s in sessions],[f for _,f in tracks],diagnostics=diagnostics)
+        # A pending anchor is an invalid vector: it can never win the comparison.
+        best=mutual_assignments([s['anchor'] if s['anchor'] is not None else _NO_ANCHOR for s in sessions],
+                                [f for _,f in tracks],diagnostics=diagnostics)
         fresh_tokens={s['token'] for s in fresh}
         for row,s in enumerate(sessions):
             if s['token'] not in fresh_tokens or (early and not s['early_allowed']):continue
+            if record['arrived'] < s['started']:
+                # A warm reader can hold a frame from before this event: never evidence.
+                capture_emit(self.processor,s['eid'],camera,'stream_frame_rejected',reason='frame_before_event')
+                continue
             if diagnostics:
+                detail=dict(diagnostics['assignments'][row])
+                if s['anchor'] is None:detail['reason']='anchor_pending'
+                index=best[row] if best[row] is not None else 0 if len(tracks)==1 else None
+                if index is not None:detail.update(_face_fields(tracks[index][1],qualities))
                 capture_emit(self.processor,s['eid'],camera,'association_match',
                              candidate_count=diagnostics['candidate_count'],anchor_count=diagnostics['anchor_count'],
-                             **diagnostics['assignments'][row])
+                             anchor_strong=s.get('anchor_strong'),anchor_refreshes=s.get('anchor_refreshes',0),
+                             **detail)
             col=best[row]
+            rule='anchor'
+            if col is None and found_count is not None:
+                col=self._box_face(camera,s,tracks,record,found_count)
+                rule='frigate_box'
             if col is None:
+                s['anchor_misses']=s.get('anchor_misses',0)+1
                 capture_preview(self.processor,s['eid'],camera,image,'input')
                 self.reset(s,'association_ambiguous');continue
+            s['anchor_misses']=0
+            if rule=='frigate_box':
+                box=s.get('frigate_box') or {}
+                frame_wall=time.time()-(time.monotonic()-record['arrived'])
+                capture_emit(self.processor,s['eid'],camera,'association_box',association_rule=rule,
+                             box_age_ms=(frame_wall-box.get('frame_time',frame_wall))*1000,
+                             **_face_fields(tracks[col][1],qualities))
             track,face=tracks[col]
             if track in ambiguous_tracks:
                 self.reset(s,'overlap_or_crossing');continue
             if s['st'].get('done'):continue
-            if s['track'] is not None and s['track']!=track:self.reset(s,'face_track_changed')
+            if s['track'] is not None and s['track']!=track:
+                # The tracker keys a face to its first sighting, so a face walking
+                # from far and angled to near and frontal gets new keys. A lone face
+                # inside the lone event's fresh box is still that event's person;
+                # identity and liveness must still agree on every sample.
+                if found_count is not None and self._box_face(camera,s,tracks,record,found_count) is not None:
+                    self.note(s,'face_track_rebound')
+                else:
+                    self.reset(s,'face_track_changed')
             if s['track'] is None:self.note(s,'association_established')
             s['track']=track
             self.retain_preview(s,image,'associated',face.bbox)
@@ -526,8 +758,12 @@ class StreamObservations:
                 st.setdefault('stream_deadline',record['arrived']+10)
                 st['stream_proof']={'session':s['token'],'generation':record['generation'],'track':track}
                 st['attempts']+=1;st['last_try']=time.time()
+                previous_samples = st.get('stream_samples', 0)
                 self.processor._process_face(s['eid'],st,image,face,quality=qualities[id(face)],source=SOURCE)
-                self.note(s,'qualifying_sample' if st.get('stream_samples',0) else 'sample_rejected',st.get('stream_reason'))
+                if self.valid(s) is not None:
+                    continue
+                admitted = st.get('stream_samples', 0) > previous_samples
+                self.note(s,'qualifying_sample' if admitted else 'sample_rejected',st.get('stream_reason'))
                 if st.get('done'):
                     s['state']='recognized' if st.get('best_person') else 'finished'
                     self.note(s,'recognition_complete')
@@ -566,7 +802,7 @@ class StreamObservations:
                 if now>=self.preview_until or self.preview_viewer!=eid:return
                 saved=self.previews.get(eid,{})
                 if now-saved.get(kind+'_encoded',-10)<1:return
-            if kind=='anchor' and 'anchor' in self.previews.get(eid,{}):return
+            if kind=='anchor' and not force and 'anchor' in self.previews.get(eid,{}):return
             cached=self.preview_frames.get(camera)
             jpeg=cached[1] if kind=='live' and cached and now-cached[0]<1 else None
         try:

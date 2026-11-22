@@ -1,3 +1,33 @@
+# FaceID 6.9.5
+
+Includes native OpenVINO and VAAPI support, anchor refresh and guided setup.
+Fixes gradual stream backlog detection and bounds ordered audit writes.
+Update the existing FaceID add-on from the r11a/faceid repository in Home Assistant.
+Refresh the add-on store if the update has not appeared, then open FaceID and select Update.
+Create a Home Assistant add-on backup before updating.
+
+Video timing now uses a strict connection baseline. Cameras with clock drift may
+reconnect. Slow storage applies backpressure to audit writes and final evidence
+waits for pending writes. Validate recognition and Access1 on the target hardware.
+
+## Earlier documentation
+
+# FaceID 6.9.4 Claude test build
+
+Recognition, capture and the Access1 connector run normally in this test build. 6.9.4 adds the guided setup (Management → Setup); on an upgrade nothing changes (see CHANGELOG.md).
+
+# FaceID 6.7.4
+
+Operational build. Restores automatic recognition and Access1, restores full recognition capture and retains the timestamp comparison. See the short test guide for a live output check.
+
+## Previous builds
+
+# FaceID 6.7.3-timestamp1
+
+Temporary isolated timestamp test. The automatic recognition worker and Access1 connector are paused. Follow the short test guide for the single report and operational rollback.
+
+## Operational 6.7.2 reference documentation
+
 # FaceID 6.7.2
 
 Merged operational candidate; ready for rig validation. Calibration follows the
@@ -493,7 +523,12 @@ second factor remain mandatory before any door-control automation acts.
 | `liveness_required_frames` | Consecutive live frames needed in Required mode |
 | `access_control_enabled` | Future role foundation; keep `false` in 5.0 unless assignments were configured manually |
 | `mqtt_*` | Leave empty to use the internal Mosquitto app automatically |
-| `backend` | `auto`, `cpu`, `cuda` or `openvino`; explicit modes fail fast when unavailable |
+| `backend` | `auto`, `cpu`, `cuda` or `openvino` (ONNX Runtime providers; explicit modes fail fast when unavailable), or `openvino_gpu` / `openvino_cpu` (native OpenVINO; GPU falls back to OpenVINO CPU, then ONNX Runtime CPU) |
+| `stream_warm_seconds` | keep a stream-observation reader connected this long after an event so the next approach starts at once (default `0` = off; one idle reader at most, and it keeps decoding while idle) |
+| `stream_decode_threads` | CPU decoder threads per stream reader when GPU decoding is off or unavailable (default 2) |
+| `stream_gpu_decode` | decode stream readers on the Intel GPU (VAAPI) with automatic CPU fallback (default on) |
+| `stream_decode_width` | width the GPU scales stream frames to, keeping the aspect ratio (default `0` = native size; smaller saves CPU but far faces lose detail) |
+| `frigate_box_association` | with exactly one person event and one face, bind the face inside Frigate's live person box when the event snapshot does not match (default on) |
 | `match_threshold` | ≥ this cosine similarity = recognized (raise if strangers get misassigned) |
 | `unknown_threshold` | < this = definitely unknown |
 | `match_margin` | required lead over the runner-up before a match can count |

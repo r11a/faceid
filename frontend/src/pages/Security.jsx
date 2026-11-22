@@ -55,6 +55,17 @@ export function LiveFrame({ camera, refreshKey = 0, controls = false }) {
   const [ratio, setRatio] = useState(16 / 9);
   const timer = useRef(null);
   const wasMeasuring = useRef(false);
+  // Double buffering: the next frame loads off-screen and replaces the visible
+  // one only when complete, so refreshes and brief source gaps never blank it.
+  // Each frame is fetched once into memory and shown from there: the frame route
+  // is no-store, so pointing the visible image at its URL would download it again
+  // and blank the picture while that second request runs.
+  const preload = typeof Image !== "undefined" && typeof fetch === "function"
+    && typeof URL !== "undefined" && typeof URL.createObjectURL === "function";
+  const [shown, setShown] = useState(null);
+  const shownRef = useRef(null);
+  const failures = useRef(0);
+  const lastGood = useRef(0);
   const frameUrl = useMemo(() => assetUrl(`api/cameras/${encodeURIComponent(camera)}/frame?_=${Date.now()}-${refreshKey}-${tick}`), [camera, refreshKey, tick]);
   const hidden = () => typeof document !== "undefined" && document.hidden;
   const queueFrame = (delay = 500) => {
@@ -65,9 +76,51 @@ export function LiveFrame({ camera, refreshKey = 0, controls = false }) {
   useEffect(() => {
     if (wasMeasuring.current && !measuring) setTick(value => value + 1);
     wasMeasuring.current = measuring;
-    setFailed(false); setAnalysis(null); setError(null); setRatio(16 / 9);
+    setFailed(false); setAnalysis(null); setError(null);
     return () => clearTimeout(timer.current);
   }, [camera, refreshKey, measuring]);
+  const show = url => {
+    const previous = shownRef.current;
+    shownRef.current = url;
+    setShown(url);
+    if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
+  };
+  useEffect(() => { show(null); setRatio(16 / 9); failures.current = 0; lastGood.current = 0; }, [camera]);
+  useEffect(() => () => { if (shownRef.current?.startsWith("blob:")) URL.revokeObjectURL(shownRef.current); }, []);
+  useEffect(() => {
+    if (!preload || measuring) return;
+    let live = true;
+    const controller = new AbortController();
+    const fail = () => {
+      if (!live) return;
+      failures.current += 1;
+      // Keep the last picture through brief gaps; report only a sustained outage.
+      if (failures.current >= 3 && Date.now() - lastGood.current > 5000) setFailed(true);
+      queueFrame(failures.current >= 3 ? 1000 : 500);
+    };
+    (async () => {
+      let url = null;
+      try {
+        const response = await fetch(frameUrl, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error(`frame_${response.status}`);
+        url = URL.createObjectURL(await response.blob());
+        const image = new Image();
+        image.decoding = "async";
+        await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
+        // Decode before swapping so the browser never paints an undecoded frame.
+        if (typeof image.decode === "function") await image.decode().catch(() => {});
+        if (!live) { URL.revokeObjectURL(url); return; }
+        failures.current = 0; lastGood.current = Date.now();
+        show(url); setFailed(false);
+        if (image.naturalWidth) setRatio(image.naturalWidth / image.naturalHeight);
+        queueFrame();
+      } catch (failure) {
+        if (url) URL.revokeObjectURL(url);
+        if (failure?.name !== "AbortError") fail();
+      }
+    })();
+    return () => { live = false; controller.abort(); };
+  }, [frameUrl, measuring]);
   useEffect(() => {
     if (!measuring) return;
     let stopped = false, next;
@@ -79,10 +132,21 @@ export function LiveFrame({ camera, refreshKey = 0, controls = false }) {
         const result = await api(`cameras/${encodeURIComponent(camera)}/analyze?include_preview=true`, { signal: controller.signal });
         if (stopped) return;
         if (!result?.preview?.startsWith("data:image/jpeg;base64,")) throw new Error("תמונת המדידה אינה זמינה — לא מוצגות מסגרות על תמונה אחרת");
+        // 6.9.3: decode the measured picture before it replaces the visible one, as plain
+        // frames already are; swapping in an undecoded picture painted a blank flash.
+        if (preload) {
+          const image = new Image();
+          image.decoding = "async";
+          await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = result.preview; });
+          if (typeof image.decode === "function") await image.decode().catch(() => {});
+          if (stopped) return;
+        }
         setAnalysis({ ...result, elapsed: Date.now() - start }); setError(null);
       } catch (failure) {
-        if (stopped) return;
-        setAnalysis(null); setError(failure.message);
+        if (stopped || failure?.name === "AbortError") return;
+        // Keep the last measured picture (without its face boxes) through a failed sample,
+        // so the view does not jump back to the plain picture and flash.
+        setAnalysis(current => current && { ...current, faces: [] }); setError(failure?.message || "measurement failed");
       }
       if (!stopped) next = setTimeout(sample, 250);
     };
@@ -90,12 +154,12 @@ export function LiveFrame({ camera, refreshKey = 0, controls = false }) {
     return () => { stopped = true; clearTimeout(next); controller.abort(); };
   }, [camera, refreshKey, measuring]);
   const result = measuring ? analysis : null;
-  const sourceLabel = { snapshots: "תמונת תצוגה של מקור התמונות", frigate_restream: "זרם Frigate המוגדר לזיהוי", direct_rtsp: "RTSP ישיר המוגדר לזיהוי" }[result?.source];
+  const sourceLabel = {snapshots:"תמונת תצוגה של מקור התמונות",frigate_restream:"זרם Frigate המוגדר לזיהוי",direct_rtsp:"RTSP ישיר המוגדר לזיהוי"}[result?.source];
   return <div className="camera-calibration">
     {controls && <div className="muted">{sourceLabel || "מקור הכיול: מקור הזיהוי השמור למצלמה"} · מדידה בלבד, ללא בקשת גישה</div>}
     {controls && <div className="calibration-toolbar"><button className={`button ${measuring ? "secondary" : "primary"}`} onClick={() => setMeasuring(value => !value)}><ScanFace />{measuring ? "עצירת מדידת פנים" : "מדידת פנים מתעדכנת"}</button><span role="status">{measuring ? error ? `הבדיקה נכשלה: ${error}` : result ? `גודל פנים · סף ${result.min_face_px}px · בדיקה ${result.elapsed}ms` : "מודד פנים…" : "תמונות מתעדכנות · הפעל מדידה להצגת גודל הפנים"}</span></div>}
     <div className="live-frame" style={{ aspectRatio: result ? `${result.width} / ${result.height}` : ratio }}>
-      <img src={result?.preview || frameUrl} decoding="async" onLoad={event => { setFailed(false); if (!measuring) { const image = event.currentTarget; if (image?.naturalWidth) setRatio(image.naturalWidth / image.naturalHeight); queueFrame(); } }} onError={() => { setFailed(true); queueFrame(2000); }} alt={`תמונה ממצלמת ${camera}`} />
+      {(result?.preview || (preload ? shown : frameUrl)) && <img src={result?.preview || (preload ? shown : frameUrl)} decoding="async" onLoad={preload ? undefined : event => { setFailed(false); if (!measuring) { const image = event.currentTarget; if (image?.naturalWidth) setRatio(image.naturalWidth / image.naturalHeight); queueFrame(); } }} onError={preload ? undefined : () => { setFailed(true); queueFrame(2000); }} alt={`תמונה ממצלמת ${camera}`} />}
       {failed && !result && <div className="frame-error"><ImageOff /><b>אין תמונה זמינה</b><span>מנסה לקבל תמונה חדשה</span></div>}
       {result?.faces?.map((face, index) => { const [x1, y1, x2, y2] = face.box; return <span className={`face-box ${face.usable ? "good" : "bad"}`} key={index} style={{ left: `${x1 / result.width * 100}%`, top: `${y1 / result.height * 100}%`, width: `${(x2 - x1) / result.width * 100}%`, height: `${(y2 - y1) / result.height * 100}%` }}><b>{Math.round(face.face_px)} px</b></span>; })}
     </div>

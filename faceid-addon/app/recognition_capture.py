@@ -16,6 +16,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from . import VERSION
+from .diagnostic_mode import OPENVINO_TEST_BUILD
 
 MAX_EVENTS = 32
 MAX_RECORDS = 256
@@ -29,7 +30,7 @@ KINDS = {'anchor', 'input', 'subject'}
 ALIASES = {'live': 'input', 'associated': 'subject', 'rejected': 'subject'}
 PROVIDERS = {'CPUExecutionProvider', 'CUDAExecutionProvider', 'OpenVINOExecutionProvider',
              'TensorrtExecutionProvider', 'AzureExecutionProvider', 'DmlExecutionProvider',
-             'CoreMLExecutionProvider', 'ROCMExecutionProvider'}
+             'CoreMLExecutionProvider', 'ROCMExecutionProvider', 'OpenVINONative'}
 NUMBERS = set('''sequence generation capture_timestamp arrival_age_ms duration_ms
 queue_wait_ms compute_ms count required_samples qualifying_samples liveness_score
 score margin threshold candidate_count usable_count anchor_count association_score
@@ -41,17 +42,35 @@ top1_score top2_score http_status confirmations live_frames required_frames elap
 interval_ms remaining_ms deadline_remaining_ms processing_age_ms frame_age_ms
 anchor_attempt candidate_index anchor_index track_index required_score required_margin
 recognition_interval_seconds recognition_rearm_seconds samples min_face_px
-roi_rejected_count quality_rejected_count'''.split())
+roi_rejected_count quality_rejected_count anchor_face_px anchor_sharpness anchor_frontal
+anchor_quality anchor_pitch anchor_rank anchor_refreshes bbox_x1 bbox_y1 bbox_x2 bbox_y2
+sharpness frontal pitch box_age_ms reopens connected_s generation_before generation_after
+retry_in_s lag_ms read_wait_ms instant_read_pct first_usable_ms'''.split())
+# Stream reader diagnostics: per resource sample, and per reopen record.
+READER_SAMPLE = ('state', 'generation', 'reopens', 'lag_ms', 'drift_ms', 'read_wait_ms', 'instant_read_pct')
+REOPEN_FIELDS = ('reason', 'connected_s', 'generation_before', 'retry_in_s', 'lag_ms',
+                 'read_wait_ms', 'instant_read_pct')
 BOOLEANS = set('''trust accepted retained false_positive event_ended already_handled
 old_handled source_changed enabled fast_recognition high_resolution profile_fallback_used
 requested_trust saved_trust persisted_trust direct_rtsp_configured source_matches_request
 trust_matches_request matched_one_to_one passed required execution_confirmed
 door_open_confirmed usable live confirmed duplicate event_active source_boundary
-old_event_before_capture'''.split())
+old_event_before_capture anchor_strong'''.split())
+# High-rate stages fold into one record per reason with a repeat count.
+REPEATING = {'snapshot_skipped'}
+# Bounded per event and needed to reconstruct its timeline; evicted last.
+LIFECYCLE = {'frigate_event_received', 'stream_trigger_received', 'association_anchor_fetch',
+             'association_anchor_model', 'stream_association_anchor_ready',
+             'stream_association_anchor_refreshed', 'stream_anchor_rejected',
+             'stream_anchor_refresh_rejected', 'stream_stream_ready', 'stream_early_face_detected',
+             'stream_association_established', 'stream_qualifying_sample', 'liveness_result',
+             'identity_result', 'stream_recognition_complete', 'recognition_complete',
+             'stream_finished', 'stream_evidence_reset', 'stream_sample_rejected',
+             'stream_face_track_rebound'}
 CATEGORIES = set('''source expected_source saved_source persisted_source requested_source
 dispatch_source evidence_source reason state result phase label event_type recognition_mode
 liveness_state profile_read_status configuration_read_status trust_policy source_boundary
-outcome liveness_mode timing_stage context'''.split())
+outcome liveness_mode timing_stage context active_backend association_rule'''.split())
 PROFILE_KEYS = {'observation_source', 'trust_local_video_network', 'enabled', 'recognition_mode',
                 'fast_recognition', 'high_resolution', 'direct_rtsp_configured', 'liveness_mode',
                 'min_face_px', 'burst_frames', 'recognition_interval_seconds',
@@ -91,6 +110,8 @@ def _safe_fields(fields):
         elif key == 'track_id' and (type(value) is int or
                 isinstance(value, str) and re.fullmatch(r'[a-f0-9\-]{1,40}', value)):
             safe[key] = value
+        elif key == 'native_device' and isinstance(value, str) and re.fullmatch(r'(CPU|GPU)(\.[0-9]+)?', value):
+            safe[key] = value
         elif key == 'error':
             safe[key] = value if isinstance(value, str) and value in {'capture_failed', 'profile_read_failed', 'metrics_unavailable',
                 'preview_unavailable', 'engine_unavailable'} else 'capture_failed'
@@ -107,6 +128,7 @@ def _metric_dict(value):
 def _engine_snapshot(engine):
     raw = engine.health() if engine is not None and hasattr(engine, 'health') else {}
     result = {}
+    result.update(_safe_fields({key: raw.get(key) for key in ('active_backend', 'native_device')}))
     for key in ('backend', 'model_pack'):
         if _category(raw.get(key)) is not None:
             result[key] = raw[key]
@@ -175,6 +197,23 @@ def _cpu_throttle():
         except (OSError, KeyError, ValueError):
             pass
     return {'cgroup_version': None, 'periods': None, 'throttled_periods': None, 'throttled_usec': None}
+
+
+def _container_cpu_usec():
+    """Total CPU time of the add-on container's cgroup (all processes), in microseconds."""
+    try:
+        for line in Path('/sys/fs/cgroup/cpu.stat').read_text().splitlines():
+            key, _, value = line.partition(' ')
+            if key == 'usage_usec':
+                return int(value)
+    except (OSError, ValueError):
+        pass
+    for path in ('/sys/fs/cgroup/cpuacct/cpuacct.usage', '/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage'):
+        try:
+            return int(Path(path).read_text().strip()) // 1000
+        except (OSError, ValueError):
+            pass
+    return None
 
 
 class RecognitionCapture:
@@ -248,6 +287,8 @@ class RecognitionCapture:
                     result['readers'] = len(pool.readers)
                     result['retiring_readers'] = len(pool.retiring)
                     result['observation_readers'] = len(pool.observation_sources)
+                    result['warm_readers'] = len(getattr(pool, 'lingering', ()))
+                    result['warm_seconds'] = getattr(pool, 'observation_linger', None)
             except Exception:
                 pass
         return result
@@ -368,6 +409,7 @@ class RecognitionCapture:
         if not recording:
             return
         cpu, rss, queues, throttle = time.process_time(), _rss_bytes(), self._queues(), _cpu_throttle()
+        container_cpu, reader = _container_cpu_usec(), self._reader_state()
         with self.lock:
             if not self.run or self.run['capture_id'] != capture_id or not self.run['recording']:
                 return
@@ -379,6 +421,15 @@ class RecognitionCapture:
                       'process_cpu_percent_one_core': round(percent, 2), 'process_cpu_seconds': cpu,
                       'rss_bytes': rss, 'queues': queues,
                       'cgroup_cpu_throttle': {**throttle, 'scope': 'container_cgroup_not_per_event'}}
+            # Whole add-on container (includes the FFmpeg decoder processes).
+            previous_container = self.run.get('last_container_cpu')
+            if container_cpu is not None and previous_container is not None:
+                sample['container_cpu_percent_one_core'] = round(max(
+                    0.0, (container_cpu - previous_container[1]) / 10_000 / (now - previous_container[0])), 2)
+            self.run['last_container_cpu'] = (now, container_cpu) if container_cpu is not None else None
+            if reader is not None:
+                sample['reader'] = {key: reader.get(key) for key in READER_SAMPLE}
+            reopen_records = self._reader_transitions_locked(reader)
             previous_throttle = self.run['last_throttle']
             for key in ('periods', 'throttled_periods', 'throttled_usec'):
                 if _number(throttle.get(key)) and _number(previous_throttle.get(key)):
@@ -392,6 +443,45 @@ class RecognitionCapture:
                 self.run['truncation']['resources'] += 1
             self.run['last_cpu'] = (now, cpu)
             self.run['last_throttle'] = throttle
+            camera = self.run['camera']
+        for stage, fields in reopen_records:
+            self.emit(None, camera, stage, **fields)
+
+    def _reader_state(self):
+        """The capture camera's stream reader report, or None when it has no reader."""
+        pool = getattr(getattr(self.processor, 'frigate', None), 'live_frames', None)
+        with self.lock:
+            camera = self.run['camera'] if self.run else None
+        if pool is None or camera is None:
+            return None
+        try:
+            with pool.lock:
+                reader = pool.readers.get(camera)
+            if reader is None:
+                return None
+            return {**reader.report(), 'reader_id': id(reader)}
+        except Exception:
+            return None
+
+    def _reader_transitions_locked(self, reader):
+        """Run-level records for reader reopens seen since the last sample (also between events)."""
+        if reader is None:
+            return []
+        seen = self.run.setdefault('reader_seen', {'reader_id': None, 'reopens': 0, 'first_usable': True})
+        if seen['reader_id'] != reader['reader_id']:
+            seen.update(reader_id=reader['reader_id'], reopens=reader.get('reopens') or 0, first_usable=True)
+            return [('reader_started', {'generation': reader.get('generation')})]
+        records = []
+        last = reader.get('last_reopen') or {}
+        if (reader.get('reopens') or 0) > seen['reopens']:
+            seen.update(reopens=reader['reopens'], first_usable=False)
+            records.append(('reader_reopen', {'reopens': reader['reopens'],
+                                              **{key: last.get(key) for key in REOPEN_FIELDS}}))
+        if not seen['first_usable'] and 'first_usable_ms' in last:
+            seen['first_usable'] = True
+            records.append(('reader_reopened', {'first_usable_ms': last['first_usable_ms'],
+                                                'generation_after': last.get('generation_after')}))
+        return records
 
     def _run(self):
         while True:
@@ -436,8 +526,18 @@ class RecognitionCapture:
                     == {key:value for key,value in records[-1].items() if key != 'elapsed_ms'}):
                 self.run['truncation']['coalesced_records'] += 1
                 return
+            if stage in REPEATING:
+                folded = next((item for item in reversed(records) if item['stage'] == stage
+                               and item.get('reason') == record.get('reason')), None)
+                if folded is not None:
+                    folded['repeat_count'] = folded.get('repeat_count', 1) + 1
+                    folded['last_elapsed_ms'] = record['elapsed_ms']
+                    self.run['truncation']['coalesced_records'] += 1
+                    return
             if len(records) >= MAX_RECORDS:
-                records.pop(1)  # Keep first trigger/context plus the latest tail.
+                # Keep the first context record, the event lifecycle and the latest tail.
+                index = next((i for i in range(1, len(records)) if records[i]['stage'] not in LIFECYCLE), 1)
+                records.pop(index)
                 self.run['truncation']['records'] += 1
             records.append(record)
             actual = safe.get('dispatch_source')
@@ -528,7 +628,8 @@ class RecognitionCapture:
             if self.run is None:
                 return {'state': 'idle', 'recording': False, 'build': VERSION, 'runtime_id': self.runtime_id}
             value = {key: item for key, item in self.run.items() if key not in
-                     {'events', 'resources', 'records', 'last_cpu', 'last_throttle', 'started_monotonic', 'deadline_monotonic', 'ended_monotonic'}}
+                     {'events', 'resources', 'records', 'last_cpu', 'last_throttle', 'last_container_cpu',
+                      'reader_seen', 'started_monotonic', 'deadline_monotonic', 'ended_monotonic'}}
             if hasattr(self.processor, 'mqtt_diagnostics'):
                 value['mqtt_current'] = self.processor.mqtt_diagnostics.status(self.run['camera']) if self.run['recording'] else (self.run.get('after') or {}).get('mqtt')
             value['remaining_seconds'] = max(0, round(self.run['deadline_monotonic']-now, 1)) if self.run['recording'] else 0
@@ -540,7 +641,9 @@ class RecognitionCapture:
             value['resource_measurement'] = 'whole_process_including_normal_work_and_capture_overhead_not_per_event'
             value['capture_changes_settings'] = False
             value['capture_starts_recognition'] = False
-            value['normal_recognition_and_access1_continue'] = True
+            value['normal_recognition_and_access1_continue'] = not OPENVINO_TEST_BUILD
+            value['normal_recognition_continues'] = True
+            value['access1_disabled_by_build'] = OPENVINO_TEST_BUILD
             value['previews'] = [{'event_id': eid, 'kinds': sorted(kind for (event_id,kind) in self.previews if event_id == eid),
                                   'expires_in': round(max(expiry for (event_id,_), (expiry,_) in self.previews.items() if event_id == eid)-now,1)}
                                  for eid in sorted({event_id for event_id,_ in self.previews})]

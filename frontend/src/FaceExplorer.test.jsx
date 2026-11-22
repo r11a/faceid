@@ -94,3 +94,15 @@ it("makes missing history actionable and requests a bounded scan of retained cam
   await act(async () => renderer.root.findAllByType("button").find(button=>button.children.includes("השלם חיפוש בהיסטוריה")).props.onClick());
   expect(api).toHaveBeenCalledWith("faces/index?remote=true&limit=500",{method:"POST"});
 });
+
+
+it("distinguishes idle background waiting and exposes explicit administrator reindex", async () => {
+  useResource.mockImplementation(path => ({ data: path === "faces/index" ? { running:true, waiting_for_idle:true, events_total:10, events_indexed:1, events_missing:9 } : { users:[] }, reload:vi.fn() }));
+  await open();
+  expect(JSON.stringify(renderer.toJSON())).toContain("ממתין לזמן שקט; זיהוי חי מקבל קדימות");
+  expect(renderer.root.findAllByType("button").some(button => button.children.includes("סרוק מחדש גם תמונות ללא פנים · מנהל בלבד"))).toBe(false);
+  useResource.mockImplementation(path => ({ data: path === "faces/index" ? { running:false, remote_available:true, events_total:10, events_indexed:1, events_missing:9 } : { users:[] }, reload:vi.fn() }));
+  await act(() => renderer.update(<FaceExplorer source={{person:"alice"}} />));
+  await act(async () => renderer.root.findAllByType("button").find(button => button.children.includes("סרוק מחדש גם תמונות ללא פנים · מנהל בלבד")).props.onClick());
+  expect(api).toHaveBeenCalledWith("faces/index?remote=true&limit=500&force=true", {method:"POST", headers:{"X-Access1-Pairing":"1"}});
+});

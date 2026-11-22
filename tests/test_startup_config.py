@@ -58,19 +58,27 @@ class StartupConfigTests(unittest.TestCase):
                 'mqtt':{'host':'mqtt.invalid'},
                 'faceid':{'camera_graph':'{}','liveness_enabled':False},
             }),encoding='utf-8')
-            with patch.object(main_module,'BASE',root), \
-                 patch.object(main_module,'FaceEngine',return_value=SimpleNamespace(faces=lambda image:[])), \
-                 patch.object(main_module.EventProcessor,'start') as start, \
-                 patch('app.access1.Access1Integration') as connector, \
-                 patch.object(main_module,'start_auto_backup'), \
-                 patch.object(main_module.uvicorn,'run') as serve:
-                main_module.main()
-            self.assertTrue(serve.called)
-            start.assert_called_once()
-            connector.assert_called_once()
-            connector.return_value.start.assert_called_once()
-            app=serve.call_args.args[0]
-            self.assertTrue(any(route.path=='/api/faces/search' for route in app.routes))
+            for test_build in (False, True):
+                with self.subTest(test_build=test_build):
+                    with patch('app.diagnostic_mode.DIAGNOSTIC_ONLY',False), \
+                         patch.object(main_module,'DIAGNOSTIC_ONLY',False), \
+                         patch.object(main_module,'OPENVINO_TEST_BUILD',test_build), \
+                         patch.object(main_module,'BASE',root), \
+                         patch.object(main_module,'FaceEngine',return_value=SimpleNamespace(faces=lambda image:[])), \
+                         patch.object(main_module.EventProcessor,'start') as start, \
+                         patch('app.access1.Access1Integration') as connector, \
+                         patch.object(main_module,'start_auto_backup'), \
+                         patch.object(main_module.uvicorn,'run') as serve:
+                        main_module.main()
+                    self.assertTrue(serve.called)
+                    start.assert_called_once()
+                    if test_build:
+                        connector.assert_not_called()
+                    else:
+                        connector.assert_called_once()
+                        connector.return_value.start.assert_called_once()
+                    app=serve.call_args.args[0]
+                    self.assertTrue(any(route.path=='/api/faces/search' for route in app.routes))
 
     def test_610_json_string_is_compatible_with_both_camera_services(self):
         for value in ['{}', '{"door":["hall"],"hall":["door"]}',

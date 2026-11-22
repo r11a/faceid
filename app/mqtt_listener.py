@@ -39,6 +39,12 @@ from .camera_profiles import profile_capture_fields
 
 from .timing import stage as timing_stage, frame_wait as timing_frame_wait
 
+_AUDIT_WRITER_LOCK = threading.Lock()
+AUDIT_QUEUE_LIMIT = 200
+# Longest a recognized event's bookkeeping waits for its Access1 POST to start.
+ACCESS1_POST_GATE_SECONDS = 0.5
+
+
 log = logging.getLogger("faceid.mqtt")
 
 
@@ -159,6 +165,7 @@ class EventProcessor:
             "ended": end_time is not None, "created": time.time(),
             "start_time": start_time or time.time(), "end_time": end_time,
             "decision": DecisionAccumulator(self.policy),
+            "backend_generation": getattr(getattr(self, "engine", None), "backend_generation", 0),
             "liveness_history": [], "liveness": None,
             "processing_lock": threading.Lock(),
         }
@@ -1156,8 +1163,90 @@ class EventProcessor:
             quality, face = max(usable, key=lambda item: item[0].score)
             self._process_face(eid, st, img, face, quality=quality, source=source)
 
+    def _audit_writer(self):
+        writer = self.__dict__.get("_audit_executor")
+        if writer is None:
+            with _AUDIT_WRITER_LOCK:
+                writer = self.__dict__.get("_audit_executor")
+                if writer is None:
+                    from concurrent.futures import ThreadPoolExecutor
+                    writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="faceid-audit")
+                    self._audit_slots = threading.BoundedSemaphore(AUDIT_QUEUE_LIMIT)
+                    self._audit_executor = writer
+        return writer
+
+    def _audit_later(self, write, *args, **kwargs):
+        """Per-sample audit writes off the recognition path, in submission order.
+
+        main.py enables ``audit_async``; otherwise (tests, tools) writes run inline.
+        """
+        def run():
+            try:
+                write(*args, **kwargs)
+            except Exception:
+                log.exception("Audit write failed")
+        if getattr(self, "audit_async", False) is not True:
+            run()
+            return
+        writer = self._audit_writer()
+        # Backpressure bounds retained crops and pending writes when storage is slow.
+        self._audit_slots.acquire()
+        try:
+            future = writer.submit(run)
+        except RuntimeError:
+            self._audit_slots.release()
+            # Finish older writes before switching to synchronous writes at shutdown.
+            writer.shutdown(wait=True)
+            run()
+        else:
+            future.add_done_callback(lambda _: self._audit_slots.release())
+
+    def _audit_flush(self, timeout=2.0):
+        """Wait until every queued audit write has completed."""
+        writer = self.__dict__.get("_audit_executor")
+        if writer is not None:
+            from concurrent.futures import TimeoutError
+            barrier = writer.submit(lambda: None)
+            try:
+                barrier.result(timeout=timeout)
+            except TimeoutError:
+                log.warning("Audit writer still draining after %.1f s; waiting before final evidence", timeout)
+                barrier.result()
+
+    def _submit_access1(self, eid, st, decision, source, guard):
+        """Queue the Access1 identity request for a recognized decision (identity frozen now).
+
+        Returns the connector's "POST started" event, or None."""
+        if st.get("continuous_sighting") or (guard is not None and not guard()):
+            return None
+        # Setup walk test (6.9.1): the result is shown in setup; Access1 is not asked.
+        walk_test = getattr(self, "setup_walk_test", None)
+        if walk_test is not None and walk_test.intercept(eid, st, decision):
+            return None
+        access1 = getattr(self, "access1", None)
+        if access1 is None:
+            return None
+        liveness = st.get("liveness") or {}
+        return access1.enqueue({
+            "event_id": eid, "slug": decision.slug, "camera": st["camera"],
+            "score": decision.score, "occurred_at": st.get("start_time"),
+            "queued_at": time.time(),
+            "evidence_source": source,
+            "stream_proof": st.get("stream_proof") if source == STREAM_SOURCE else None,
+            "evidence_ts": st.get("access1_evidence_ts"),
+            "event_ended": bool(st.get("end_time")),
+            "liveness_confirmed": bool(liveness.get("confirmed")),
+            "liveness_score": liveness.get("score"),
+            "liveness_frames": liveness.get("live_frames", 0),
+        })
+
     def _process_face(self, eid: str, st: dict, img, face, quality=None, source="snapshot"):
         if st["done"]:
+            return
+        backend_generation = getattr(getattr(self, "engine", None), "backend_generation", 0)
+        if st.get("backend_generation", backend_generation) != backend_generation:
+            capture_emit(self, eid, st["camera"], "sample_rejected", source=source,
+                         reason="inference_backend_changed")
             return
         guard = st.get("recognition_guard")
         if guard is not None and not guard():
@@ -1191,19 +1280,20 @@ class EventProcessor:
                          required_samples=st['liveness'].get('required_frames'),
                          reason='before_subject_binding')
             if self.audit:
-                self.audit.update_liveness(eid, st["liveness"])
+                self._audit_later(self.audit.update_liveness, eid, dict(st["liveness"]))
             if liveness_mode == "required" and not st["liveness"]["confirmed"]:
                 state = st["liveness"]["state"]
                 st["liveness_blocked"] = True
                 if self.audit:
-                    self.audit.observation(
+                    self._audit_later(
+                        self.audit.observation,
                         eid, st["attempts"], f"liveness_{state}",
                         det_score=float(face.det_score),
                         face_px=int(min(face.bbox[2] - face.bbox[0], face.bbox[3] - face.bbox[1])),
                         quality=float(quality.score) if quality else 0.0,
-                        source=source,
+                        source=source, ts=time.time(),
                     )
-                    self.audit.save_evidence(eid, crop_face(img, face.bbox))
+                    self._audit_later(self.audit.save_evidence, eid, crop_face(img, face.bbox).copy())
                 progress = state == "pending" and liveness_frame.get("live") is True
                 (log.info if progress else log.warning)(
                     "event %s (%s): required liveness check (%s, %s/%s live frames)",
@@ -1270,6 +1360,8 @@ class EventProcessor:
             candidates[1] if len(candidates) > 1 else (None, None, 0.0)
         )
         ig, _, ignore_group = self.gallery.match_ignored_detail(emb)
+        if backend_generation != getattr(getattr(self, "engine", None), "backend_generation", 0):
+            return
         if guard is not None and not guard():
             return
         observation_key = hashlib.sha256(emb.astype("float32").tobytes()).hexdigest()
@@ -1311,7 +1403,7 @@ class EventProcessor:
                 st['liveness'].update(qualified_live_consensus(
                     liveness_service, st['liveness_history'], required))
 
-            if self.audit:self.audit.update_liveness(eid, st["liveness"])
+            if self.audit:self._audit_later(self.audit.update_liveness, eid, dict(st["liveness"]))
             if liveness_mode == "required" and not st["liveness"]["confirmed"]:
                 st["liveness_blocked"] = True
                 pending_live_identity = True
@@ -1362,6 +1454,12 @@ class EventProcessor:
                 if getattr(self, "timing_diagnostics", False) is True:
                     log.info("timing event=%s stage=mqtt_to_recognition elapsed_ms=%.1f", eid,
                              (st["confirmed_monotonic"] - st["mqtt_received_monotonic"]) * 1000)
+            # Access1 first: audit flush, evidence image, notifications and
+            # logging follow and must not delay the access request. They share
+            # its database, so hold them until the POST is on its way (bounded).
+            post_gate = self._submit_access1(eid, st, decision, source, guard)
+            if isinstance(post_gate, threading.Event):
+                post_gate.wait(ACCESS1_POST_GATE_SECONDS)
         if getattr(self, "face_search", None) is not None:
             # Bound transient samples; keep JPEG/SQL work out of consensus warmup.
             st.setdefault("pending_face_samples", deque(maxlen=8)).append((emb.copy(), crop_face(img, face.bbox).copy()))
@@ -1371,7 +1469,11 @@ class EventProcessor:
             ignore_score=float(ig), det_score=float(face.det_score), face_px=face_px,
             quality=float(quality.score) if quality else 0.0, source=source)
         if self.audit and decision.status != "recognized":
-            self.audit.observation(eid, st["attempts"], decision.status, **observation)
+            self._audit_later(self.audit.observation, eid, st["attempts"], decision.status,
+                              ts=time.time(), **observation)
+        if decision.status in ("recognized", "ignored"):
+            # The final evidence must never be overwritten by an earlier queued write.
+            self._audit_flush()
 
         if decision.status == "ignored":
             self._flush_face_samples(eid, st)
@@ -1423,21 +1525,6 @@ class EventProcessor:
                 self.audit.save_evidence(eid, evidence.get("crop", crop))
             self._publish_notification(eid, st, decision.status, decision.person, decision.score,
                 margin=decision.margin, confirmations=decision.confirmations)
-            access1 = getattr(self, "access1", None)
-            if (access1 is not None and not st.get("continuous_sighting")
-                    and (guard is None or guard())):
-                access1.enqueue({
-                    "event_id": eid, "slug": decision.slug, "camera": st["camera"],
-                    "score": decision.score, "occurred_at": st.get("start_time"),
-                    "queued_at": time.time(),
-                    "evidence_source": source,
-                    "stream_proof": st.get("stream_proof") if source == STREAM_SOURCE else None,
-                    "evidence_ts": st.get("access1_evidence_ts"),
-                    "event_ended": bool(st.get("end_time")),
-                    "liveness_confirmed": bool((st.get("liveness") or {}).get("confirmed")),
-                    "liveness_score": (st.get("liveness") or {}).get("score"),
-                    "liveness_frames": (st.get("liveness") or {}).get("live_frames", 0),
-                })
             self._publish_recognition(eid, st, decision.person, decision.score, decision=decision)
             self._flush_face_samples(eid, st)
             if self.audit:

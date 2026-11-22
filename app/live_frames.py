@@ -3,8 +3,11 @@ import threading
 import time
 import math
 import logging
-from collections import Counter
+from collections import Counter, deque
 _LOGGER=logging.getLogger(__name__)
+# FFmpeg decoder threads per reader. One thread fell slowly behind a full
+# resolution Entrance stream on the N100 (~15 ms of lag per second).
+DECODE_THREADS = 2
 import os
 # Native decoder errors can contain credential-bearing URLs. Python diagnostics
 # remain enabled and report categorical acquisition failures instead.
@@ -14,27 +17,89 @@ os.environ['OPENCV_LOG_LEVEL']='SILENT'
 import cv2
 cv2.setLogLevel(0)
 from .preview_startup import frame_detail
+from .vaapi_source import VaapiCapture
+
+# GPU decoding through the system FFmpeg (main.py enables it from the option).
+# Frames are scaled on the GPU to DECODE_WIDTH (same aspect); every DECODE_STEP-th
+# decoded frame is delivered (about 8 fps from a 25 fps camera).
+GPU_DECODE = False
+DECODE_WIDTH = 0  # native size: far faces keep every pixel for identification
+DECODE_STEP = 3
+# 6.9.0: optional per-camera (gpu, width, step) from the camera profile; a camera
+# without an entry uses the global values above (the 6.8.7 behaviour).
+CAMERA_DECODE = {}
+INSTANT_READ_MS = 10  # a read this fast was already waiting in the decoder
+VAAPI_DEVICE = '/dev/dri/renderD128'
+GPU_RETRY_SECONDS = 600
+_gpu = {'failures': 0, 'retry_at': 0.0, 'checksum': None, 'active_logged': False, 'stall_logged': 0.0}
+_gpu_lock = threading.Lock()
+
+
+def open_capture(url, decode=None):
+    """GPU source when enabled and not recently failed; else the OpenCV CPU decoder."""
+    gpu, width, step = (GPU_DECODE, DECODE_WIDTH, DECODE_STEP) if decode is None else decode
+    with _gpu_lock:
+        use_gpu = gpu and time.monotonic() >= _gpu['retry_at'] and os.path.exists(VAAPI_DEVICE)
+        # Some FFmpeg builds lack showinfo's checksum option: alternate until one works.
+        checksum = _gpu['checksum'] if _gpu['checksum'] is not None else _gpu['failures'] % 2 == 0
+    if use_gpu:
+        try:
+            return VaapiCapture(url, width=width, step=step, device=VAAPI_DEVICE,
+                                checksum_option=checksum)
+        except OSError:
+            _gpu_result(None)
+    return cv2.VideoCapture(url, cv2.CAP_FFMPEG, [
+        cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000,
+        cv2.CAP_PROP_READ_TIMEOUT_MSEC, 1000,
+        cv2.CAP_PROP_N_THREADS, DECODE_THREADS,
+    ])
+
+
+def _gpu_started(capture):
+    """Log once that GPU decoding delivers frames."""
+    with _gpu_lock:
+        if _gpu['active_logged']:
+            return
+        _gpu['active_logged'] = True
+    width = getattr(capture, 'decode_width', DECODE_WIDTH)
+    step = getattr(capture, 'decode_step', DECODE_STEP)
+    _LOGGER.info('Stream reader: GPU (VAAPI) decode active, %s, every %s. frame',
+                 f'{width} px wide' if width else 'native size', step)
+
+
+def _gpu_result(capture):
+    """Record whether a GPU source delivered frames; fall back after repeated failures."""
+    if capture is not None and not isinstance(capture, VaapiCapture):
+        return
+    with _gpu_lock:
+        if capture is not None and capture.frames:
+            _gpu['failures'] = 0
+            _gpu['checksum'] = capture.checksum_option
+            if getattr(capture, 'stalled', False) and time.monotonic() - _gpu['stall_logged'] >= 60:
+                _gpu['stall_logged'] = time.monotonic()
+                _LOGGER.info('Stream reader: GPU stream stalled after %d frames; reconnecting',
+                             capture.frames)
+            return
+        _gpu['failures'] += 1
+        if _gpu['failures'] >= 3:
+            _gpu['failures'] = 0
+            _gpu['retry_at'] = time.monotonic() + GPU_RETRY_SECONDS
+            _gpu['active_logged'] = False
+            _LOGGER.warning('Stream reader: GPU decode unavailable; using CPU decode for %s s',
+                            GPU_RETRY_SECONDS)
 
 
 def decoder_position_ms(capture):
-    """FFmpeg presentation timestamp, in its documented FPS time base.
-
-    POS_MSEC is retained for older OpenCV builds without CAP_PROP_PTS. Neither
-    property is camera capture wall time. Never substitute arrival time for PTS.
-    """
-    if hasattr(cv2,'CAP_PROP_PTS'):
-        try:
-            fps=float(capture.get(cv2.CAP_PROP_FPS))
-            pts=float(capture.get(cv2.CAP_PROP_PTS))
-            if math.isfinite(fps) and 0<fps<=1000 and math.isfinite(pts):
-                return pts*1000/fps
-        except (TypeError,ValueError,OverflowError):pass
+    """Read FFmpeg's frame position without rounding to nominal FPS ticks."""
+    # This is media time, not camera wall time. Do not switch clocks or
+    # synthesize a timestamp when the decoder reports missing or stale data.
     return capture.get(cv2.CAP_PROP_POS_MSEC)
 
 
 class LiveFrameReader:
-    def __init__(self, url, *, max_age=1.0):
+    def __init__(self, url, *, max_age=1.0, decode=None):
         self.url = url
+        self.decode = decode
         self.max_age = max_age
         self.stopped = threading.Event()
         self.lock = threading.Lock()
@@ -55,6 +120,32 @@ class LiveFrameReader:
         self.rejections = Counter()
         self.timestamp_origin = None
         self.encode_jpeg = True
+        # Diagnostics only: why and how often the stream is reopened, the
+        # decoder lag behind the stream clock, and how long reads block.
+        # Reads that return at once while the lag grows mean a real backlog;
+        # reads blocking a frame interval mean the decoder keeps up.
+        self.reopens = 0
+        self.reopen_reasons = Counter()
+        self.last_reopen = None
+        self.lag_ms = None
+        self.read_wait_ms = None
+        self.reads = self.instant_reads = 0
+        self.min_offset = None
+        self.last_read_live = False
+        self.drift_ms = None
+
+    def note_read(self, wait):
+        """Track decoder read blocking time (EWMA) and reads that returned at once."""
+        ms = wait * 1000
+        self.reads += 1
+        self.last_read_live = ms >= INSTANT_READ_MS
+        self.instant_reads += not self.last_read_live
+        self.read_wait_ms = ms if self.read_wait_ms is None else self.read_wait_ms * 0.9 + ms * 0.1
+
+    def read_stats(self):
+        return {'lag_ms': self.lag_ms, 'drift_ms': self.drift_ms,
+                'read_wait_ms': round(self.read_wait_ms, 1) if self.read_wait_ms is not None else None,
+                'instant_read_pct': round(100 * self.instant_reads / self.reads, 1) if self.reads else None}
 
     def accept_position(self, position_ms, now, started):
         """Reject decoder backlog using stream timestamps, not JPEG receipt age."""
@@ -69,7 +160,12 @@ class LiveFrameReader:
         self.last_position = position
         self.position_arrived = now
         offset = now - position
-        self.clock_offset = offset if self.clock_offset is None else min(self.clock_offset, offset)
+        self.min_offset = offset if self.min_offset is None else min(self.min_offset, offset)
+        # A blocking read includes decoder work and cannot prove the live edge.
+        # Keep the connection baseline fixed so gradual backlog cannot be hidden.
+        self.clock_offset = self.min_offset
+        self.drift_ms = round((self.clock_offset - self.min_offset) * 1000)
+        self.lag_ms = round((offset - self.clock_offset) * 1000)
         valid=now-started>=.5 and offset-self.clock_offset<=.75
         if not valid:self.invalidate_clock("startup_draining" if now-started<.5 else "buffering_growth")
         else:self.invalid_clock=False
@@ -80,7 +176,9 @@ class LiveFrameReader:
         self.rejections[reason]+=1
         if not self.invalid_clock and reason!="startup_draining" and time.monotonic()-self.last_rejection_log>=5:
             self.last_rejection_log=time.monotonic()
-            _LOGGER.info("Stream reader rejected decoded frame: reason=%s",reason)
+            stats=self.read_stats()
+            _LOGGER.info("Stream reader rejected decoded frame: reason=%s lag_ms=%s read_wait_ms=%s instant_reads=%s%%",
+                         reason,stats['lag_ms'],stats['read_wait_ms'],stats['instant_read_pct'])
         if not self.invalid_clock:
             with self.lock:
                 self.generation+=1;self.decoded=None
@@ -135,13 +233,45 @@ class LiveFrameReader:
                 state = "stale"
             return {"state": state, "width": self.width, "height": self.height,
                     "frames": self.frames, "generation":self.generation, "rejection_reason":self.clock_reason, "rejections":dict(self.rejections), "age_ms": round(age * 1000) if age is not None else None,
-                    "jpeg_enabled":self.encode_jpeg}
+                    "jpeg_enabled":self.encode_jpeg, "reopens":self.reopens,
+                    "reopen_reasons":dict(self.reopen_reasons),
+                    "last_reopen":dict(self.last_reopen) if self.last_reopen else None,
+                    **self.read_stats()}
 
     def stop(self):
         self.stopped.set()
         with self.lock:
             self.latest = None
             self.decoded = None
+            capture = getattr(self, '_capture', None)
+        if isinstance(capture, VaapiCapture):
+            capture.release()  # Unblock a read waiting on the FFmpeg pipe.
+
+    def _note_reopen(self, reason, connected, retry_in):
+        """Record and log why the stream is about to be reopened (diagnostics only)."""
+        stats = self.read_stats()
+        with self.lock:
+            self.reopens += 1
+            self.reopen_reasons[reason] += 1
+            self.last_reopen = {'reason': reason, 'connected_s': round(connected, 1),
+                                'generation_before': self.generation, 'retry_in_s': retry_in, **stats}
+        _LOGGER.info('Stream reader reopening: reason=%s after %.1f s, lag_ms=%s read_wait_ms=%s '
+                     'instant_reads=%s%% generation=%d retry_in=%.0f s', reason, connected,
+                     stats['lag_ms'], stats['read_wait_ms'], stats['instant_read_pct'],
+                     self.generation, retry_in)
+        self.reads = self.instant_reads = 0
+        self.read_wait_ms = None
+
+    def _note_first_usable(self, elapsed):
+        """After a reopen, record how long the new connection took to a usable frame."""
+        with self.lock:
+            reopen = self.last_reopen
+            if reopen is None or 'first_usable_ms' in reopen:
+                return
+            reopen['first_usable_ms'] = round(elapsed * 1000)
+            reopen['generation_after'] = self.generation
+        _LOGGER.info('Stream reader reopened: first usable frame after %d ms (generation %d)',
+                     round(elapsed * 1000), reopen['generation_after'])
 
     def run(self):
         delay = 1.0
@@ -151,24 +281,35 @@ class LiveFrameReader:
                 self.state, self.latest = "connecting", None
                 self.decoded = None
                 self.generation += 1
+            started = time.monotonic()
+            end_reason = 'open_failed'
             try:
                 # Open/read deadlines prevent a dead camera pinning a reader.
-                # One decoder thread avoids a separate all-core decoder per camera.
-                capture = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG, [
-                    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000,
-                    cv2.CAP_PROP_READ_TIMEOUT_MSEC, 1000,
-                    cv2.CAP_PROP_N_THREADS, 1,
-                ])
+                capture = open_capture(self.url, self.decode)
+                with self.lock:
+                    self._capture = capture
                 last_published = 0.0
                 started = time.monotonic()
                 self.clock_offset = self.last_position = self.position_arrived = None
                 self.invalid_clock = False
                 self.timestamp_origin = None
+                self.lag_ms = self.drift_ms = self.min_offset = None
+                self.last_read_live = False
                 behind_since = started
+                first_usable = None
+                end_reason = 'stream_closed' if capture.isOpened() else 'open_failed'
                 while capture.isOpened() and not self.stopped.is_set():
+                    read_started = time.monotonic()
                     ok, frame = capture.read()
-                    if not ok or frame is None or frame.nbytes > 32_000_000:
+                    self.note_read(time.monotonic() - read_started)
+                    if not ok or frame is None:
+                        end_reason = 'read_failed'
                         break
+                    if frame.nbytes > 32_000_000:
+                        end_reason = 'frame_too_large'
+                        break
+                    if getattr(capture, 'frames', 0) == 1 and isinstance(capture, VaapiCapture):
+                        _gpu_started(capture)
                     # Always drain the decoder; never let inference or JPEG work
                     # build a queue of old network frames.
                     now = time.monotonic()
@@ -178,9 +319,13 @@ class LiveFrameReader:
                             self.state, self.latest = "catching_up", None
                             self.decoded = None
                         if now - behind_since > 2:
+                            end_reason = 'catch_up_timeout'
                             break  # Reconnect if decoding cannot catch up.
                         continue
                     behind_since = now
+                    if first_usable is None:
+                        first_usable = now
+                        self._note_first_usable(now - started)
                     with self.lock:
                         if self.timestamp_origin is None:self.timestamp_origin=position
                         self.sequence += 1
@@ -202,21 +347,32 @@ class LiveFrameReader:
                         last_published = now
                         delay = 1.0
             except (cv2.error, OSError, ValueError):
-                pass  # Never include private stream URLs in logs or diagnostics.
+                end_reason = 'decoder_error'  # Never log private stream URLs.
             finally:
+                with self.lock:
+                    self._capture = None
                 if capture is not None:
+                    _gpu_result(capture)
                     capture.release()
                 with self.lock:
                     self.state, self.latest = "unavailable", None
                     self.decoded = None
+            if self.stopped.is_set():
+                break
+            self._note_reopen(end_reason, time.monotonic() - started, delay)
             if self.stopped.wait(delay):
                 break
             delay = min(delay * 2, 30.0)
 
 
 class LiveFramePool:
-    def __init__(self, max_readers=16):
+    def __init__(self, max_readers=16, observation_linger=0.0):
         self.max_readers = max_readers
+        # An ended observation keeps its reader decoding this long, so the next
+        # event on that camera starts on a connected stream (no RTSP/keyframe wait).
+        self.observation_linger = observation_linger
+        self.lingering = {}
+        self.linger_timer = None
         self.lock = threading.RLock()
         self.readers = {}
         self.retiring = []
@@ -225,7 +381,13 @@ class LiveFramePool:
         self.calibration_sources = {}
         self.calibration_timer = None
 
+    def _unused(self, camera):
+        return (camera in self.readers and camera not in self.observation_sources
+                and camera not in self.regular_sources and camera not in self.calibration_sources
+                and camera not in self.lingering)
+
     def _retire(self, camera):
+        self.lingering.pop(camera, None)
         reader = self.readers.pop(camera)
         reader.stop()
         self.retiring.append(reader)
@@ -242,7 +404,8 @@ class LiveFramePool:
             self.retiring = [item for item in self.retiring if item.thread and item.thread.is_alive()]
             if len(self.readers) + len(self.retiring) >= self.max_readers:
                 return None
-            reader = LiveFrameReader(url)
+            # A changed per-camera decode applies when the reader is next created.
+            reader = LiveFrameReader(url, decode=CAMERA_DECODE.get(camera))
             self.readers[camera] = reader
             reader.start()
             return reader
@@ -251,7 +414,7 @@ class LiveFramePool:
         with self.lock:
             self.regular_sources = dict(sources)
             for camera in list(self.readers):
-                if camera not in sources and camera not in self.observation_sources and camera not in self.calibration_sources:
+                if camera not in sources and self._unused(camera):
                     self._retire(camera)
                 else:
                     # JPEG demand is symmetric: a surviving observation lease
@@ -270,6 +433,7 @@ class LiveFramePool:
                 return None
             reader=self.ensure(camera,url)
             if reader is not None:
+                self.lingering.pop(camera,None)
                 reader.observation=True
                 reader.encode_jpeg=camera in self.regular_sources
                 self.observation_sources[camera]=url
@@ -278,8 +442,39 @@ class LiveFramePool:
     def release_observation(self, camera):
         with self.lock:
             self.observation_sources.pop(camera,None)
-            if camera not in self.regular_sources and camera not in self.calibration_sources and camera in self.readers:
-                self._retire(camera)
+            if (camera in self.readers and self.observation_linger > 0
+                    and camera not in self.regular_sources and camera in self.calibration_sources):
+                # A preview lease is open: keep the reader warm after it expires too.
+                self.lingering[camera]=time.monotonic()+self.observation_linger
+                self._schedule_linger()
+                return
+            if not self._unused(camera):return
+            if self.observation_linger <= 0:
+                self._retire(camera);return
+            # At most one idle warm reader: it costs one decoder thread.
+            for other in [c for c in self.lingering if c != camera]:
+                self.lingering.pop(other)
+                if self._unused(other):self._retire(other)
+            self.lingering[camera]=time.monotonic()+self.observation_linger
+            self._schedule_linger()
+
+    def _schedule_linger(self):
+        if self.linger_timer is not None or not self.lingering:
+            return
+        delay=max(0.0,min(self.lingering.values())-time.monotonic())+0.05
+        self.linger_timer=threading.Timer(delay,self._expire_linger)
+        self.linger_timer.daemon=True
+        self.linger_timer.start()
+
+    def _expire_linger(self):
+        with self.lock:
+            self.linger_timer=None
+            now=time.monotonic()
+            for camera,deadline in list(self.lingering.items()):
+                if deadline<=now:
+                    self.lingering.pop(camera)
+                    if self._unused(camera):self._retire(camera)
+            self._schedule_linger()
 
     def acquire_calibration(self, camera, url):
         """Short renewable preview lease; never replace an active production source."""
@@ -314,7 +509,7 @@ class LiveFramePool:
             for camera, deadline in list(self.calibration_sources.items()):
                 if time.monotonic() >= deadline:
                     self.calibration_sources.pop(camera, None)
-                    if camera not in self.observation_sources and camera not in self.regular_sources and camera in self.readers:
+                    if self._unused(camera):
                         self._retire(camera)
             if self.calibration_sources:
                 self._schedule_calibration_expiry()
@@ -324,7 +519,9 @@ class LiveFramePool:
             return {camera: {**reader.report(),
                              "regular_consumer":camera in self.regular_sources,
                              "observation_consumer":camera in self.observation_sources,
-                             "calibration_consumer":camera in self.calibration_sources}
+                             "calibration_consumer":camera in self.calibration_sources,
+                             "warm_until_s":round(max(0.0,self.lingering[camera]-time.monotonic()),1)
+                                            if camera in self.lingering else None}
                     for camera, reader in self.readers.items()}
 
     def close(self):
@@ -332,6 +529,10 @@ class LiveFramePool:
             if self.calibration_timer is not None:
                 self.calibration_timer.cancel()
                 self.calibration_timer = None
+            if self.linger_timer is not None:
+                self.linger_timer.cancel()
+                self.linger_timer = None
             self.calibration_sources.clear()
             self.observation_sources.clear()
+            self.lingering.clear()
             self.sync({})

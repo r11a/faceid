@@ -11,7 +11,7 @@ from unittest.mock import patch
 import numpy as np
 import cv2
 
-from app.engine import FaceEngine
+from app.engine import FaceEngine, InferenceLock
 
 
 class EngineTests(unittest.TestCase):
@@ -39,6 +39,80 @@ class EngineTests(unittest.TestCase):
         })
         self.assertIn("onnxruntime", health["runtime"])
         self.assertIsNone(health["inference"]["p95_ms"])
+
+    def test_stream_duplicates_are_admitted_before_detection(self):
+        engine = self.make_engine()
+        now = [10.0]
+        record = {'sequence': 4, 'generation': 1, 'arrived': 9.8, 'image': np.zeros((2, 2, 3), np.uint8)}
+        reader = SimpleNamespace(frame_record=lambda: dict(record))
+        with patch('app.engine.time.monotonic', side_effect=lambda: now[0]), \
+                patch.object(engine, '_detect_faces', return_value=['face']) as detect:
+            rejected, faces = engine.detect_frame_record(reader, admit=lambda frame: False)
+            self.assertEqual(rejected['processing_rejected'], 'duplicate_frame')
+            self.assertEqual(faces, [])
+            detect.assert_not_called()
+            admitted, faces = engine.detect_frame_record(reader, admit=lambda frame: True)
+        self.assertEqual(faces, ['face'])
+        self.assertAlmostEqual(admitted['processing_age_ms'], 200)
+        self.assertEqual(engine.health()['stream_detection']['calls'], 1)
+        self.assertEqual(engine.health()['stream_detection']['rejected_frames'], 1)
+
+    def test_stream_freshness_is_measured_at_start_not_after_slow_detection(self):
+        engine = self.make_engine()
+        now = [10.0]
+        record = {'sequence': 4, 'generation': 1, 'arrived': 9.8, 'image': np.zeros((2, 2, 3), np.uint8)}
+        def detect(image):
+            now[0] += 2.0
+            return ['face']
+        with patch('app.engine.time.monotonic', side_effect=lambda: now[0]), \
+                patch.object(engine, '_detect_faces', side_effect=detect):
+            accepted, faces = engine.detect_frame_record(SimpleNamespace(frame_record=lambda: dict(record)))
+            stale, _ = engine.detect_frame_record(SimpleNamespace(frame_record=lambda: dict(record)))
+        self.assertEqual(faces, ['face'])
+        self.assertEqual(accepted['processing_started_monotonic'], 10.0)
+        self.assertIsNone(stale)
+        self.assertEqual(engine.health()['stream_detection']['unavailable_frames'], 1)
+
+    def test_stream_selects_latest_frame_only_after_model_wait(self):
+        engine = self.make_engine()
+        entered, release = threading.Event(), threading.Event()
+        record = {'sequence': 1, 'generation': 1, 'arrived': 0, 'image': np.zeros((2, 2, 3), np.uint8)}
+        def hold_model():
+            with engine.model_work():
+                entered.set()
+                release.wait(3)
+        with patch.object(engine, '_detect_faces', return_value=['face']):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                holder = pool.submit(hold_model)
+                self.assertTrue(entered.wait(1))
+                pending = pool.submit(engine.detect_frame_record, SimpleNamespace(frame_record=lambda: dict(record)))
+                try:
+                    with engine._lock._condition:
+                        self.assertTrue(engine._lock._condition.wait_for(lambda: engine._lock._live_waiters == 1, timeout=1))
+                    import time
+                    record.update(sequence=2, arrived=time.monotonic())
+                finally:
+                    release.set()
+                holder.result(timeout=3)
+                accepted, _ = pending.result(timeout=3)
+        self.assertEqual(accepted['sequence'], 2)
+
+    def test_foreground_activity_excludes_background_indexing(self):
+        with patch('app.engine.time.monotonic', return_value=10):
+            lock = InferenceLock()
+        with patch('app.engine.time.monotonic', return_value=20):
+            with lock.background_work():
+                with lock:
+                    self.assertFalse(lock.live_activity()['active'])
+            self.assertEqual(lock.live_activity()['last_activity_monotonic'], 10)
+            with lock.live_work():
+                self.assertTrue(lock.live_activity()['active'])
+            self.assertEqual(lock.live_activity()['last_activity_monotonic'], 20)
+        with patch('app.engine.time.monotonic', return_value=30):
+            with lock:
+                self.assertTrue(lock.live_activity()['active'])
+        self.assertFalse(lock.live_activity()['active'])
+        self.assertEqual(lock.live_activity()['last_activity_monotonic'], 30)
 
     def test_live_inference_overtakes_waiting_background_work(self):
         entered, release = threading.Event(), threading.Event()

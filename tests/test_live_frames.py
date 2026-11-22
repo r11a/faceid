@@ -65,6 +65,53 @@ class LiveFrameTests(unittest.TestCase):
             self.assertIsNone(new.frame())
             pool.close()
 
+    def test_regular_lease_removal_stops_jpeg_but_preserves_observation_reader(self):
+        with patch.object(LiveFrameReader, 'start'):
+            pool = LiveFramePool()
+            pool.sync({'office': 'rtsp://fixture/office'})
+            reader = pool.acquire_observation('office', 'rtsp://fixture/office')
+            self.assertTrue(reader.encode_jpeg)
+            pool.sync({})
+            self.assertFalse(reader.encode_jpeg)
+            self.assertFalse(reader.stopped.is_set())
+            self.assertTrue(pool.report()['office']['observation_consumer'])
+            self.assertFalse(pool.report()['office']['regular_consumer'])
+            pool.sync({'office': 'rtsp://fixture/office'})
+            self.assertTrue(reader.encode_jpeg)
+            pool.release_observation('office')
+            self.assertFalse(reader.stopped.is_set())
+            pool.sync({})
+            self.assertTrue(reader.stopped.is_set())
+
+    def test_frame_detail_check_is_demanded_cached_and_outside_decoder_lock(self):
+        reader = LiveFrameReader('rtsp://fixture/office')
+        reader.state = 'streaming'
+        reader.decoded = {'sequence': 1, 'generation': 0, 'arrived': 10,
+                          'image': np.zeros((80, 80, 3), np.uint8)}
+        def detail(image):
+            self.assertTrue(reader.lock.acquire(blocking=False))
+            reader.lock.release()
+            return {'detail': 'structured'}
+        with patch('app.live_frames.time.monotonic', return_value=10.1), \
+                patch('app.live_frames.frame_detail', side_effect=detail) as check:
+            self.assertEqual(reader.frame_record()['sequence'], 1)
+            self.assertEqual(reader.frame_record()['sequence'], 1)
+            check.assert_called_once()
+
+    def test_flat_frame_and_generation_change_during_detail_check_are_rejected(self):
+        reader = LiveFrameReader('rtsp://fixture/office')
+        reader.state = 'streaming'
+        reader.decoded = {'sequence': 1, 'generation': 0, 'arrived': 10,
+                          'image': np.zeros((80, 80, 3), np.uint8)}
+        with patch('app.live_frames.time.monotonic', return_value=10.1):
+            self.assertIsNone(reader.frame_record())
+            reader.decoded.pop('_structured')
+            def reconnect(image):
+                reader.generation += 1
+                return {'detail': 'structured'}
+            with patch('app.live_frames.frame_detail', side_effect=reconnect):
+                self.assertIsNone(reader.frame_record())
+
     def test_reader_drains_frames_and_releases_capture_on_stop(self):
         reader = LiveFrameReader('rtsp://fixture/office')
         capture = Mock()
@@ -112,10 +159,11 @@ class StreamClockOriginTests(unittest.TestCase):
         self.assertEqual(reader.report()['rejection_reason'],'buffering_growth')
 
 class DecoderTimestampTests(unittest.TestCase):
-    def test_native_pts_uses_fps_timebase_and_preserves_negative_origin(self):
+    def test_frame_position_preserves_media_precision_and_negative_origin(self):
         import cv2
         from app.live_frames import decoder_position_ms
-        if not hasattr(cv2,'CAP_PROP_PTS'):self.skipTest('Older OpenCV')
-        values={cv2.CAP_PROP_FPS:25,cv2.CAP_PROP_PTS:-50,cv2.CAP_PROP_POS_MSEC:0}
-        capture=Mock(get=lambda key:values[key])
-        self.assertEqual(decoder_position_ms(capture),-2000)
+        capture=Mock(get=Mock(side_effect=[-2001.1, -1962.1, float('nan')]))
+        self.assertEqual(decoder_position_ms(capture),-2001.1)
+        self.assertEqual(decoder_position_ms(capture),-1962.1)
+        self.assertTrue(__import__('math').isnan(decoder_position_ms(capture)))
+        self.assertTrue(all(call.args == (cv2.CAP_PROP_POS_MSEC,) for call in capture.get.call_args_list))

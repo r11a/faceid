@@ -89,6 +89,7 @@ class FrigateAPI:
         self._stream_config_lock = threading.Lock()
         self._stream_config_until = 0.0
         self._main_streams = {}
+        self._detect_sizes = {}
         self._main_captures = threading.BoundedSemaphore(2)
         self._main_pending_lock = threading.Lock()
         self._main_pending = {}
@@ -286,6 +287,7 @@ class FrigateAPI:
             if time.monotonic() >= self._stream_config_until:
                 response = None
                 self._main_streams = {}
+                self._detect_sizes = {}
                 # Cache missing/unsupported config too, avoiding a request storm.
                 self._stream_config_until = time.monotonic() + 60
                 try:
@@ -295,6 +297,10 @@ class FrigateAPI:
                     config = response.json()
                     streams = (config.get("go2rtc") or {}).get("streams") or {}
                     for name, settings in (config.get("cameras") or {}).items():
+                        detect = settings.get("detect") or {}
+                        width, height = detect.get("width"), detect.get("height")
+                        if type(width) is int and type(height) is int and width > 0 and height > 0:
+                            self._detect_sizes[name] = (width, height)
                         configured = (settings.get("live") or {}).get("streams") or {}
                         choices = list(configured.values()) if isinstance(configured, dict) else []
                         # Frigate uses the camera-named restream if no live alias is configured.
@@ -311,6 +317,12 @@ class FrigateAPI:
                     if response is not None:
                         response.close()
             return self._main_streams.get(camera)
+
+    def detect_size(self, camera):
+        """Frigate's detect resolution, the coordinate space of event boxes."""
+        self._main_stream(camera)
+        with self._stream_config_lock:
+            return self._detect_sizes.get(camera)
 
     def _live_url(self, camera):
         stream = self._main_stream(camera)
@@ -377,6 +389,23 @@ class FrigateAPI:
             if response is not None:
                 response.close()
             self._main_captures.release()
+
+    def config(self, timeout: float = 3) -> dict | None:
+        """Frigate's resolved configuration for setup discovery; never logged or returned raw."""
+        response = None
+        try:
+            response = self.request("GET", "/api/config", timeout=timeout)
+            value = response.json() if response.status_code == 200 else None
+            return value if isinstance(value, dict) else None
+        except (requests.RequestException, ValueError):
+            return None
+        finally:
+            if response is not None:
+                response.close()
+
+    def live_url(self, camera):
+        """RTSP restream FaceID decodes for this camera (configured host + known alias only)."""
+        return self._live_url(camera)
 
     def cameras(self) -> list[str]:
         try:
